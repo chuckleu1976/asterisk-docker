@@ -1,0 +1,13 @@
+
+module usb 1.0;
+
+require {
+	type usb_device_t;
+	type container_t;
+	class chr_file { read write getattr open ioctl };
+}
+
+#============= container_t ==============
+
+#!!!! This avc can be allowed using the boolean 'container_use_devices'
+allow container_t usb_device_t:chr_file { getattr read write open ioctl };

@@ -1,0 +1,1 @@
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ENV{ID_USB_INTERFACES}=="*:0b0000:*", RUN+="/usr/bin/sh -c '/usr/bin/setfacl -m u:524288:rw %E{DEVNAME} 2>/dev/null || :'"
