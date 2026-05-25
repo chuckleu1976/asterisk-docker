@@ -72,26 +72,43 @@ pub struct NetworkRegistrationStatus {
 }
 
 impl NetworkRegistrationStatus {
+    fn parse_from_line(line: &str) -> Option<Self> {
+        let data = line.split(':').nth(1)?;
+        let parts: Vec<&str> = data.split(',').collect();
+        if parts.len() >= 2 {
+            Some(NetworkRegistrationStatus {
+                status: parts[1].trim().trim_matches('"').to_string(),
+                location_area_code: parts
+                    .get(2)
+                    .map(|s| s.trim().trim_matches('"').to_string()),
+                cell_id: parts.get(3).map(|s| s.trim().trim_matches('"').to_string()),
+            })
+        } else if parts.len() == 1 {
+            // Some modems return +CREG: <stat> (single value, mode=0)
+            Some(NetworkRegistrationStatus {
+                status: parts[0].trim().trim_matches('"').to_string(),
+                location_area_code: None,
+                cell_id: None,
+            })
+        } else {
+            None
+        }
+    }
+
+    /// Parse AT+CREG? response (CS domain — 2G/3G)
     pub fn from_response(response: &str) -> Option<Self> {
         response
             .lines()
             .find(|line| line.trim().starts_with("+CREG:"))
-            .and_then(|line| {
-                let data = line.split(':').nth(1)?;
-                let parts: Vec<&str> = data.split(',').collect();
+            .and_then(|line| Self::parse_from_line(line))
+    }
 
-                if parts.len() >= 2 {
-                    Some(NetworkRegistrationStatus {
-                        status: parts[1].trim().trim_matches('"').to_string(),
-                        location_area_code: parts
-                            .get(2)
-                            .map(|s| s.trim().trim_matches('"').to_string()),
-                        cell_id: parts.get(3).map(|s| s.trim().trim_matches('"').to_string()),
-                    })
-                } else {
-                    None
-                }
-            })
+    /// Parse AT+CEREG? response (EPS domain — LTE)
+    pub fn from_cereg_response(response: &str) -> Option<Self> {
+        response
+            .lines()
+            .find(|line| line.trim().starts_with("+CEREG:"))
+            .and_then(|line| Self::parse_from_line(line))
     }
 }
 

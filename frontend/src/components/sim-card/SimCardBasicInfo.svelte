@@ -48,7 +48,7 @@
         <div>
             <div class="text-xs text-gray-500 dark:text-gray-400">Network Status</div>
             <div class="text-sm font-medium dark:text-gray-300">
-                {simInfo?.operator_info?.registration_status ? getStatusDescription(simInfo.operator_info.registration_status) : 'Unknown'}
+                {simInfo?.network_registration?.status ? getStatusDescription(simInfo.network_registration.status) : 'Unknown'}
             </div>
         </div>
     </div>

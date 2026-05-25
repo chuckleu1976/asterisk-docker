@@ -776,7 +776,7 @@ impl ModemSMS {
 
         for chunk in records.chunks(MAX_BATCH_SIZE) {
             let mut query_builder = QueryBuilder::new(
-                "INSERT INTO sms (contact_id, timestamp, message, sim_id, send, status) ",
+                "INSERT OR IGNORE INTO sms (contact_id, timestamp, message, sim_id, send, status) ",
             );
 
             query_builder.push_values(chunk, |mut b, sms| {

@@ -258,7 +258,7 @@ impl Modem {
     ) -> io::Result<String> {
         let mut buffer = Vec::with_capacity(4096);
         let mut temp_buf = [0u8; 1024];
-        let timeout_duration = Duration::from_secs(30);
+        let timeout_duration = Duration::from_secs(8);
 
         let result = tokio::time::timeout(timeout_duration, async {
             loop {
@@ -505,14 +505,20 @@ impl Modem {
 
     pub async fn read_sms_async_insert(
         &self,
-        sms_type: SmsType,
+        _sms_type: SmsType,
         sse_manager: Arc<SseManager>,
         webhook_manager: Option<webhook::WebhookManager>,
     ) -> anyhow::Result<()> {
-        let sms_list = self.read_sms(sms_type).await?;
+        // Always read ALL messages so previously-read messages aren't missed
+        let sms_list = self.read_sms(SmsType::All).await?;
 
         if sms_list.is_empty() {
             return Ok(());
+        }
+
+        // Delete from modem FIRST so storage doesn't fill up
+        if let Err(e) = self.delete_all_sms().await {
+            log::warn!("Failed to delete SMS from modem after reading: {}", e);
         }
 
         let webhook_future = async {
@@ -547,7 +553,17 @@ impl Modem {
         let response = self.send_command_with_ok(&command).await?;
 
         let sim_id = self.sim_id.read().await.clone().unwrap_or_default();
+        let trimmed = response.trim();
+        if trimmed != "OK" && !trimmed.is_empty() {
+            log::info!("[{}] AT+CMGL raw response: {}", sim_id, trimmed);
+        }
         Ok(parse_pdu_sms(&response, &sim_id))
+    }
+
+    /// Delete all SMS messages from modem storage (AT+CMGD=1,4)
+    pub async fn delete_all_sms(&self) -> io::Result<()> {
+        self.send_command_with_ok("AT+CMGD=1,4\r\n").await?;
+        Ok(())
     }
 
     async fn get_modem_info<T>(
@@ -568,6 +584,13 @@ impl Modem {
     pub async fn check_network_registration(
         &self,
     ) -> io::Result<Option<NetworkRegistrationStatus>> {
+        // Try AT+CEREG? (EPS/LTE registration) first; fall back to AT+CREG? (CS)
+        if let Ok(Some(status)) = self
+            .get_modem_info("AT+CEREG?\r\n", NetworkRegistrationStatus::from_cereg_response)
+            .await
+        {
+            return Ok(Some(status));
+        }
         self.get_modem_info("AT+CREG?\r\n", NetworkRegistrationStatus::from_response)
             .await
     }
@@ -685,9 +708,12 @@ impl Modem {
         Ok(())
     }
 
-    pub async fn read_sms_sync_insert(&self, sms_type: SmsType) -> anyhow::Result<()> {
-        let sms_list = self.read_sms(sms_type).await?;
+    pub async fn read_sms_sync_insert(&self, _sms_type: SmsType) -> anyhow::Result<()> {
+        let sms_list = self.read_sms(SmsType::All).await?;
         if !sms_list.is_empty() {
+            if let Err(e) = self.delete_all_sms().await {
+                log::warn!("Failed to delete SMS from modem after reading: {}", e);
+            }
             ModemSMS::bulk_insert(&sms_list).await?;
         }
         Ok(())

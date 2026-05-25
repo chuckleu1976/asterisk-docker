@@ -19,7 +19,7 @@ pub use sse_manager::SseManager;
 use crate::{
     config::SmsStorage,
     db::{Contact, Conversation, SimCard, Sms},
-    modem::{ModemInfo as ModemModel, OperatorInfo, SignalQuality, SmsType},
+    modem::{ModemInfo as ModemModel, NetworkRegistrationStatus, OperatorInfo, SignalQuality, SmsType},
     ModemManagerRef,
 };
 
@@ -357,7 +357,7 @@ async fn get_all_sim_info(State(modem_manager): State<ModemManagerRef>) -> Respo
         sim_id,
         signal_data,
         _signal_error,
-        _network_data,
+        network_data,
         _network_error,
         operator_data,
         _operator_error,
@@ -387,17 +387,21 @@ async fn get_all_sim_info(State(modem_manager): State<ModemManagerRef>) -> Respo
             _ => ("N/A".to_string(), 0),
         };
 
+        let phone_number = sim_data.as_ref().and_then(|s| s.phone_number.clone());
+
         details.push(json!({
             "sim_id": sim_id,
             "name": sim_id.clone(),
             "com_port": com_port,
             "baud_rate": baud_rate,
             "signal_quality": signal_data,
-            "operator_info": operator_data, 
+            "network_registration": network_data,
+            "operator_info": operator_data,
             "model_info": model_data,
             "sms_center": sms_center_data.as_ref().and_then(|s| s.as_ref()).map(|s| decode_sms_center(s)),
             "sim_status": sim_status_data,
-            "memory_status": memory_status_data.as_ref().and_then(|s| s.as_ref()).map(|s| format_memory_status(s))
+            "memory_status": memory_status_data.as_ref().and_then(|s| s.as_ref()).map(|s| format_memory_status(s)),
+            "phone_number": phone_number
         }));
     }
 
@@ -521,6 +525,7 @@ pub struct EnhancedModemInfo {
     pub com_port: String,
     pub baud_rate: u32,
     pub signal_quality: Option<SignalQuality>,
+    pub network_registration: Option<NetworkRegistrationStatus>,
     pub operator_info: Option<OperatorInfo>,
     pub model_info: Option<ModemModel>,
     pub sms_center: Option<String>,
@@ -569,6 +574,11 @@ async fn get_enhanced_sim_info(
                 baud_rate: modem.baud_rate,
                 signal_quality: modem_manager
                     .get_signal_quality(&sim_id)
+                    .await
+                    .ok()
+                    .flatten(),
+                network_registration: modem_manager
+                    .check_network_registration(&sim_id)
                     .await
                     .ok()
                     .flatten(),

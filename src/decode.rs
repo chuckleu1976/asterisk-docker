@@ -93,7 +93,7 @@ impl MultipartHandler {
 pub fn parse_pdu_sms(cmgl_entries: &str, sim_id: &str) -> Vec<ModemSMS> {
     let mut handler = MultipartHandler::new();
     let mut messages = Vec::new();
-    let entry_re = Regex::new(r#"\+(CMGL): (\d+).*?\n([0-9A-F]+)"#).unwrap();
+    let entry_re = Regex::new(r#"(?i)\+(CMGL): (\d+).*?\n([0-9A-Fa-f]+)"#).unwrap();
 
     let total_entries = entry_re.captures_iter(cmgl_entries).count();
     log::debug!(
@@ -103,8 +103,14 @@ pub fn parse_pdu_sms(cmgl_entries: &str, sim_id: &str) -> Vec<ModemSMS> {
     );
 
     for cap in entry_re.captures_iter(cmgl_entries).flatten() {
-        let index = cap[2].parse().unwrap();
-        let pdu = hex::decode(&cap[3]).unwrap();
+        let index: u32 = match cap[2].parse() {
+            Ok(v) => v,
+            Err(e) => { log::warn!("跳过短信，无法解析索引: {}", e); continue; }
+        };
+        let pdu = match hex::decode(cap[3].to_uppercase().as_str()) {
+            Ok(v) => v,
+            Err(e) => { log::warn!("跳过短信 #{}, PDU hex解码失败: {}", index, e); continue; }
+        };
 
         // Skip SMSC information
         let smsc_len = pdu[0] as usize;
