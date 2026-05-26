@@ -33,6 +33,8 @@ pub struct Modem {
     pub name: String,
     pub com_port: String,
     pub baud_rate: u32,
+    /// The HashMap key used when this modem has no SIM (e.g. "fallback_sim_3")
+    pub fallback_key: String,
     command_tx: mpsc::UnboundedSender<ATCommand>,
     pub sim_id: RwLock<Option<String>>,
     _connection_state: Arc<RwLock<ConnectionState>>,
@@ -41,7 +43,7 @@ pub struct Modem {
 }
 
 impl Modem {
-    pub async fn new(com_port: &str, baud_rate: u32, name: &str) -> io::Result<Self> {
+    pub async fn new(com_port: &str, baud_rate: u32, name: &str, index: usize) -> io::Result<Self> {
         let serial_stream = Self::create_serial_connection(com_port, baud_rate).await?;
 
         let (command_tx, command_rx) = mpsc::unbounded_channel::<ATCommand>();
@@ -74,6 +76,7 @@ impl Modem {
             name: name.to_string(),
             com_port: com_port.to_string(),
             baud_rate,
+            fallback_key: format!("fallback_sim_{}", index),
             command_tx,
             sim_id: RwLock::new(None),
             _connection_state: connection_state,

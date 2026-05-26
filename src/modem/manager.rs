@@ -90,7 +90,7 @@ impl ModemManager {
     ) -> anyhow::Result<(String, Modem, bool)> {
         info!("Initializing modem on port {}", port);
 
-        let modem = Modem::new(&port, baud_rate, &device_id).await?;
+        let modem = Modem::new(&port, baud_rate, &device_id, index).await?;
 
         let pre_sim_id = modem.get_sim_iccid().await.ok().flatten();
         let is_new_sim = if let Some(ref sim_id) = pre_sim_id {
@@ -259,10 +259,38 @@ impl ModemManager {
 
     /// Re-check modems that started without a SIM card. If a SIM is now present,
     /// re-initialize the modem and replace the `fallback_sim_<n>` key with the real ICCID.
+    /// Also demotes active modems back to fallback if their SIM has been removed.
     pub async fn recheck_fallback_modems(
         &self,
         sms_storage_map: &std::collections::HashMap<String, Option<crate::config::SmsStorage>>,
     ) {
+        // ── Demotion: check real-ICCID modems for SIM removal ──────────────────
+        let active_entries: Vec<(String, Arc<Modem>)> = {
+            let modems = self.modems.read().await;
+            modems
+                .iter()
+                .filter(|(k, _)| !k.starts_with("fallback_sim_"))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect()
+        };
+
+        for (iccid, modem) in active_entries {
+            let status = modem.get_sim_status().await;
+            // +CPIN: READY means SIM is present; anything else (NOT READY, ERROR, timeout) means removed
+            let is_ready = matches!(&status, Ok(Some(s)) if s == "READY");
+            if !is_ready {
+                info!(
+                    "SIM removed from {} (was {}). Demoting to {}.",
+                    modem.com_port, iccid, modem.fallback_key
+                );
+                let mut modems = self.modems.write().await;
+                if let Some(m) = modems.remove(&iccid) {
+                    modems.insert(modem.fallback_key.clone(), m);
+                }
+            }
+        }
+
+        // ── Promotion: check fallback modems for SIM insertion ─────────────────
         // Collect fallback entries under a short read lock
         let fallback_entries: Vec<(String, Arc<Modem>)> = {
             let modems = self.modems.read().await;
@@ -272,10 +300,6 @@ impl ModemManager {
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect()
         };
-
-        if fallback_entries.is_empty() {
-            return;
-        }
 
         for (fallback_key, modem) in fallback_entries {
             // Try to read ICCID — succeeds only if a SIM is now inserted
