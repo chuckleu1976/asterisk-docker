@@ -413,6 +413,7 @@ async fn get_all_sim_info(State(modem_manager): State<ModemManagerRef>) -> Respo
         let phone_number = sim_data.as_ref().and_then(|s| s.phone_number.clone());
 
         details.push(json!({
+            "available": true,
             "sim_id": json_sim_id,
             "has_sim": has_sim,
             "name": sim_id.clone(),
@@ -427,6 +428,27 @@ async fn get_all_sim_info(State(modem_manager): State<ModemManagerRef>) -> Respo
             "sim_status": if has_sim { sim_status_data } else { None },
             "memory_status": if has_sim { memory_status_data.as_ref().and_then(|s| s.as_ref()).map(|s| format_memory_status(s)) } else { None },
             "phone_number": if has_sim { phone_number } else { None }
+        }));
+    }
+
+    // Append stubs for ports that failed to open at startup
+    for (com_port, baud_rate) in &modem_manager.unavailable_ports {
+        details.push(json!({
+            "available": false,
+            "sim_id": null,
+            "has_sim": false,
+            "name": null,
+            "com_port": com_port,
+            "baud_rate": baud_rate,
+            "signal_quality": null,
+            "network_registration": null,
+            "operator_info": null,
+            "model_info": null,
+            "imei": null,
+            "sms_center": null,
+            "sim_status": null,
+            "memory_status": null,
+            "phone_number": null
         }));
     }
 

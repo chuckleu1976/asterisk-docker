@@ -247,7 +247,13 @@
 
                 <!-- Module name -->
                 <td class="px-3 py-2.5 text-gray-700 dark:text-gray-200 whitespace-nowrap">
-                  {info.model_info?.model ?? '—'}
+                  {#if info.available === false}
+                    <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400">
+                      Unavailable
+                    </span>
+                  {:else}
+                    {info.model_info?.model ?? '—'}
+                  {/if}
                 </td>
 
                 <!-- Signal -->

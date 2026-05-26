@@ -20,6 +20,7 @@ pub struct MockModem {
 pub struct ModemManager {
     modems: Arc<RwLock<HashMap<String, Arc<MockModem>>>>,
     sim_cards_cache: Arc<RwLock<HashMap<String, SimCard>>>,
+    pub unavailable_ports: Vec<(String, u32)>,
 }
 
 impl ModemManager {
@@ -66,6 +67,7 @@ impl ModemManager {
         let manager = Self {
             modems: Arc::new(RwLock::new(modems)),
             sim_cards_cache: Arc::new(RwLock::new(HashMap::new())),
+            unavailable_ports: Vec::new(),
         };
 
         manager.init_sim_cache().await?;

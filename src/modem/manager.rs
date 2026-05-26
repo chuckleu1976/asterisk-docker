@@ -16,6 +16,8 @@ pub struct ModemManager {
     modems: Arc<RwLock<HashMap<String, Arc<Modem>>>>,
     sim_cards_cache: Arc<RwLock<HashMap<String, SimCard>>>,
     _initialization_semaphore: Arc<Semaphore>,
+    /// COM ports that failed to open at startup (com_port, baud_rate)
+    pub unavailable_ports: Vec<(String, u32)>,
 }
 
 impl ModemManager {
@@ -32,14 +34,15 @@ impl ModemManager {
 
             initialization_futures.push(async move {
                 let _permit = semaphore.acquire().await;
-                Self::initialize_single_modem(port, baud_rate, temp_device_id, sms_storage, index)
+                Self::initialize_single_modem(port.clone(), baud_rate, temp_device_id, sms_storage, index)
                     .await
+                    .map_err(|e| (port, baud_rate, e))
             });
         }
 
         let mut modems = HashMap::new();
         let mut new_sim_ids = Vec::new();
-        let mut failed_count = 0;
+        let mut unavailable_ports: Vec<(String, u32)> = Vec::new();
 
         while let Some(result) = initialization_futures.next().await {
             match result {
@@ -49,9 +52,9 @@ impl ModemManager {
                     }
                     modems.insert(sim_id, Arc::new(modem));
                 }
-                Err(e) => {
-                    error!("Failed to initialize modem: {}", e);
-                    failed_count += 1;
+                Err((port, baud_rate, e)) => {
+                    error!("Failed to initialize modem on {}: {}", port, e);
+                    unavailable_ports.push((port, baud_rate));
                 }
             }
         }
@@ -61,15 +64,16 @@ impl ModemManager {
         }
 
         info!(
-            "Successfully initialized {} modem(s), {} failed",
+            "Successfully initialized {} modem(s), {} unavailable",
             modems.len(),
-            failed_count
+            unavailable_ports.len()
         );
 
         let manager = Self {
             modems: Arc::new(RwLock::new(modems)),
             sim_cards_cache: Arc::new(RwLock::new(HashMap::new())),
             _initialization_semaphore: initialization_semaphore,
+            unavailable_ports,
         };
 
         manager.init_sim_cache().await?;
