@@ -257,14 +257,14 @@ impl ModemManager {
         while futures.next().await.is_some() {}
     }
 
-    /// Re-check modems that started without a SIM card. If a SIM is now present,
-    /// re-initialize the modem and replace the `fallback_sim_<n>` key with the real ICCID.
-    /// Also demotes active modems back to fallback if their SIM has been removed.
+    /// Re-check all modems in parallel for SIM insertion/removal.
+    /// Demotes real-ICCID modems where +CPIN? is no longer READY.
+    /// Promotes fallback modems where +CCID now returns an ICCID.
     pub async fn recheck_fallback_modems(
         &self,
         sms_storage_map: &std::collections::HashMap<String, Option<crate::config::SmsStorage>>,
     ) {
-        // ── Demotion: check real-ICCID modems for SIM removal ──────────────────
+        // ── Demotion: parallel AT+CPIN? on all real-ICCID modems ──────────────
         let active_entries: Vec<(String, Arc<Modem>)> = {
             let modems = self.modems.read().await;
             modems
@@ -274,24 +274,36 @@ impl ModemManager {
                 .collect()
         };
 
+        let mut demotion_futs = FuturesUnordered::new();
         for (iccid, modem) in active_entries {
-            let status = modem.get_sim_status().await;
-            // +CPIN: READY means SIM is present; anything else (NOT READY, ERROR, timeout) means removed
-            let is_ready = matches!(&status, Ok(Some(s)) if s == "READY");
-            if !is_ready {
-                info!(
-                    "SIM removed from {} (was {}). Demoting to {}.",
-                    modem.com_port, iccid, modem.fallback_key
-                );
-                let mut modems = self.modems.write().await;
-                if let Some(m) = modems.remove(&iccid) {
-                    modems.insert(modem.fallback_key.clone(), m);
+            demotion_futs.push(async move {
+                let status = modem.get_sim_status().await;
+                let is_ready = matches!(&status, Ok(Some(s)) if s == "READY");
+                if !is_ready {
+                    Some((iccid, modem.fallback_key.clone(), modem.com_port.clone()))
+                } else {
+                    None
                 }
+            });
+        }
+        let mut demotions = Vec::new();
+        while let Some(result) = demotion_futs.next().await {
+            if let Some(d) = result {
+                demotions.push(d);
+            }
+        }
+        for (iccid, fallback_key, com_port) in demotions {
+            info!(
+                "SIM removed from {} (was {}). Demoting to {}.",
+                com_port, iccid, fallback_key
+            );
+            let mut modems = self.modems.write().await;
+            if let Some(m) = modems.remove(&iccid) {
+                modems.insert(fallback_key, m);
             }
         }
 
-        // ── Promotion: check fallback modems for SIM insertion ─────────────────
-        // Collect fallback entries under a short read lock
+        // ── Promotion: parallel AT+CCID on all fallback modems ────────────────
         let fallback_entries: Vec<(String, Arc<Modem>)> = {
             let modems = self.modems.read().await;
             modems
@@ -301,40 +313,39 @@ impl ModemManager {
                 .collect()
         };
 
+        let mut promotion_futs = FuturesUnordered::new();
         for (fallback_key, modem) in fallback_entries {
-            // Try to read ICCID — succeeds only if a SIM is now inserted
-            let iccid = match modem.get_sim_iccid().await {
-                Ok(Some(id)) => id,
-                _ => continue,
-            };
-
-            info!(
-                "SIM detected on {} (was {}): ICCID={}. Re-initializing.",
-                modem.com_port, fallback_key, iccid
-            );
-
-            let sms_storage = sms_storage_map
-                .get(&modem.com_port)
-                .copied()
-                .flatten();
-
-            if let Err(e) = modem.init_modem(sms_storage).await {
-                log::warn!(
-                    "Re-init modem on {} failed: {}. Will retry next cycle.",
-                    modem.com_port,
-                    e
-                );
-                continue;
-            }
-
-            // Promote: swap the fallback key for the real ICCID in the HashMap
-            let mut modems = self.modems.write().await;
-            if let Some(m) = modems.remove(&fallback_key) {
-                modems.insert(iccid.clone(), m);
+            let sms_storage = sms_storage_map.get(&modem.com_port).copied().flatten();
+            promotion_futs.push(async move {
+                let iccid = match modem.get_sim_iccid().await {
+                    Ok(Some(id)) => id,
+                    _ => return None,
+                };
                 info!(
-                    "Modem on {} promoted: {} -> {}",
+                    "SIM detected on {} (was {}): ICCID={}. Re-initializing.",
                     modem.com_port, fallback_key, iccid
                 );
+                if let Err(e) = modem.init_modem(sms_storage).await {
+                    log::warn!(
+                        "Re-init modem on {} failed: {}. Will retry next cycle.",
+                        modem.com_port,
+                        e
+                    );
+                    return None;
+                }
+                Some((fallback_key, iccid, modem.com_port.clone()))
+            });
+        }
+        while let Some(result) = promotion_futs.next().await {
+            if let Some((fallback_key, iccid, com_port)) = result {
+                let mut modems = self.modems.write().await;
+                if let Some(m) = modems.remove(&fallback_key) {
+                    modems.insert(iccid.clone(), m);
+                    info!(
+                        "Modem on {} promoted: {} -> {}",
+                        com_port, fallback_key, iccid
+                    );
+                }
             }
         }
     }

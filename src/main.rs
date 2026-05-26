@@ -137,7 +137,7 @@ async fn recheck_fallback_worker(
     sms_storage_map: std::collections::HashMap<String, Option<crate::config::SmsStorage>>,
 ) {
     loop {
-        tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
+        tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
         modem_manager.recheck_fallback_modems(&sms_storage_map).await;
     }
 }
