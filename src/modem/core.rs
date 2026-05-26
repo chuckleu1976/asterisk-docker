@@ -321,7 +321,13 @@ impl Modem {
         }
 
         if let Some(storage) = sms_storage {
-            self.configure_sms_storage(storage).await?;
+            if let Err(e) = self.configure_sms_storage(storage).await {
+                log::warn!(
+                    "Failed to configure SMS storage for device {} (no SIM inserted?): {}",
+                    self.name,
+                    e
+                );
+            }
         }
 
         if let Err(e) = self.init_sim_info().await {
@@ -603,6 +609,17 @@ impl Modem {
     pub async fn get_modem_model(&self) -> io::Result<Option<ModemInfo>> {
         self.get_modem_info("AT+CGMM\r\n", ModemInfo::from_response)
             .await
+    }
+
+    pub async fn get_imei(&self) -> io::Result<Option<String>> {
+        self.get_modem_info("AT+GSN\r\n", |response| {
+            response
+                .lines()
+                .map(|l| l.trim())
+                .find(|l| l.len() == 15 && l.chars().all(|c| c.is_ascii_digit()))
+                .map(|s| s.to_string())
+        })
+        .await
     }
 
     pub async fn get_sim_iccid(&self) -> io::Result<Option<String>> {

@@ -84,6 +84,13 @@ class ApiClient {
     }
 
     /**
+     * Get SMS recv/sent counts grouped by SIM
+     */
+    async getSimStats() {
+        return FetchApi.get('/api/sims/stats');
+    }
+
+    /**
      * Update SIM card alias
      * @param {number} simId - SIM card ID
      * @param {string} alias - New alias

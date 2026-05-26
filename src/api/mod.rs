@@ -100,7 +100,7 @@ pub async fn run_api(
     let api = Router::new()
         .route("/check", get(check))
         .route("/sms", get(get_sms_paginated))
-        .route("/sms", post(send_sms).with_state(modem_manager.clone()))
+        .route("/sms", post(send_sms).with_state((modem_manager.clone(), sse_manager.clone())))
         .route("/sms/sse", get(sse_events).with_state(sse_manager.clone()))
         // 破坏性改造: 删除所有/api/device路径，改为/api/sims
         .route(
@@ -117,6 +117,7 @@ pub async fn run_api(
         .route("/conversation", get(get_conversation))
         .route("/conversations/{id}/unread", post(get_conversation_unread))
         .route("/sim-cards", get(get_all_sim_cards)) // 保留用于管理
+        .route("/sims/stats", get(get_sim_sms_stats))
         .route(
             "/sims/{sim_id}/info",
             get(get_enhanced_sim_info).with_state(modem_manager.clone()),
@@ -200,7 +201,7 @@ async fn get_sms_paginated(Query(query): Query<SmsQuery>) -> Response {
 }
 
 async fn send_sms(
-    State(modem_manager): State<ModemManagerRef>,
+    State((modem_manager, sse_manager)): State<(ModemManagerRef, Arc<SseManager>)>,
     Json(mut payload): Json<SmsPayload>,
 ) -> impl IntoResponse {
     if payload.new {
@@ -211,11 +212,18 @@ async fn send_sms(
         .send_sms(&payload.sim_id, &payload.contact, &payload.message)
         .await
     {
-        Ok((sms_id, contact_id)) => (
-            StatusCode::OK,
-            Json(json!({ "sms_id": sms_id, "contact_id": contact_id })),
-        )
-            .into_response(),
+        Ok((sms_id, contact_id)) => {
+            if let Ok(convs) =
+                Conversation::query_by_contact_ids(&[contact_id.clone()]).await
+            {
+                sse_manager.send(convs);
+            }
+            (
+                StatusCode::OK,
+                Json(json!({ "sms_id": sms_id, "contact_id": contact_id })),
+            )
+                .into_response()
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Send failed: {}", e),
@@ -276,6 +284,10 @@ async fn get_all_sim_info(State(modem_manager): State<ModemManagerRef>) -> Respo
                     Duration::from_secs(5),
                     modem_manager.get_memory_status(&sim_id),
                 );
+                let imei_future = timeout(
+                    Duration::from_secs(5),
+                    modem_manager.get_imei(&sim_id),
+                );
 
                 let (
                     signal_result,
@@ -285,6 +297,7 @@ async fn get_all_sim_info(State(modem_manager): State<ModemManagerRef>) -> Respo
                     sms_center_result,
                     sim_status_result,
                     memory_status_result,
+                    imei_result,
                 ) = tokio::join!(
                     signal_future,
                     network_future,
@@ -292,7 +305,8 @@ async fn get_all_sim_info(State(modem_manager): State<ModemManagerRef>) -> Respo
                     model_future,
                     sms_center_future,
                     sim_status_future,
-                    memory_status_future
+                    memory_status_future,
+                    imei_future
                 );
 
                 let (signal_data, signal_error) = to_data_error(
@@ -322,6 +336,9 @@ async fn get_all_sim_info(State(modem_manager): State<ModemManagerRef>) -> Respo
                     memory_status_result
                         .unwrap_or_else(|_| Err(anyhow::anyhow!("Memory status timeout"))),
                 );
+                let (imei_data, _imei_error) = to_data_error(
+                    imei_result.unwrap_or_else(|_| Err(anyhow::anyhow!("IMEI timeout"))),
+                );
 
                 let sim_data = modem_manager.get_sim_card_cached(&sim_id).await;
 
@@ -344,6 +361,7 @@ async fn get_all_sim_info(State(modem_manager): State<ModemManagerRef>) -> Respo
                     sim_status_error,
                     memory_status_data,
                     memory_status_error,
+                    imei_data,
                 )
             }
         })
@@ -370,9 +388,14 @@ async fn get_all_sim_info(State(modem_manager): State<ModemManagerRef>) -> Respo
         _sim_status_error,
         memory_status_data,
         _memory_status_error,
+        imei_data,
     ) in modem_results
     {
         let (sim_data, _sim_error): (Option<SimCard>, Option<String>) = (sim_data, None);
+
+        // Determine if this modem has a SIM card inserted
+        let has_sim = !sim_id.starts_with("fallback_sim_");
+        let json_sim_id: Option<&str> = if has_sim { Some(&sim_id) } else { None };
 
         // Get the SIM card effective alias for display
         let _display_name = if let Some(ref sim) = sim_data {
@@ -390,18 +413,20 @@ async fn get_all_sim_info(State(modem_manager): State<ModemManagerRef>) -> Respo
         let phone_number = sim_data.as_ref().and_then(|s| s.phone_number.clone());
 
         details.push(json!({
-            "sim_id": sim_id,
+            "sim_id": json_sim_id,
+            "has_sim": has_sim,
             "name": sim_id.clone(),
             "com_port": com_port,
             "baud_rate": baud_rate,
-            "signal_quality": signal_data,
-            "network_registration": network_data,
-            "operator_info": operator_data,
+            "signal_quality": if has_sim { signal_data } else { None },
+            "network_registration": if has_sim { network_data } else { None },
+            "operator_info": if has_sim { operator_data } else { None },
             "model_info": model_data,
-            "sms_center": sms_center_data.as_ref().and_then(|s| s.as_ref()).map(|s| decode_sms_center(s)),
-            "sim_status": sim_status_data,
-            "memory_status": memory_status_data.as_ref().and_then(|s| s.as_ref()).map(|s| format_memory_status(s)),
-            "phone_number": phone_number
+            "imei": imei_data,
+            "sms_center": if has_sim { sms_center_data.as_ref().and_then(|s| s.as_ref()).map(|s| decode_sms_center(s)) } else { None },
+            "sim_status": if has_sim { sim_status_data } else { None },
+            "memory_status": if has_sim { memory_status_data.as_ref().and_then(|s| s.as_ref()).map(|s| format_memory_status(s)) } else { None },
+            "phone_number": if has_sim { phone_number } else { None }
         }));
     }
 
@@ -539,6 +564,16 @@ pub struct ModemInfo {
     pub name: String,
     pub com_port: String,
     pub baud_rate: u32,
+}
+
+async fn get_sim_sms_stats() -> Response {
+    match Sms::count_by_sim_id().await {
+        Ok(stats) => (StatusCode::OK, Json(stats)).into_response(),
+        Err(e) => {
+            error!("Failed to get SIM SMS stats: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed: {}", e)).into_response()
+        }
+    }
 }
 
 async fn get_all_sim_cards() -> Response {

@@ -233,9 +233,14 @@ impl ModemManager {
     pub async fn read_all_sms_async(
         &self,
         _sms_type: SmsType,
-        _sse_manager: Arc<SseManager>,
+        sse_manager: Arc<SseManager>,
         _webhook_manager: Option<webhook::WebhookManager>,
     ) {
+        if let Ok(conversations) = crate::db::Conversation::query_all().await {
+            if !conversations.is_empty() {
+                sse_manager.send(conversations);
+            }
+        }
     }
 
     pub async fn get_signal_quality(&self, _sim_id: &str) -> anyhow::Result<Option<SignalQuality>> {

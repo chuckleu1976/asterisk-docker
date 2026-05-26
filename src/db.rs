@@ -96,6 +96,13 @@ pub struct Conversation {
     pub sms_preview: SMSPreview,
 }
 
+#[derive(Debug, FromRow, Deserialize, Serialize, Default, Clone)]
+pub struct SimSmsStat {
+    pub sim_id: String,
+    pub recv: i64,
+    pub sent: i64,
+}
+
 impl Sms {
     pub async fn count() -> Result<i64> {
         let pool = get_pool()?;
@@ -120,6 +127,23 @@ impl Sms {
         .fetch_one(pool)
         .await?;
         Ok(count)
+    }
+
+    pub async fn count_by_sim_id() -> Result<Vec<SimSmsStat>> {
+        let pool = get_pool()?;
+        let rows = sqlx::query_as::<_, SimSmsStat>(
+            r#"
+            SELECT
+                sim_id,
+                SUM(CASE WHEN send = 0 THEN 1 ELSE 0 END) AS recv,
+                SUM(CASE WHEN send = 1 THEN 1 ELSE 0 END) AS sent
+            FROM sms
+            GROUP BY sim_id
+            "#,
+        )
+        .fetch_all(pool)
+        .await?;
+        Ok(rows)
     }
 
     /// Retrieves paginated SMS records

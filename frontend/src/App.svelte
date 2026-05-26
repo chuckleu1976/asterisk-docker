@@ -5,7 +5,7 @@
   import { initConversation } from "./stores/conversation";
   import Login from "./pages/Login.svelte";
   import Dashboard from "./pages/Dashboard.svelte";
-
+  import SimDashboard from "./pages/SimDashboard.svelte";
 
   // 监听认证状态变化
   $effect(() => {
@@ -26,7 +26,7 @@
           in:fly={{ x: 50, duration: 500, easing: quartOut }}
           out:fly={{ x: -50, duration: 300, easing: quartOut }}
         >
-          <Dashboard />
+          <SimDashboard />
         </div>
       {:else}
         <!-- 登录界面 -->

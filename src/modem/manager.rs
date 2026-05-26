@@ -99,7 +99,14 @@ impl ModemManager {
             false
         };
 
-        modem.init_modem(sms_storage).await?;
+        if let Err(e) = modem.init_modem(sms_storage).await {
+            log::warn!(
+                "Modem AT init failed for port {} (no SIM inserted?): {}. \
+                 Adding as partial entry.",
+                port,
+                e
+            );
+        }
 
         let sim_id = pre_sim_id.unwrap_or_else(|| {
             log::warn!("Using fallback SIM ID for port {}", port);
@@ -227,6 +234,11 @@ impl ModemManager {
         let mut futures = FuturesUnordered::new();
 
         for (sim_id, modem) in modems.iter() {
+            // Skip modems without a SIM card — they cannot receive SMS
+            if sim_id.starts_with("fallback_sim_") {
+                continue;
+            }
+
             let modem = modem.clone();
             let sse_manager = sse_manager.clone();
             let webhook_manager = webhook_manager.clone();
@@ -282,6 +294,15 @@ impl ModemManager {
             .ok_or_else(|| anyhow::anyhow!("Modem not found for SIM ID: {}", sim_id))?;
 
         modem.get_modem_model().await.map_err(Into::into)
+    }
+
+    pub async fn get_imei(&self, sim_id: &str) -> anyhow::Result<Option<String>> {
+        let modem = self
+            .get_modem(sim_id)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("Modem not found for SIM ID: {}", sim_id))?;
+
+        modem.get_imei().await.map_err(Into::into)
     }
 
     pub async fn get_sms_center(&self, sim_id: &str) -> anyhow::Result<Option<String>> {
