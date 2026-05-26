@@ -1,5 +1,5 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import Icon from '@iconify/svelte';
   import { apiClient } from '../js/api.js';
   import { logout } from '../stores/auth.js';
@@ -66,7 +66,7 @@
   });
 
   // ── Data fetching ─────────────────────────────────────────────────────────
-  onMount(async () => {
+  async function fetchData() {
     try {
       const [infoRes, cardsRes, statsRes] = await Promise.all([
         apiClient.getAllSimsInfo(),
@@ -81,7 +81,15 @@
     } finally {
       loading = false;
     }
+  }
+
+  let pollTimer;
+  onMount(async () => {
+    await fetchData();
+    pollTimer = setInterval(fetchData, 4000);
   });
+
+  onDestroy(() => clearInterval(pollTimer));
 
   // ── Selection ─────────────────────────────────────────────────────────────
   function toggleRow(id) {
@@ -119,7 +127,7 @@
 
     <div class="flex items-center gap-2">
       <button
-        onclick={() => { loading = true; error = ''; onMount; location.reload(); }}
+        onclick={() => { loading = true; error = ''; fetchData(); }}
         class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
                border border-gray-200 dark:border-zinc-700
                text-gray-600 dark:text-gray-300
