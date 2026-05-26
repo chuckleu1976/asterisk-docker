@@ -88,6 +88,19 @@ async fn main() {
         webhook_manager,
     ));
 
+    // Build a map of com_port -> sms_storage for the recheck worker
+    let sms_storage_map: std::collections::HashMap<String, Option<crate::config::SmsStorage>> =
+        config
+            .devices
+            .iter()
+            .map(|d| (d.com_port.clone(), d.sms_storage.or(config.settings.sms_storage)))
+            .collect();
+
+    tokio::spawn(recheck_fallback_worker(
+        modem_manager.clone(),
+        sms_storage_map,
+    ));
+
     if let Ok(_) = api::run_api(
         modem_manager.clone(),
         &config.settings.server_host,
@@ -116,6 +129,16 @@ async fn read_sms_worker(
             .await;
 
         tokio::time::sleep(tokio::time::Duration::from_secs(read_sms_frequency)).await;
+    }
+}
+
+async fn recheck_fallback_worker(
+    modem_manager: ModemManagerRef,
+    sms_storage_map: std::collections::HashMap<String, Option<crate::config::SmsStorage>>,
+) {
+    loop {
+        tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
+        modem_manager.recheck_fallback_modems(&sms_storage_map).await;
     }
 }
 

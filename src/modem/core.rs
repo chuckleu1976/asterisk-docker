@@ -305,7 +305,7 @@ impl Modem {
             .max_by_key(|&(_, pos)| pos)
     }
 
-    pub async fn init_modem(&mut self, sms_storage: Option<SmsStorage>) -> io::Result<()> {
+    pub async fn init_modem(&self, sms_storage: Option<SmsStorage>) -> io::Result<()> {
         let init_commands = vec![
             ("ATE0\r\n", "Disable echo"),
             ("AT+CMEE=1\r\n", "Enable error messages"),
@@ -365,7 +365,7 @@ impl Modem {
         }
     }
 
-    async fn init_sim_info(&mut self) -> anyhow::Result<()> {
+    async fn init_sim_info(&self) -> anyhow::Result<()> {
         let (iccid_result, imsi_result, phone_result) = tokio::join!(
             self.get_sim_iccid(),
             self.get_sim_imsi(),

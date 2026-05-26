@@ -90,7 +90,7 @@ impl ModemManager {
     ) -> anyhow::Result<(String, Modem, bool)> {
         info!("Initializing modem on port {}", port);
 
-        let mut modem = Modem::new(&port, baud_rate, &device_id).await?;
+        let modem = Modem::new(&port, baud_rate, &device_id).await?;
 
         let pre_sim_id = modem.get_sim_iccid().await.ok().flatten();
         let is_new_sim = if let Some(ref sim_id) = pre_sim_id {
@@ -255,6 +255,64 @@ impl ModemManager {
         }
 
         while futures.next().await.is_some() {}
+    }
+
+    /// Re-check modems that started without a SIM card. If a SIM is now present,
+    /// re-initialize the modem and replace the `fallback_sim_<n>` key with the real ICCID.
+    pub async fn recheck_fallback_modems(
+        &self,
+        sms_storage_map: &std::collections::HashMap<String, Option<crate::config::SmsStorage>>,
+    ) {
+        // Collect fallback entries under a short read lock
+        let fallback_entries: Vec<(String, Arc<Modem>)> = {
+            let modems = self.modems.read().await;
+            modems
+                .iter()
+                .filter(|(k, _)| k.starts_with("fallback_sim_"))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect()
+        };
+
+        if fallback_entries.is_empty() {
+            return;
+        }
+
+        for (fallback_key, modem) in fallback_entries {
+            // Try to read ICCID — succeeds only if a SIM is now inserted
+            let iccid = match modem.get_sim_iccid().await {
+                Ok(Some(id)) => id,
+                _ => continue,
+            };
+
+            info!(
+                "SIM detected on {} (was {}): ICCID={}. Re-initializing.",
+                modem.com_port, fallback_key, iccid
+            );
+
+            let sms_storage = sms_storage_map
+                .get(&modem.com_port)
+                .copied()
+                .flatten();
+
+            if let Err(e) = modem.init_modem(sms_storage).await {
+                log::warn!(
+                    "Re-init modem on {} failed: {}. Will retry next cycle.",
+                    modem.com_port,
+                    e
+                );
+                continue;
+            }
+
+            // Promote: swap the fallback key for the real ICCID in the HashMap
+            let mut modems = self.modems.write().await;
+            if let Some(m) = modems.remove(&fallback_key) {
+                modems.insert(iccid.clone(), m);
+                info!(
+                    "Modem on {} promoted: {} -> {}",
+                    modem.com_port, fallback_key, iccid
+                );
+            }
+        }
     }
 
     pub async fn get_signal_quality(&self, sim_id: &str) -> anyhow::Result<Option<SignalQuality>> {
