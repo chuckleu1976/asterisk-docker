@@ -101,6 +101,7 @@ pub struct SimSmsStat {
     pub sim_id: String,
     pub recv: i64,
     pub sent: i64,
+    pub phone_number: Option<String>,
 }
 
 impl Sms {
@@ -134,11 +135,13 @@ impl Sms {
         let rows = sqlx::query_as::<_, SimSmsStat>(
             r#"
             SELECT
-                sim_id,
-                SUM(CASE WHEN send = 0 THEN 1 ELSE 0 END) AS recv,
-                SUM(CASE WHEN send = 1 THEN 1 ELSE 0 END) AS sent
-            FROM sms
-            GROUP BY sim_id
+                s.sim_id,
+                SUM(CASE WHEN s.send = 0 THEN 1 ELSE 0 END) AS recv,
+                SUM(CASE WHEN s.send = 1 THEN 1 ELSE 0 END) AS sent,
+                sc.phone_number
+            FROM sms s
+            LEFT JOIN sim_cards sc ON s.sim_id = sc.id
+            GROUP BY s.sim_id
             "#,
         )
         .fetch_all(pool)
