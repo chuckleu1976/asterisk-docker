@@ -28,8 +28,7 @@
   );
   let overLimit = $derived(charCount > UCS2_SINGLE_MAX);
   let charCountColor = $derived(
-    overLimit ? 'text-red-500 dark:text-red-400'
-    : charCount > 59 ? 'text-amber-500 dark:text-amber-400'
+    charCount > 59 ? 'text-amber-500 dark:text-amber-400'
     : 'text-gray-400 dark:text-gray-500'
   );
 
@@ -123,8 +122,8 @@
       
       <button
         onclick={handleSendClick}
-        disabled={(showNewMessage && !concatInputText.trim()) || !sendMessageContent.trim() || overLimit}
-        class="flex items-center justify-center gap-2 px-4 sm:px-5 h-12 rounded-lg font-medium text-sm transition-all duration-200 w-auto sm:w-auto min-w-[110px] {(showNewMessage && !concatInputText.trim()) || !sendMessageContent.trim() || overLimit
+        disabled={(showNewMessage && !concatInputText.trim()) || !sendMessageContent.trim()}
+        class="flex items-center justify-center gap-2 px-4 sm:px-5 h-12 rounded-lg font-medium text-sm transition-all duration-200 w-auto sm:w-auto min-w-[110px] {(showNewMessage && !concatInputText.trim()) || !sendMessageContent.trim()
           ? 'bg-gray-200 dark:bg-zinc-700 text-gray-600 dark:text-gray-500 cursor-not-allowed opacity-50'
           : 'bg-gray-800 dark:bg-gray-100 text-gray-100 dark:text-gray-900 hover:bg-gray-700 dark:hover:bg-gray-200 active:scale-[0.98] cursor-pointer'}"
       >

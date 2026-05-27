@@ -138,3 +138,72 @@ pub fn build_pdus(mobile: &str, message: &str) -> anyhow::Result<Vec<(String, us
 pub fn string_to_ucs2_pub(message: &str) -> anyhow::Result<String> {
     string_to_ucs2(message)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn short_message_produces_single_pdu() {
+        let pdus = build_pdus("+8613800001234", "Hello").unwrap();
+        assert_eq!(pdus.len(), 1);
+    }
+
+    #[test]
+    fn exactly_70_chars_produces_single_pdu() {
+        let msg = "A".repeat(70);
+        let pdus = build_pdus("+8613800001234", &msg).unwrap();
+        assert_eq!(pdus.len(), 1);
+    }
+
+    #[test]
+    fn exactly_71_chars_produces_two_pdus() {
+        let msg = "A".repeat(71);
+        let pdus = build_pdus("+8613800001234", &msg).unwrap();
+        assert_eq!(pdus.len(), 2);
+    }
+
+    #[test]
+    fn long_message_correct_segment_count() {
+        // 134 chars → 2 segments of 67
+        let msg = "A".repeat(134);
+        let pdus = build_pdus("+8613800001234", &msg).unwrap();
+        assert_eq!(pdus.len(), 2);
+
+        // 135 chars → 3 segments (67+67+1)
+        let msg2 = "A".repeat(135);
+        let pdus2 = build_pdus("+8613800001234", &msg2).unwrap();
+        assert_eq!(pdus2.len(), 3);
+    }
+
+    #[test]
+    fn multipart_pdu_starts_with_smsc_00_and_first_octet_51() {
+        let msg = "A".repeat(71);
+        let pdus = build_pdus("+8613800001234", &msg).unwrap();
+        // full PDU hex: "00" (SMSC) + "51" (TP-UDHI first octet) + ...
+        for (pdu, _) in &pdus {
+            assert!(pdu.starts_with("00"), "PDU should start with SMSC 00");
+            assert_eq!(&pdu[2..4], "51", "First octet should be 0x51 (TP-UDHI set)");
+        }
+    }
+
+    #[test]
+    fn single_pdu_has_no_udhi_bit() {
+        let (pdu, _) = build_pdu("+8613800001234", "Hello").unwrap();
+        // First octet after SMSC ("00") should be "11", not "51"
+        assert_eq!(&pdu[2..4], "11", "Single PDU should not have TP-UDHI set");
+    }
+
+    #[test]
+    fn chinese_chars_produce_correct_segment_count() {
+        // 70 Chinese chars → single PDU
+        let msg: String = "你好".repeat(35); // 70 chars
+        let pdus = build_pdus("+8613800001234", &msg).unwrap();
+        assert_eq!(pdus.len(), 1);
+
+        // 71 Chinese chars → 2 PDUs
+        let msg2: String = "你".repeat(71);
+        let pdus2 = build_pdus("+8613800001234", &msg2).unwrap();
+        assert_eq!(pdus2.len(), 2);
+    }
+}

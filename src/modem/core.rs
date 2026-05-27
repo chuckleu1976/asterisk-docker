@@ -437,6 +437,83 @@ impl Modem {
         }
     }
 
+    /// Send a PDU SMS atomically: holds the serial mutex across both the AT+CMGS prompt step
+    /// and the PDU data step, preventing other AT commands from slipping in between and
+    /// corrupting the modem's PDU input state.
+    async fn send_pdu_atomic(&self, tpdu_len: usize, pdu_hex: &str) -> anyhow::Result<()> {
+        let setup_cmd = format!("AT+CMGS={}\r", tpdu_len);
+        let full_pdu = format!("{}\x1A", pdu_hex);
+
+        let mut serial_guard = self._serial_mutex.lock().await;
+        let serial = serial_guard
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("Serial port not connected"))?;
+
+        // Step 1: Send AT+CMGS=<n>\r and wait for the '>' prompt.
+        let prompt = Self::execute_single_command(serial, &setup_cmd, &self.name).await?;
+        if !prompt.contains("> ") {
+            return Err(anyhow::anyhow!("SMS prompt not received: {}", Self::format_log(&prompt)));
+        }
+
+        // Step 2: Send PDU + Ctrl-Z and wait for +CMGS:/OK.
+        // Use a 30-second timeout — network transmission can be slow.
+        debug!("TX [{}]: <PDU {} bytes + Ctrl-Z>", self.name, pdu_hex.len() / 2);
+        serial.write_all(full_pdu.as_bytes()).await?;
+        serial.flush().await?;
+        let final_response =
+            Self::read_response_with_timeout(serial, &self.name, Duration::from_secs(30)).await?;
+
+        if final_response.contains("OK\r\n") && final_response.contains("+CMGS:") {
+            Ok(())
+        } else {
+            error!(
+                "Incomplete SMS response: {}",
+                Self::format_log(&final_response)
+            );
+            Err(anyhow::anyhow!("Incomplete SMS response"))
+        }
+    }
+
+    async fn read_response_with_timeout(
+        serial_stream: &mut SerialStream,
+        name: &str,
+        timeout_duration: Duration,
+    ) -> io::Result<String> {
+        let mut buffer = Vec::with_capacity(4096);
+        let mut temp_buf = [0u8; 1024];
+
+        let result = tokio::time::timeout(timeout_duration, async {
+            loop {
+                match serial_stream.read(&mut temp_buf).await {
+                    Ok(0) => break,
+                    Ok(bytes_read) => {
+                        buffer.extend_from_slice(&temp_buf[..bytes_read]);
+                        if let Some((terminator, pos)) = Self::find_terminator(&buffer) {
+                            let end_pos = pos + terminator.len();
+                            let response =
+                                String::from_utf8_lossy(&buffer[..end_pos]).into_owned();
+                            debug!("RX [{}]: {}", name, Self::format_log(&response));
+                            return Ok(response);
+                        }
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+            let response = String::from_utf8_lossy(&buffer).into_owned();
+            debug!("RX [{}]: {}", name, Self::format_log(&response));
+            Ok(response)
+        })
+        .await;
+
+        match result {
+            Ok(response) => response,
+            Err(_) => Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!("Command timeout for device {}", name),
+            )),
+        }
+    }
+
     async fn send_sms_content<F>(
         &self,
         setup_cmd: &str,
@@ -505,10 +582,7 @@ impl Modem {
         let pdus = build_pdus(phone, message)?;
 
         for (pdu_data, tpdu_length) in pdus {
-            self.send_sms_content(&format!("AT+CMGS={}\r", tpdu_length), &pdu_data, |pdu| {
-                Ok(pdu.to_string())
-            })
-            .await?;
+            self.send_pdu_atomic(tpdu_length, &pdu_data).await?;
         }
 
         Ok(())

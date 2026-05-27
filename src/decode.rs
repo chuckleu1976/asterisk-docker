@@ -7,7 +7,7 @@ use crate::db::ModemSMS;
 // --------- Multipart SMS Handler ----------
 struct MultipartHandler {
     // (reference number, total parts) -> (timestamp, sender, message parts, original indices)
-    pending_parts: HashMap<(u8, u8), (NaiveDateTime, String, Vec<Option<String>>, Vec<u32>)>,
+    pending_parts: HashMap<(u16, u8), (NaiveDateTime, String, Vec<Option<String>>, Vec<u32>)>,
 }
 
 impl MultipartHandler {
@@ -20,7 +20,7 @@ impl MultipartHandler {
     /// Adds a part of a multipart SMS and returns the combined message when all parts are collected
     fn add_part(
         &mut self,
-        reference: u8,
+        reference: u16,
         total: u8,
         current: u8,
         message: String,
@@ -211,7 +211,7 @@ pub fn parse_pdu_sms(cmgl_entries: &str, sim_id: &str) -> Vec<ModemSMS> {
 // ---------- Message Content Parsing ----------
 enum MessageContent {
     Multipart {
-        reference: u8,
+        reference: u16,
         total: u8,
         current: u8,
         content: String,
@@ -227,17 +227,39 @@ fn parse_message_content(bytes: &[u8], dcs: u8, _udl: usize, has_udhi: bool) -> 
             let udh = &bytes[1..1 + udhl];
             let content_bytes = &bytes[1 + udhl..];
 
-            // Check for concatenated SMS UDH
+            // Check for concatenated SMS UDH: 8-bit reference (IEI=0x00, length=0x03)
             if udh.len() >= 5 && udh[0] == 0x00 && udh[1] == 0x03 {
-                let reference = udh[2];
+                let reference = udh[2] as u16;
                 let total = udh[3];
                 let current = udh[4];
 
-                // For GSM 7-bit, calculate the correct bit offset due to UDH
+                // For GSM 7-bit, skip the fill bits so content starts on a septet boundary.
+                // fill_bits = (7 - ((udhl+1)*8 % 7)) % 7
                 let content = if dcs == 0x00 {
-                    // For concatenated SMS with 5-byte UDH, the standard padding is 6 bits
-                    let padding_bits = if udhl == 5 { 6 } else { 0 };
-                    decode_gsm7bit_with_offset(content_bytes, padding_bits)
+                    let fill_bits = (7 - ((udhl + 1) * 8) % 7) % 7;
+                    decode_gsm7bit_with_offset(content_bytes, fill_bits)
+                } else {
+                    decode_content(content_bytes, dcs)
+                };
+
+                return MessageContent::Multipart {
+                    reference,
+                    total,
+                    current,
+                    content,
+                };
+            }
+
+            // Check for concatenated SMS UDH: 16-bit reference (IEI=0x08, length=0x04)
+            // Used by many Android phones and some carriers
+            if udh.len() >= 6 && udh[0] == 0x08 && udh[1] == 0x04 {
+                let reference = ((udh[2] as u16) << 8) | (udh[3] as u16);
+                let total = udh[4];
+                let current = udh[5];
+
+                // UDHL=6 → (1+6)*8 = 56 bits, 56 % 7 = 0, so no fill bits needed
+                let content = if dcs == 0x00 {
+                    decode_gsm7bit_with_offset(content_bytes, 0)
                 } else {
                     decode_content(content_bytes, dcs)
                 };
@@ -363,14 +385,23 @@ fn decode_gsm7bit_sender(bytes: &[u8], septets: usize) -> String {
     result
 }
 
-fn decode_gsm7bit_with_offset(bytes: &[u8], bit_offset: usize) -> String {
+fn decode_gsm7bit_with_offset(bytes: &[u8], skip_bits: usize) -> String {
     let mut result = String::new();
     let mut bit_buffer: u64 = 0;
-    let mut bits_in_buffer = bit_offset;
+    let mut bits_in_buffer: usize = 0;
+    let mut remaining_skip = skip_bits;
 
     for &byte in bytes {
         bit_buffer |= (byte as u64) << bits_in_buffer;
         bits_in_buffer += 8;
+
+        // Discard fill bits from the front of the stream
+        if remaining_skip > 0 {
+            let skip = remaining_skip.min(bits_in_buffer);
+            bit_buffer >>= skip;
+            bits_in_buffer -= skip;
+            remaining_skip -= skip;
+        }
 
         while bits_in_buffer >= 7 {
             let septet = (bit_buffer & 0x7F) as u8;
@@ -379,7 +410,6 @@ fn decode_gsm7bit_with_offset(bytes: &[u8], bit_offset: usize) -> String {
 
             let ch = gsm7bit_to_char(septet);
             if ch != '\0' {
-                // Skip null characters
                 result.push(ch);
             }
         }
