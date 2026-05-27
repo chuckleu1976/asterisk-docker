@@ -452,6 +452,16 @@ async fn get_all_sim_info(State(modem_manager): State<ModemManagerRef>) -> Respo
         }));
     }
 
+    // Sort by COM port number (COM1, COM2, ..., COM10, COM11, ...)
+    details.sort_by_key(|entry| {
+        entry["com_port"]
+            .as_str()
+            .unwrap_or("")
+            .trim_start_matches(|c: char| !c.is_ascii_digit())
+            .parse::<u32>()
+            .unwrap_or(u32::MAX)
+    });
+
     (StatusCode::OK, Json(details)).into_response()
 }
 
