@@ -267,6 +267,8 @@ impl ModemManager {
     pub async fn recheck_fallback_modems(
         &self,
         sms_storage_map: &std::collections::HashMap<String, Option<crate::config::SmsStorage>>,
+        sse_manager: Arc<SseManager>,
+        webhook_manager: Option<webhook::WebhookManager>,
     ) {
         // ── Demotion: parallel AT+CPIN? on all real-ICCID modems ──────────────
         let active_entries: Vec<(String, Arc<Modem>)> = {
@@ -284,10 +286,20 @@ impl ModemManager {
                 let status = modem.get_sim_status().await;
                 let is_ready = matches!(&status, Ok(Some(s)) if s == "READY");
                 if !is_ready {
-                    Some((iccid, modem.fallback_key.clone(), modem.com_port.clone()))
-                } else {
-                    None
+                    return Some((iccid, modem.fallback_key.clone(), modem.com_port.clone()));
                 }
+                // Detect direct SIM swap: new SIM is already READY so CPIN? passes,
+                // but the ICCID no longer matches the map key.
+                if let Ok(Some(current_iccid)) = modem.get_sim_iccid().await {
+                    if current_iccid != iccid {
+                        info!(
+                            "SIM swap detected on {} (was {}, now {}). Forcing re-init.",
+                            modem.com_port, iccid, current_iccid
+                        );
+                        return Some((iccid, modem.fallback_key.clone(), modem.com_port.clone()));
+                    }
+                }
+                None
             });
         }
         let mut demotions = Vec::new();
@@ -342,13 +354,25 @@ impl ModemManager {
         }
         while let Some(result) = promotion_futs.next().await {
             if let Some((fallback_key, iccid, com_port)) = result {
-                let mut modems = self.modems.write().await;
-                if let Some(m) = modems.remove(&fallback_key) {
-                    modems.insert(iccid.clone(), m);
-                    info!(
-                        "Modem on {} promoted: {} -> {}",
-                        com_port, fallback_key, iccid
-                    );
+                let promoted_modem = {
+                    let mut modems = self.modems.write().await;
+                    if let Some(m) = modems.remove(&fallback_key) {
+                        modems.insert(iccid.clone(), m.clone());
+                        info!("Modem on {} promoted: {} -> {}", com_port, fallback_key, iccid);
+                        Some(m)
+                    } else {
+                        None
+                    }
+                };
+                // Immediately read any SMS that arrived on the new SIM
+                if let Some(modem) = promoted_modem {
+                    let sse = sse_manager.clone();
+                    let wh = webhook_manager.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = modem.read_sms_async_insert(SmsType::All, sse, wh).await {
+                            log::warn!("Failed to read SMS after SIM swap on {}: {}", com_port, e);
+                        }
+                    });
                 }
             }
         }
