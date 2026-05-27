@@ -6,6 +6,8 @@
   import Icon from "@iconify/svelte";
   import { currentContact } from "../stores/conversation";
 
+  let { onNavigate = () => {} } = $props();
+
   let modemInfoCardOpen = $state(false);
   let isSidebarOpen = $state(false);
 
@@ -59,6 +61,7 @@
       onSimCardClick={handleSimCardClick}
       onLogoutClick={logout}
       onConversationSelect={closeSidebar}
+      onSimDashboardClick={onNavigate}
     />
   </div>
   
@@ -76,6 +79,13 @@
         <p class="text-sm text-gray-700 dark:text-gray-200 truncate max-w-[140px]">
           {$currentContact ? $currentContact.name : 'Messages'}
         </p>
+        <button
+          class="inline-flex items-center justify-center w-10 h-10 rounded-xl border border-gray-200 dark:border-zinc-700 text-slate-800 dark:text-gray-100 bg-white shadow-sm dark:bg-zinc-800 active:scale-[0.98] transition"
+          onclick={onNavigate}
+          aria-label="SIM Dashboard"
+        >
+          <Icon icon="carbon:grid" class="w-5 h-5" />
+        </button>
         <button
           class="inline-flex items-center justify-center w-10 h-10 rounded-xl border border-gray-200 dark:border-zinc-700 text-slate-800 dark:text-gray-100 bg-white shadow-sm dark:bg-zinc-800 active:scale-[0.98] transition"
           onclick={handleSimCardClick}

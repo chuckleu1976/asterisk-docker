@@ -7,6 +7,9 @@
   import Dashboard from "./pages/Dashboard.svelte";
   import SimDashboard from "./pages/SimDashboard.svelte";
 
+  // 'sim' | 'messages'
+  let currentPage = $state('sim');
+
   // 监听认证状态变化
   $effect(() => {
     if ($isAuthenticated) {
@@ -22,12 +25,21 @@
     <div class="h-dvh w-screen overflow-hidden">
       {#if $isAuthenticated}
         <!-- 主应用界面 -->
-        <div 
-          in:fly={{ x: 50, duration: 500, easing: quartOut }}
-          out:fly={{ x: -50, duration: 300, easing: quartOut }}
-        >
-          <SimDashboard />
-        </div>
+        {#if currentPage === 'sim'}
+          <div
+            in:fly={{ x: -50, duration: 400, easing: quartOut }}
+            out:fly={{ x: 50, duration: 300, easing: quartOut }}
+          >
+            <SimDashboard onNavigate={() => (currentPage = 'messages')} />
+          </div>
+        {:else}
+          <div
+            in:fly={{ x: 50, duration: 400, easing: quartOut }}
+            out:fly={{ x: -50, duration: 300, easing: quartOut }}
+          >
+            <Dashboard onNavigate={() => (currentPage = 'sim')} />
+          </div>
+        {/if}
       {:else}
         <!-- 登录界面 -->
         <div 
