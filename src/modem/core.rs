@@ -662,6 +662,9 @@ impl Modem {
     }
 
     pub async fn get_phone_number(&self) -> io::Result<Option<String>> {
+        // Set phonebook memory preference to SIM card before querying MSISDN.
+        // Ignore errors — non-critical and modem may already be set correctly.
+        let _ = self.send_command_with_ok("AT$QCPBMPREF=1\r\n").await;
         self.get_modem_info("AT+CNUM\r\n", Self::parse_phone_number)
             .await
     }
@@ -673,7 +676,8 @@ impl Modem {
             .and_then(|line| {
                 let parts: Vec<&str> = line.split(',').collect();
                 if parts.len() >= 2 {
-                    parts[1].trim().trim_matches('"').to_string().into()
+                    let number = parts[1].trim().trim_matches('"').to_string();
+                    if number.is_empty() { None } else { Some(number) }
                 } else {
                     None
                 }

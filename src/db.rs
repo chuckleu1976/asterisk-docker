@@ -572,15 +572,19 @@ impl SimCard {
         let existing = Self::find_by_conditions(Some(id), None, None, None).await?;
 
         if let Some(mut sim_card) = existing.into_iter().next() {
-            // For existing SIM cards, only update IMSI if changed
-            // Never update phone_number - it should only be modified by users
-            if sim_card.imsi != imsi {
-                sim_card.imsi = imsi;
+            // Update IMSI if changed, and phone_number if it was NULL (first time modem reports it).
+            // Never overwrite a non-NULL phone_number — user may have set it manually.
+            let imsi_changed = sim_card.imsi != imsi;
+            let phone_fillable = sim_card.phone_number.is_none() && phone_number.is_some();
+            if imsi_changed || phone_fillable {
+                if imsi_changed { sim_card.imsi = imsi.clone(); }
+                if phone_fillable { sim_card.phone_number = phone_number.clone(); }
                 let pool = get_pool()?;
                 sqlx::query(
-                    "UPDATE sim_cards SET imsi = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    "UPDATE sim_cards SET imsi = ?, phone_number = COALESCE(phone_number, ?), updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                 )
                 .bind(&sim_card.imsi)
+                .bind(&phone_number)
                 .bind(id)
                 .execute(pool)
                 .await?;
