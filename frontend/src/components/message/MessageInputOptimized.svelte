@@ -15,6 +15,23 @@
   let showConfirmDialog = $state(false);
   let messageInputRef = $state(null);
 
+  // UCS2 encoding limits: 70 chars for single SMS, 67 per segment for multipart
+  const UCS2_SINGLE_MAX = 70;
+  const UCS2_MULTI_SEG = 67;
+
+  let charCount = $derived(sendMessageContent.length);
+  let segments = $derived(
+    charCount === 0 ? 0
+    : charCount <= UCS2_SINGLE_MAX ? 1
+    : Math.ceil(charCount / UCS2_MULTI_SEG)
+  );
+  let overLimit = $derived(charCount > UCS2_SINGLE_MAX);
+  let charCountColor = $derived(
+    overLimit ? 'text-red-500 dark:text-red-400'
+    : charCount > 59 ? 'text-amber-500 dark:text-amber-400'
+    : 'text-gray-400 dark:text-gray-500'
+  );
+
   export function focusInput() {
     if (!messageInputRef || messageInputRef.disabled) return;
 
@@ -87,8 +104,13 @@
             placeholder={showNewMessage && !concatInputText.trim()
               ? "Enter contact first"
               : "Type your message..."}
-            class="w-full h-12 pl-11 pr-4 bg-white dark:bg-zinc-800 border border-gray-300 dark:border-zinc-600 rounded-lg text-sm text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 transition-all duration-200 outline-none focus:border-gray-500 dark:focus:border-zinc-500 hover:border-gray-400 dark:hover:border-zinc-600"
+            class="w-full h-12 pl-11 pr-16 bg-white dark:bg-zinc-800 border {overLimit ? 'border-red-400 dark:border-red-500' : 'border-gray-300 dark:border-zinc-600'} rounded-lg text-sm text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 transition-all duration-200 outline-none focus:border-gray-500 dark:focus:border-zinc-500 hover:border-gray-400 dark:hover:border-zinc-600"
           />
+          {#if charCount > 0}
+            <span class="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-mono {charCountColor} pointer-events-none select-none leading-none">
+              {charCount}/{UCS2_SINGLE_MAX}
+            </span>
+          {/if}
         </div>
       </div>
     </div>
@@ -100,8 +122,8 @@
       
       <button
         onclick={handleSendClick}
-        disabled={(showNewMessage && !concatInputText.trim()) || !sendMessageContent.trim()}
-        class="flex items-center justify-center gap-2 px-4 sm:px-5 h-12 rounded-lg font-medium text-sm transition-all duration-200 w-auto sm:w-auto min-w-[110px] {(showNewMessage && !concatInputText.trim()) || !sendMessageContent.trim()
+        disabled={(showNewMessage && !concatInputText.trim()) || !sendMessageContent.trim() || overLimit}
+        class="flex items-center justify-center gap-2 px-4 sm:px-5 h-12 rounded-lg font-medium text-sm transition-all duration-200 w-auto sm:w-auto min-w-[110px] {(showNewMessage && !concatInputText.trim()) || !sendMessageContent.trim() || overLimit
           ? 'bg-gray-200 dark:bg-zinc-700 text-gray-600 dark:text-gray-500 cursor-not-allowed opacity-50'
           : 'bg-gray-800 dark:bg-gray-100 text-gray-100 dark:text-gray-900 hover:bg-gray-700 dark:hover:bg-gray-200 active:scale-[0.98] cursor-pointer'}"
       >
@@ -168,8 +190,8 @@
             <p class="text-xs text-gray-500 dark:text-gray-400 uppercase tracking-widest">
               Message Content
             </p>
-            <span class="text-xs font-mono text-gray-400 dark:text-gray-500">
-              {sendMessageContent.length} chars
+            <span class="text-xs font-mono {charCountColor}">
+              {charCount}/{UCS2_SINGLE_MAX}{segments > 1 ? ` · ${segments} SMS` : ''}
             </span>
           </div>
           <div class="bg-white dark:bg-zinc-900 rounded-lg p-4 border border-gray-200 dark:border-zinc-700 max-h-32 overflow-y-auto">
@@ -181,6 +203,16 @@
       {/if}
 
       <!-- 费用提醒 -->
+      {#if segments > 1}
+        <div class="mb-4 p-3 bg-amber-50 dark:bg-amber-900/20 rounded-lg border border-amber-200 dark:border-amber-700">
+          <div class="flex items-center gap-2">
+            <Icon icon="carbon:warning" class="w-4 h-4 text-amber-500 dark:text-amber-400 flex-shrink-0" />
+            <p class="text-xs text-amber-700 dark:text-amber-300 leading-relaxed">
+              Message exceeds 70 characters — will be split into {segments} SMS segments. Carrier charges may apply per segment.
+            </p>
+          </div>
+        </div>
+      {/if}
       <div class="mb-8 p-3 bg-gray-100 dark:bg-zinc-800 rounded-lg border border-gray-200 dark:border-zinc-700">
         <div class="flex items-center gap-2">
           <Icon icon="carbon:information" class="w-4 h-4 text-gray-500 dark:text-gray-400 flex-shrink-0" />
