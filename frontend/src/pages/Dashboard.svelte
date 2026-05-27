@@ -6,7 +6,7 @@
   import Icon from "@iconify/svelte";
   import { currentContact } from "../stores/conversation";
 
-  let { onNavigate = () => {} } = $props();
+  let { onNavigate = () => {}, initialSimId = null } = $props();
 
   let modemInfoCardOpen = $state(false);
   let isSidebarOpen = $state(false);
@@ -96,7 +96,7 @@
       </div>
     </div>
     <div class="flex-1 bg-white dark:bg-zinc-900">
-      <MessageList />
+      <MessageList {initialSimId} />
     </div>
   </div>
 </div>

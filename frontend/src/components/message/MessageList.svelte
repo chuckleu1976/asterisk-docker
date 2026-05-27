@@ -17,6 +17,8 @@
   import MessageInput from "./MessageInputOptimized.svelte";
   import LoadingSpinner from "../ui/LoadingSpinner.svelte";
 
+  let { initialSimId = null } = $props();
+
   let messages = $state([]);
   let showNewMessage = $state(false);
   let concatInputText = $state("");
@@ -267,6 +269,7 @@
     {concatInputText}
     onSend={handleSendMessage}
     bind:this={messageInputComponent}
+    {initialSimId}
   />
 
   

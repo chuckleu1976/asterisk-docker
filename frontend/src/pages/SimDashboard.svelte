@@ -129,7 +129,7 @@
 
     <div class="flex items-center gap-2">
       <button
-        onclick={onNavigate}
+        onclick={() => onNavigate(selected.size === 1 ? [...selected][0] : null)}
         class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
                border border-gray-200 dark:border-zinc-700
                text-gray-600 dark:text-gray-300

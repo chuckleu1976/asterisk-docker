@@ -8,6 +8,7 @@
     showNewMessage = false,
     concatInputText = "",
     onSend = () => {},
+    initialSimId = null,
   } = $props();
 
   let isComposing = $state(false);
@@ -117,7 +118,7 @@
 
     <div class="flex flex-row items-stretch sm:items-center gap-3 w-full sm:w-auto">
       <div class="w-full flex-1 sm:flex-none sm:w-auto sm:min-w-[200px] sm:max-w-[320px]">
-        <SimSelector bind:selectedSim />
+        <SimSelector bind:selectedSim {initialSimId} />
       </div>
       
       <button

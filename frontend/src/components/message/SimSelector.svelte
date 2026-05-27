@@ -4,7 +4,7 @@
   import { fly } from "svelte/transition";
   import { quintOut } from "svelte/easing";
 
-  let { selectedSim = $bindable(null) } = $props();
+  let { selectedSim = $bindable(null), initialSimId = null } = $props();
 
   let showSimSelector = $state(false);
   let searchText = $state("");
@@ -22,11 +22,17 @@
   );
 
   $effect(() => {
+    if ($simCards.length === 0) return;
+    // Explicit navigation from SimDashboard takes highest priority
+    if (initialSimId) {
+      const found = $simCards.find((sim) => sim.id === initialSimId);
+      if (found) { selectedSim = found; return; }
+    }
     const storedSimId = localStorage.getItem("selectedSimId");
-    if (storedSimId && $simCards.length > 0) {
+    if (storedSimId) {
       const foundSim = $simCards.find((sim) => sim.id === storedSimId);
       selectedSim = foundSim || $simCards[0];
-    } else if (!selectedSim && $simCards.length > 0) {
+    } else if (!selectedSim) {
       selectedSim = $simCards[0];
     }
   });
