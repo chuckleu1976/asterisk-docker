@@ -1,4 +1,4 @@
-use chrono::{Local, Timelike};
+﻿use chrono::{Local, Timelike};
 use futures::stream::{FuturesUnordered, StreamExt};
 use log::{debug, error, info};
 use std::io;
@@ -14,7 +14,7 @@ use crate::db::{Contact, ModemSMS, SimCard, Sms};
 use crate::decode::parse_pdu_sms;
 use crate::webhook;
 
-use super::pdu::{build_pdu, string_to_ucs2_pub};
+use super::pdu::{build_pdus, string_to_ucs2_pub};
 use super::types::*;
 
 const TERMINATORS: &[&[u8]] = &[
@@ -502,12 +502,14 @@ impl Modem {
     }
 
     async fn send_pdu_message(&self, phone: &str, message: &str) -> anyhow::Result<()> {
-        let (pdu_data, tpdu_length) = build_pdu(phone, message)?;
+        let pdus = build_pdus(phone, message)?;
 
-        self.send_sms_content(&format!("AT+CMGS={}\r", tpdu_length), &pdu_data, |pdu| {
-            Ok(pdu.to_string())
-        })
-        .await?;
+        for (pdu_data, tpdu_length) in pdus {
+            self.send_sms_content(&format!("AT+CMGS={}\r", tpdu_length), &pdu_data, |pdu| {
+                Ok(pdu.to_string())
+            })
+            .await?;
+        }
 
         Ok(())
     }
@@ -663,7 +665,7 @@ impl Modem {
 
     pub async fn get_phone_number(&self) -> io::Result<Option<String>> {
         // Set phonebook memory preference to SIM card before querying MSISDN.
-        // Ignore errors — non-critical and modem may already be set correctly.
+        // Ignore errors 鈥?non-critical and modem may already be set correctly.
         let _ = self.send_command_with_ok("AT$QCPBMPREF=1\r\n").await;
         self.get_modem_info("AT+CNUM\r\n", Self::parse_phone_number)
             .await
