@@ -116,11 +116,32 @@ pub fn parse_pdu_sms(cmgl_entries: &str, sim_id: &str) -> Vec<ModemSMS> {
         let smsc_len = pdu[0] as usize;
         let mut pos = 1 + smsc_len;
 
-        // Parse basic headers
+        if pos >= pdu.len() {
+            log::warn!("跳过短信 #{}, PDU太短 (SMSC之后无数据)", index);
+            continue;
+        }
+
+        // Check Message Type Indicator (bits 0-1 of PDU type byte):
+        //   0x00 = SMS-DELIVER (incoming), 0x01 = SMS-SUBMIT (sent copy stored by modem)
+        // Only DELIVER PDUs are incoming SMS — skip everything else to avoid
+        // misaligned reads: SUBMIT has an extra Message-Reference byte that
+        // would throw off all subsequent field positions and cause out-of-bounds panics.
         let pdu_type = pdu[pos];
+        let mti = pdu_type & 0x03;
+        if mti != 0x00 {
+            log::debug!("跳过非DELIVER PDU #{} (MTI={})", index, mti);
+            continue;
+        }
         pos += 1; // Skip PDU type
+
         let sender = parse_sender(&pdu, &mut pos);
         pos += 1; // Skip protocol identifier
+
+        if pos + 8 > pdu.len() {
+            log::warn!("跳过短信 #{}, PDU太短 (无DCS/时间戳字段)", index);
+            continue;
+        }
+
         let dcs = pdu[pos];
         pos += 1;
         let timestamp = parse_timestamp(&pdu[pos..pos + 7]);
