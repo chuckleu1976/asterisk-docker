@@ -262,7 +262,7 @@ impl ModemManager {
     }
 
     /// Re-check all modems in parallel for SIM insertion/removal.
-    /// Demotes real-ICCID modems where +CPIN? is no longer READY.
+    /// Demotes real-ICCID modems where +CCID returns a different or missing ICCID.
     /// Promotes fallback modems where +CCID now returns an ICCID.
     pub async fn recheck_fallback_modems(
         &self,
@@ -270,7 +270,7 @@ impl ModemManager {
         sse_manager: Arc<SseManager>,
         webhook_manager: Option<webhook::WebhookManager>,
     ) {
-        // ── Demotion: parallel AT+CPIN? on all real-ICCID modems ──────────────
+        // ── Demotion: parallel AT+CCID on all real-ICCID modems ──────────────
         let active_entries: Vec<(String, Arc<Modem>)> = {
             let modems = self.modems.read().await;
             modems
@@ -283,23 +283,17 @@ impl ModemManager {
         let mut demotion_futs = FuturesUnordered::new();
         for (iccid, modem) in active_entries {
             demotion_futs.push(async move {
-                let status = modem.get_sim_status().await;
-                let is_ready = matches!(&status, Ok(Some(s)) if s == "READY");
-                if !is_ready {
-                    return Some((iccid, modem.fallback_key.clone(), modem.com_port.clone()));
-                }
-                // Detect direct SIM swap: new SIM is already READY so CPIN? passes,
-                // but the ICCID no longer matches the map key.
-                if let Ok(Some(current_iccid)) = modem.get_sim_iccid().await {
-                    if current_iccid != iccid {
+                match modem.get_sim_iccid().await {
+                    Ok(Some(current_iccid)) if current_iccid == iccid => None,
+                    Ok(Some(current_iccid)) => {
                         info!(
                             "SIM swap detected on {} (was {}, now {}). Forcing re-init.",
                             modem.com_port, iccid, current_iccid
                         );
-                        return Some((iccid, modem.fallback_key.clone(), modem.com_port.clone()));
+                        Some((iccid, modem.fallback_key.clone(), modem.com_port.clone()))
                     }
+                    _ => Some((iccid, modem.fallback_key.clone(), modem.com_port.clone())),
                 }
-                None
             });
         }
         let mut demotions = Vec::new();
