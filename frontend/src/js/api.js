@@ -109,6 +109,26 @@ class ApiClient {
         const payload = { phone_number: phoneNumber };
         return FetchApi.put(`/api/sim-cards/${simId}/phone`, payload, {}, 'application/json');
     }
+
+    // ── Voice call methods ──────────────────────────────────────────────────
+
+    async makeCall(simId, phone) {
+        return FetchApi.post('/api/calls/make', { sim_id: simId, phone });
+    }
+
+    async answerCall(simId) {
+        return FetchApi.post('/api/calls/answer', { sim_id: simId });
+    }
+
+    async hangupCall(simId) {
+        return FetchApi.post('/api/calls/hangup', { sim_id: simId });
+    }
+
+    async getCallLog(simId = null, limit = 50, offset = 0) {
+        const params = { limit, offset };
+        if (simId) params.sim_id = simId;
+        return FetchApi.get('/api/calls', params);
+    }
 }
 
 // Export as a singleton

@@ -104,6 +104,113 @@ pub struct SimSmsStat {
     pub phone_number: Option<String>,
 }
 
+#[derive(Debug, FromRow, Deserialize, Serialize, Clone)]
+pub struct Call {
+    pub id: String,
+    pub sim_id: String,
+    pub phone: Option<String>,
+    pub direction: String, // "inbound" | "outbound"
+    pub status: String,    // "ringing" | "active" | "ended" | "missed"
+    pub started_at: NaiveDateTime,
+    pub ended_at: Option<NaiveDateTime>,
+}
+
+impl Call {
+    pub async fn insert(sim_id: &str, phone: Option<&str>, direction: &str) -> Result<String> {
+        let pool = get_pool()?;
+        let id = Uuid::new_v4().to_string();
+        sqlx::query(
+            r#"INSERT INTO calls (id, sim_id, phone, direction, status) VALUES (?, ?, ?, ?, 'ringing')"#,
+        )
+        .bind(&id)
+        .bind(sim_id)
+        .bind(phone)
+        .bind(direction)
+        .execute(pool)
+        .await?;
+        Ok(id)
+    }
+
+    pub async fn update_status(id: &str, status: &str) -> Result<()> {
+        let pool = get_pool()?;
+        // Use CURRENT_TIMESTAMP (UTC) to match started_at which is also stored in UTC
+        if status == "ended" || status == "missed" {
+            sqlx::query(
+                r#"UPDATE calls SET status = ?, ended_at = CURRENT_TIMESTAMP WHERE id = ?"#,
+            )
+            .bind(status)
+            .bind(id)
+            .execute(pool)
+            .await?;
+        } else {
+            sqlx::query(
+                r#"UPDATE calls SET status = ? WHERE id = ?"#,
+            )
+            .bind(status)
+            .bind(id)
+            .execute(pool)
+            .await?;
+        }
+        Ok(())
+    }
+
+    /// Update the phone number on an existing call record (e.g. when +CLIP: arrives after RING).
+    pub async fn update_phone(id: &str, phone: &str) -> Result<()> {
+        let pool = get_pool()?;
+        sqlx::query(r#"UPDATE calls SET phone = ? WHERE id = ?"#)
+            .bind(phone)
+            .bind(id)
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn query_by_sim(sim_id: &str, limit: i64) -> Result<Vec<Self>> {
+        let pool = get_pool()?;
+        let calls = sqlx::query_as(
+            r#"SELECT id, sim_id, phone, direction, status, started_at, ended_at
+               FROM calls WHERE sim_id = ? ORDER BY started_at DESC LIMIT ?"#,
+        )
+        .bind(sim_id)
+        .bind(limit)
+        .fetch_all(pool)
+        .await?;
+        Ok(calls)
+    }
+
+    pub async fn query_all(limit: i64, offset: i64) -> Result<(Vec<Self>, i64)> {
+        let pool = get_pool()?;
+        let calls = sqlx::query_as(
+            r#"SELECT id, sim_id, phone, direction, status, started_at, ended_at
+               FROM calls ORDER BY started_at DESC LIMIT ? OFFSET ?"#,
+        )
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(pool)
+        .await?;
+        let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM calls")
+            .fetch_one(pool)
+            .await?;
+        Ok((calls, total))
+    }
+
+    /// Find the most recent ringing/active inbound call for a SIM.
+    #[allow(dead_code)]
+    pub async fn find_active_inbound(sim_id: &str) -> Result<Option<Self>> {
+        let pool = get_pool()?;
+        let call = sqlx::query_as(
+            r#"SELECT id, sim_id, phone, direction, status, started_at, ended_at
+               FROM calls WHERE sim_id = ? AND direction = 'inbound'
+               AND status IN ('ringing', 'active')
+               ORDER BY started_at DESC LIMIT 1"#,
+        )
+        .bind(sim_id)
+        .fetch_optional(pool)
+        .await?;
+        Ok(call)
+    }
+}
+
 impl Sms {
     pub async fn count() -> Result<i64> {
         let pool = get_pool()?;

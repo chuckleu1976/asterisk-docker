@@ -1,11 +1,10 @@
 ﻿use chrono::{Local, Timelike};
-use futures::stream::{FuturesUnordered, StreamExt};
 use log::{debug, error, info};
 use std::io;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::{mpsc, Mutex, RwLock, Semaphore};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
+use tokio::sync::{mpsc, Mutex, RwLock};
 use tokio_serial::{SerialPortBuilderExt, SerialStream};
 
 use crate::api::SseManager;
@@ -27,7 +26,14 @@ const TERMINATORS: &[&[u8]] = &[
 
 const MAX_RETRIES: u32 = 3;
 const RETRY_DELAY: Duration = Duration::from_millis(500);
-const MAX_CONCURRENT_COMMANDS: usize = 5;
+const MAX_LINE_BUF: usize = 64 * 1024;
+
+/// Shared routing state between the background reader task and the command processor.
+/// When `response_tx` is `Some`, bytes from the serial port are buffered for the command.
+/// When `None`, complete lines are dispatched as URCs via `urc_tx`.
+struct ReaderState {
+    response_tx: Option<tokio::sync::oneshot::Sender<io::Result<String>>>,
+}
 
 pub struct Modem {
     pub name: String,
@@ -38,36 +44,55 @@ pub struct Modem {
     command_tx: mpsc::UnboundedSender<ATCommand>,
     pub sim_id: RwLock<Option<String>>,
     _connection_state: Arc<RwLock<ConnectionState>>,
-    _command_semaphore: Arc<Semaphore>,
-    _serial_mutex: Arc<Mutex<Option<SerialStream>>>,
+    /// Write half of the serial stream. `None` while disconnected.
+    write_half: Arc<Mutex<Option<WriteHalf<SerialStream>>>>,
+    /// Shared routing state for the background reader task.
+    reader_state: Arc<Mutex<ReaderState>>,
+    /// URC sender (background reader holds a clone; kept here for test injection).
+    _urc_tx: mpsc::UnboundedSender<String>,
+    /// URC receiver — subscribed to by the ModemManager URC handler task.
+    pub urc_rx: Arc<Mutex<mpsc::UnboundedReceiver<String>>>,
+    /// Call ID of the active outbound call, set by manager after ATD succeeds.
+    pub outbound_call_id: Arc<tokio::sync::Mutex<Option<String>>>,
 }
 
 impl Modem {
     pub async fn new(com_port: &str, baud_rate: u32, name: &str, index: usize) -> io::Result<Self> {
         let serial_stream = Self::create_serial_connection(com_port, baud_rate).await?;
+        let (read_half, write_half_stream) = tokio::io::split(serial_stream);
 
         let (command_tx, command_rx) = mpsc::unbounded_channel::<ATCommand>();
-        let serial_mutex = Arc::new(Mutex::new(Some(serial_stream)));
+        let (urc_tx, urc_rx) = mpsc::unbounded_channel::<String>();
+
+        let write_half = Arc::new(Mutex::new(Some(write_half_stream)));
         let connection_state = Arc::new(RwLock::new(ConnectionState::Connected));
-        let command_semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_COMMANDS));
+        let reader_state = Arc::new(Mutex::new(ReaderState { response_tx: None }));
 
-        let name_clone = name.to_string();
-        let com_port_clone = com_port.to_string();
-        let serial_mutex_clone = serial_mutex.clone();
-        let connection_state_clone = connection_state.clone();
-        let semaphore_clone = command_semaphore.clone();
+        // Spawn background reader task — owns ReadHalf, routes bytes to commands or URC channel
+        tokio::spawn({
+            let reader_state = reader_state.clone();
+            let urc_tx = urc_tx.clone();
+            let write_half = write_half.clone();
+            let connection_state = connection_state.clone();
+            let name_c = name.to_string();
+            let com_port_c = com_port.to_string();
+            async move {
+                Self::reader_task_main(
+                    read_half, reader_state, urc_tx, write_half,
+                    name_c, com_port_c, baud_rate, connection_state,
+                )
+                .await;
+            }
+        });
 
-        tokio::spawn(async move {
-            Self::command_processor(
-                command_rx,
-                serial_mutex_clone,
-                &name_clone,
-                &com_port_clone,
-                baud_rate,
-                connection_state_clone,
-                semaphore_clone,
-            )
-            .await;
+        // Spawn sequential command processor
+        tokio::spawn({
+            let write_half = write_half.clone();
+            let reader_state = reader_state.clone();
+            let name_c = name.to_string();
+            async move {
+                Self::command_processor(command_rx, write_half, reader_state, name_c).await;
+            }
         });
 
         info!("device:{}, com:{} connected successfully", name, com_port);
@@ -80,8 +105,11 @@ impl Modem {
             command_tx,
             sim_id: RwLock::new(None),
             _connection_state: connection_state,
-            _command_semaphore: command_semaphore,
-            _serial_mutex: serial_mutex,
+            write_half,
+            reader_state,
+            _urc_tx: urc_tx,
+            urc_rx: Arc::new(Mutex::new(urc_rx)),
+            outbound_call_id: Arc::new(tokio::sync::Mutex::new(None)),
         })
     }
 
@@ -95,204 +123,237 @@ impl Modem {
             .open_native_async()
     }
 
-    async fn command_processor(
-        mut command_rx: mpsc::UnboundedReceiver<ATCommand>,
-        serial_mutex: Arc<Mutex<Option<SerialStream>>>,
-        name: &str,
-        com_port: &str,
+    // ─── Background reader task ────────────────────────────────────────────────
+
+    /// Long-lived task that owns the read half of the serial stream.
+    /// Routes bytes: when `response_tx` is set → command-response buffer;
+    ///               otherwise → URC channel, line by line.
+    async fn reader_task_main(
+        mut read_half: ReadHalf<SerialStream>,
+        reader_state: Arc<Mutex<ReaderState>>,
+        urc_tx: mpsc::UnboundedSender<String>,
+        write_half: Arc<Mutex<Option<WriteHalf<SerialStream>>>>,
+        name: String,
+        com_port: String,
         baud_rate: u32,
         connection_state: Arc<RwLock<ConnectionState>>,
-        semaphore: Arc<Semaphore>,
     ) {
-        let mut futures = FuturesUnordered::new();
-
+        let mut raw_buf = [0u8; 256];
+        let mut line_buf: Vec<u8> = Vec::with_capacity(4096);
         loop {
-            tokio::select! {
-                Some(at_command) = command_rx.recv() => {
-                    let serial_mutex = serial_mutex.clone();
-                    let name = name.to_string();
-                    let com_port = com_port.to_string();
-                    let connection_state = connection_state.clone();
-                    let semaphore = semaphore.clone();
-
-                    futures.push(tokio::spawn(async move {
-                        let _permit = semaphore.acquire().await;
-                        Self::execute_command_with_retry(
-                            serial_mutex,
-                            at_command,
-                            &name,
-                            &com_port,
-                            baud_rate,
-                            connection_state,
-                        ).await
-                    }));
-                }
-                Some(result) = futures.next() => {
-                    if let Err(e) = result {
-                        error!("Command execution task failed: {}", e);
-                    }
-                }
-                else => break,
-            }
-        }
-    }
-
-    async fn execute_command_with_retry(
-        serial_mutex: Arc<Mutex<Option<SerialStream>>>,
-        mut at_command: ATCommand,
-        name: &str,
-        com_port: &str,
-        baud_rate: u32,
-        connection_state: Arc<RwLock<ConnectionState>>,
-    ) {
-        while at_command.retries < MAX_RETRIES {
-            {
-                let state = connection_state.read().await;
-                if matches!(*state, ConnectionState::Disconnected) {
-                    drop(state);
-                    Self::attempt_reconnection(
-                        &serial_mutex,
-                        com_port,
-                        baud_rate,
-                        &connection_state,
-                        name,
+            match read_half.read(&mut raw_buf).await {
+                Ok(0) => {
+                    error!("Reader [{}]: EOF on serial port", name);
+                    let ok = Self::reader_do_reconnect(
+                        &mut read_half, &write_half, &reader_state,
+                        &com_port, baud_rate, &connection_state, &name,
                     )
                     .await;
+                    line_buf.clear();
+                    if !ok { break; }
                 }
-            }
-
-            let result = {
-                let mut serial_guard = serial_mutex.lock().await;
-                if let Some(serial) = serial_guard.as_mut() {
-                    Self::execute_single_command(serial, &at_command.command, name).await
-                } else {
-                    Err(io::Error::new(
-                        io::ErrorKind::NotConnected,
-                        "Serial port not connected",
-                    ))
-                }
-            };
-
-            match result {
-                Ok(response) => {
-                    let _ = at_command.response_tx.send(Ok(response));
-                    return;
-                }
-                Err(e) if e.kind() == io::ErrorKind::NotConnected => {
-                    at_command.retries += 1;
-                    if at_command.retries < MAX_RETRIES {
-                        tokio::time::sleep(RETRY_DELAY).await;
+                Ok(n) => {
+                    line_buf.extend_from_slice(&raw_buf[..n]);
+                    if line_buf.len() > MAX_LINE_BUF {
+                        error!("Reader [{}]: buffer overflow, clearing", name);
+                        let mut state = reader_state.lock().await;
+                        if let Some(tx) = state.response_tx.take() {
+                            let _ = tx.send(Err(io::Error::other("Buffer overflow")));
+                        }
+                        line_buf.clear();
                         continue;
                     }
-                    let _ = at_command.response_tx.send(Err(e));
-                    return;
+                    Self::drain_reader_buf(&mut line_buf, &reader_state, &urc_tx, &name).await;
                 }
                 Err(e) => {
-                    let _ = at_command.response_tx.send(Err(e));
-                    return;
+                    error!("Reader [{}]: read error: {}", name, e);
+                    let ok = Self::reader_do_reconnect(
+                        &mut read_half, &write_half, &reader_state,
+                        &com_port, baud_rate, &connection_state, &name,
+                    )
+                    .await;
+                    line_buf.clear();
+                    if !ok { break; }
                 }
             }
         }
-
-        let _ = at_command
-            .response_tx
-            .send(Err(io::Error::other("Maximum retries exceeded")));
+        error!("Reader task [{}] exiting", name);
     }
 
-    async fn attempt_reconnection(
-        serial_mutex: &Arc<Mutex<Option<SerialStream>>>,
+    /// Reconnect: notify any pending command, reset state, attempt up to 3 reconnects.
+    /// Returns `true` on success, `false` after all attempts fail.
+    async fn reader_do_reconnect(
+        read_half: &mut ReadHalf<SerialStream>,
+        write_half: &Arc<Mutex<Option<WriteHalf<SerialStream>>>>,
+        reader_state: &Arc<Mutex<ReaderState>>,
         com_port: &str,
         baud_rate: u32,
         connection_state: &Arc<RwLock<ConnectionState>>,
         name: &str,
-    ) {
+    ) -> bool {
         {
-            let mut state = connection_state.write().await;
-            if matches!(*state, ConnectionState::Reconnecting) {
-                return;
+            let mut state = reader_state.lock().await;
+            if let Some(tx) = state.response_tx.take() {
+                let _ = tx.send(Err(io::Error::new(
+                    io::ErrorKind::NotConnected,
+                    "Serial port disconnected",
+                )));
             }
-            *state = ConnectionState::Reconnecting;
         }
+        *connection_state.write().await = ConnectionState::Disconnected;
+        *write_half.lock().await = None;
 
-        info!("Attempting to reconnect to {} on {}", name, com_port);
-
-        for attempt in 1..=3 {
+        info!("Attempting to reconnect {} on {}", name, com_port);
+        for attempt in 1..=3u32 {
+            tokio::time::sleep(Duration::from_secs(2)).await;
             match Self::create_serial_connection(com_port, baud_rate).await {
                 Ok(new_stream) => {
-                    let mut serial_guard = serial_mutex.lock().await;
-                    *serial_guard = Some(new_stream);
-
-                    let mut state = connection_state.write().await;
-                    *state = ConnectionState::Connected;
-
-                    info!("Successfully reconnected to {} on {}", name, com_port);
-                    return;
+                    let (new_read, new_write) = tokio::io::split(new_stream);
+                    *write_half.lock().await = Some(new_write);
+                    *read_half = new_read;
+                    *connection_state.write().await = ConnectionState::Connected;
+                    info!("Reconnected {} on {}", name, com_port);
+                    return true;
                 }
                 Err(e) => {
-                    error!(
-                        "Reconnection attempt {} failed for {}: {}",
-                        attempt, name, e
-                    );
-                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    error!("Reconnect attempt {} failed for {}: {}", attempt, name, e);
                 }
             }
         }
-
-        let mut state = connection_state.write().await;
-        *state = ConnectionState::Disconnected;
-        error!("Failed to reconnect to {} after multiple attempts", name);
+        error!("Failed to reconnect {} after 3 attempts", name);
+        false
     }
 
-    async fn execute_single_command(
-        serial_stream: &mut SerialStream,
-        command: &str,
+    /// Drain `line_buf`, routing its content to command response or URC channel.
+    async fn drain_reader_buf(
+        line_buf: &mut Vec<u8>,
+        reader_state: &Arc<Mutex<ReaderState>>,
+        urc_tx: &mpsc::UnboundedSender<String>,
         name: &str,
-    ) -> io::Result<String> {
-        debug!("TX [{}]: {}", name, Self::format_log(command));
-        serial_stream.write_all(command.as_bytes()).await?;
-        serial_stream.flush().await?;
-
-        Self::read_response_buffered(serial_stream, name).await
-    }
-
-    async fn read_response_buffered(
-        serial_stream: &mut SerialStream,
-        name: &str,
-    ) -> io::Result<String> {
-        let mut buffer = Vec::with_capacity(4096);
-        let mut temp_buf = [0u8; 1024];
-        let timeout_duration = Duration::from_secs(8);
-
-        let result = tokio::time::timeout(timeout_duration, async {
-            loop {
-                match serial_stream.read(&mut temp_buf).await {
-                    Ok(0) => break,
-                    Ok(bytes_read) => {
-                        buffer.extend_from_slice(&temp_buf[..bytes_read]);
-
-                        if let Some((terminator, pos)) = Self::find_terminator(&buffer) {
-                            let end_pos = pos + terminator.len();
-                            let response = String::from_utf8_lossy(&buffer[..end_pos]).into_owned();
-                            debug!("RX [{}]: {}", name, Self::format_log(&response));
-                            return Ok(response);
+    ) {
+        loop {
+            let has_response_tx = reader_state.lock().await.response_tx.is_some();
+            if has_response_tx {
+                // Command-response mode: buffer until we see a terminator
+                if let Some((term, pos)) = Self::find_terminator(line_buf) {
+                    let end = pos + term.len();
+                    let response = String::from_utf8_lossy(&line_buf[..end]).into_owned();
+                    debug!("RX [{}]: {}", name, Self::format_log(&response));
+                    line_buf.drain(..end);
+                    let tx = reader_state.lock().await.response_tx.take();
+                    if let Some(tx) = tx {
+                        let _ = tx.send(Ok(response.clone()));
+                    }
+                    // Some modems (e.g. EC20F) embed call-state URCs like NO CARRIER
+                    // inside the command response (before OK). Re-forward them so the
+                    // URC handler can update the call record.
+                    Self::forward_embedded_call_urcs(&response, urc_tx, name);
+                    // Loop continues: remaining bytes may be URCs
+                } else {
+                    break; // Need more bytes
+                }
+            } else {
+                // URC mode: dispatch one complete \r\n-terminated line per iteration
+                if let Some(pos) = line_buf.windows(2).position(|w| w == b"\r\n") {
+                    let line_bytes = line_buf[..pos].to_vec();
+                    line_buf.drain(..pos + 2);
+                    if !line_bytes.is_empty() {
+                        let line = String::from_utf8_lossy(&line_bytes).into_owned();
+                        let trimmed = line.trim().to_string();
+                        if !trimmed.is_empty() {
+                            debug!("URC [{}]: {}", name, Self::format_log(&trimmed));
+                            let _ = urc_tx.send(trimmed);
                         }
                     }
-                    Err(e) => return Err(e),
+                    // Loop continues: more lines may be present
+                } else {
+                    break; // Need more bytes
                 }
             }
+        }
+    }
 
-            let response = String::from_utf8_lossy(&buffer).into_owned();
-            debug!("RX [{}]: {}", name, Self::format_log(&response));
-            Ok(response)
-        })
-        .await;
+    // ─── Command processor ─────────────────────────────────────────────────────
 
-        match result {
-            Ok(response) => response,
-            Err(_) => Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                format!("Command timeout for device {}", name),
-            )),
+    /// Sequential command processor: one ATCommand at a time, with retry on transient errors.
+    async fn command_processor(
+        mut command_rx: mpsc::UnboundedReceiver<ATCommand>,
+        write_half: Arc<Mutex<Option<WriteHalf<SerialStream>>>>,
+        reader_state: Arc<Mutex<ReaderState>>,
+        name: String,
+    ) {
+        while let Some(mut at_command) = command_rx.recv().await {
+            loop {
+                match Self::execute_command_impl(
+                    &write_half,
+                    &reader_state,
+                    &at_command.command,
+                    &name,
+                    Duration::from_secs(8),
+                )
+                .await
+                {
+                    Ok(response) => {
+                        let _ = at_command.response_tx.send(Ok(response));
+                        break;
+                    }
+                    Err(_e) if at_command.retries < MAX_RETRIES => {
+                        at_command.retries += 1;
+                        tokio::time::sleep(RETRY_DELAY).await;
+                    }
+                    Err(e) => {
+                        let _ = at_command.response_tx.send(Err(e));
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Send one AT command and await its response.
+    /// Holds the write lock for the entire command-response cycle to prevent interleaving.
+    async fn execute_command_impl(
+        write_half: &Arc<Mutex<Option<WriteHalf<SerialStream>>>>,
+        reader_state: &Arc<Mutex<ReaderState>>,
+        command: &str,
+        name: &str,
+        timeout_dur: Duration,
+    ) -> io::Result<String> {
+        let (tx, rx) = tokio::sync::oneshot::channel::<io::Result<String>>();
+        let mut write_guard = write_half.lock().await;
+        let write = write_guard.as_mut().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotConnected, "Serial port not connected")
+        })?;
+        reader_state.lock().await.response_tx = Some(tx);
+        debug!("TX [{}]: {}", name, Self::format_log(command));
+        write.write_all(command.as_bytes()).await?;
+        write.flush().await?;
+        match tokio::time::timeout(timeout_dur, rx).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => Err(io::Error::new(io::ErrorKind::BrokenPipe, "Reader channel closed")),
+            Err(_) => {
+                reader_state.lock().await.response_tx = None;
+                Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!("Command timeout for device {}", name),
+                ))
+            }
+        }
+        // write_guard drops here, releasing the write lock
+    }
+
+    /// Forward any call-state URC lines embedded inside a command response buffer.
+    /// EC20F modems can include e.g. `NO CARRIER` before `OK` in the ATH response.
+    fn forward_embedded_call_urcs(response: &str, urc_tx: &mpsc::UnboundedSender<String>, name: &str) {
+        for line in response.split("\r\n") {
+            let trimmed = line.trim();
+            if matches!(trimmed, "NO CARRIER" | "BUSY" | "RING" | "CONNECT")
+                || trimmed.starts_with("VOICE CALL: END")
+                || trimmed.starts_with("+CLIP:")
+            {
+                debug!("Re-forwarding embedded URC [{}]: {}", name, trimmed);
+                let _ = urc_tx.send(trimmed.to_string());
+            }
         }
     }
 
@@ -314,6 +375,7 @@ impl Modem {
             ("AT+CMEE=1\r\n", "Enable error messages"),
             ("AT+CMGF=0\r\n", "Set PDU mode"),
             ("AT+CSCS=\"UCS2\"\r\n", "Set character encoding"),
+            ("AT+CLIP=1\r\n", "Enable caller ID (CLIP)"),
         ];
 
         for (cmd, description) in init_commands {
@@ -437,31 +499,48 @@ impl Modem {
         }
     }
 
-    /// Send a PDU SMS atomically: holds the serial mutex across both the AT+CMGS prompt step
+    /// Send a PDU SMS atomically: holds the write mutex across both the AT+CMGS prompt step
     /// and the PDU data step, preventing other AT commands from slipping in between and
     /// corrupting the modem's PDU input state.
     async fn send_pdu_atomic(&self, tpdu_len: usize, pdu_hex: &str) -> anyhow::Result<()> {
         let setup_cmd = format!("AT+CMGS={}\r", tpdu_len);
         let full_pdu = format!("{}\x1A", pdu_hex);
 
-        let mut serial_guard = self._serial_mutex.lock().await;
-        let serial = serial_guard
+        // Hold write lock for the entire two-step PDU sequence
+        let mut write_guard = self.write_half.lock().await;
+        let write = write_guard
             .as_mut()
             .ok_or_else(|| anyhow::anyhow!("Serial port not connected"))?;
 
         // Step 1: Send AT+CMGS=<n>\r and wait for the '>' prompt.
-        let prompt = Self::execute_single_command(serial, &setup_cmd, &self.name).await?;
+        let (tx1, rx1) = tokio::sync::oneshot::channel::<io::Result<String>>();
+        self.reader_state.lock().await.response_tx = Some(tx1);
+        debug!("TX [{}]: {}", self.name, Self::format_log(&setup_cmd));
+        write.write_all(setup_cmd.as_bytes()).await?;
+        write.flush().await?;
+        let prompt = match tokio::time::timeout(Duration::from_secs(8), rx1).await {
+            Ok(Ok(Ok(r))) => r,
+            Ok(Ok(Err(e))) => return Err(e.into()),
+            Ok(Err(_)) => return Err(anyhow::anyhow!("Reader channel closed")),
+            Err(_) => return Err(anyhow::anyhow!("Timeout waiting for SMS prompt")),
+        };
         if !prompt.contains("> ") {
             return Err(anyhow::anyhow!("SMS prompt not received: {}", Self::format_log(&prompt)));
         }
 
         // Step 2: Send PDU + Ctrl-Z and wait for +CMGS:/OK.
         // Use a 30-second timeout — network transmission can be slow.
+        let (tx2, rx2) = tokio::sync::oneshot::channel::<io::Result<String>>();
+        self.reader_state.lock().await.response_tx = Some(tx2);
         debug!("TX [{}]: <PDU {} bytes + Ctrl-Z>", self.name, pdu_hex.len() / 2);
-        serial.write_all(full_pdu.as_bytes()).await?;
-        serial.flush().await?;
-        let final_response =
-            Self::read_response_with_timeout(serial, &self.name, Duration::from_secs(30)).await?;
+        write.write_all(full_pdu.as_bytes()).await?;
+        write.flush().await?;
+        let final_response = match tokio::time::timeout(Duration::from_secs(30), rx2).await {
+            Ok(Ok(Ok(r))) => r,
+            Ok(Ok(Err(e))) => return Err(e.into()),
+            Ok(Err(_)) => return Err(anyhow::anyhow!("Reader channel closed")),
+            Err(_) => return Err(anyhow::anyhow!("Timeout waiting for SMS send confirmation")),
+        };
 
         if final_response.contains("OK\r\n") && final_response.contains("+CMGS:") {
             Ok(())
@@ -471,46 +550,6 @@ impl Modem {
                 Self::format_log(&final_response)
             );
             Err(anyhow::anyhow!("Incomplete SMS response"))
-        }
-    }
-
-    async fn read_response_with_timeout(
-        serial_stream: &mut SerialStream,
-        name: &str,
-        timeout_duration: Duration,
-    ) -> io::Result<String> {
-        let mut buffer = Vec::with_capacity(4096);
-        let mut temp_buf = [0u8; 1024];
-
-        let result = tokio::time::timeout(timeout_duration, async {
-            loop {
-                match serial_stream.read(&mut temp_buf).await {
-                    Ok(0) => break,
-                    Ok(bytes_read) => {
-                        buffer.extend_from_slice(&temp_buf[..bytes_read]);
-                        if let Some((terminator, pos)) = Self::find_terminator(&buffer) {
-                            let end_pos = pos + terminator.len();
-                            let response =
-                                String::from_utf8_lossy(&buffer[..end_pos]).into_owned();
-                            debug!("RX [{}]: {}", name, Self::format_log(&response));
-                            return Ok(response);
-                        }
-                    }
-                    Err(e) => return Err(e),
-                }
-            }
-            let response = String::from_utf8_lossy(&buffer).into_owned();
-            debug!("RX [{}]: {}", name, Self::format_log(&response));
-            Ok(response)
-        })
-        .await;
-
-        match result {
-            Ok(response) => response,
-            Err(_) => Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                format!("Command timeout for device {}", name),
-            )),
         }
     }
 
@@ -909,5 +948,38 @@ impl Modem {
                 .map(|line| line.to_string())
         })
         .await
+    }
+
+    // ─── Voice call AT commands ────────────────────────────────────────────────
+
+    /// Initiate an outbound voice call. The trailing `;` keeps AT command mode active.
+    pub async fn make_call(&self, phone: &str) -> io::Result<()> {
+        self.send_command_with_ok(&format!("ATD{};\r\n", phone)).await?;
+        Ok(())
+    }
+
+    /// Answer an incoming call.
+    pub async fn answer_call(&self) -> io::Result<()> {
+        self.send_command_with_ok("ATA\r\n").await?;
+        Ok(())
+    }
+
+    /// Hang up the active or incoming call.
+    pub async fn hangup_call(&self) -> io::Result<()> {
+        self.send_command_with_ok("ATH\r\n").await?;
+        Ok(())
+    }
+
+    /// Extract the caller number from a `+CLIP:` URC line.
+    /// e.g. `+CLIP: "18612345678",161,,,,0` → `Some("18612345678")`
+    pub fn parse_clip(line: &str) -> Option<String> {
+        if !line.starts_with("+CLIP:") {
+            return None;
+        }
+        let rest = &line[6..];
+        let start = rest.find('"')? + 1;
+        let end = rest[start..].find('"')?;
+        let number = &rest[start..start + end];
+        if number.is_empty() { None } else { Some(number.to_string()) }
     }
 }

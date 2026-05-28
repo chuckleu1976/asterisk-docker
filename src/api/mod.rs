@@ -14,14 +14,22 @@ use mime_guess::from_path;
 use reqwest::{header, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-pub use sse_manager::SseManager;
+#[allow(unused_imports)]
+pub use sse_manager::{CallEvent, SseManager};
 
 use crate::{
     config::SmsStorage,
-    db::{Contact, Conversation, SimCard, Sms},
+    db::{Call, Contact, Conversation, SimCard, Sms},
     modem::{ModemInfo as ModemModel, NetworkRegistrationStatus, OperatorInfo, SignalQuality, SmsType},
     ModemManagerRef,
 };
+
+/// Combined state for call routes that need both modem access and SSE broadcast.
+#[derive(Clone)]
+struct CallState {
+    mm: ModemManagerRef,
+    sse: Arc<SseManager>,
+}
 
 fn decode_sms_center(sms_center: &str) -> String {
     // Check if it's UCS2 encoded (contains sequences like 002B, 0030, etc.)
@@ -81,7 +89,7 @@ fn format_memory_status(memory_status: &str) -> String {
 }
 
 mod auth;
-mod sse_manager;
+pub(crate) mod sse_manager;
 
 use rust_embed::RustEmbed;
 
@@ -137,6 +145,27 @@ pub async fn run_api(
         .route(
             "/sims/{sim_id}/storage",
             put(set_sms_storage).with_state(modem_manager.clone()),
+        )
+        // ── Voice call routes ─────────────────────────────────────────────
+        .route(
+            "/calls",
+            get(get_calls),
+        )
+        .route(
+            "/calls/sse",
+            get(calls_sse_events).with_state(sse_manager.clone()),
+        )
+        .route(
+            "/calls/make",
+            post(make_call).with_state(CallState { mm: modem_manager.clone(), sse: sse_manager.clone() }),
+        )
+        .route(
+            "/calls/answer",
+            post(answer_call).with_state(modem_manager.clone()),
+        )
+        .route(
+            "/calls/hangup",
+            post(hangup_call).with_state(CallState { mm: modem_manager.clone(), sse: sse_manager.clone() }),
         )
         .layer(axum::middleware::from_fn_with_state(
             (username.to_string(), password.to_string()),
@@ -505,6 +534,113 @@ async fn delete_contact_by_id(Path(id): Path<String>) -> Response {
         Ok(false) => (StatusCode::NOT_FOUND, "Contact not found").into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
+}
+
+// ─── Voice call handlers ──────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct MakeCallRequest {
+    sim_id: String,
+    phone: String,
+}
+
+#[derive(Deserialize)]
+struct SimIdRequest {
+    sim_id: String,
+}
+
+#[derive(Deserialize)]
+struct CallsQuery {
+    sim_id: Option<String>,
+    #[serde(default = "default_limit")]
+    limit: i64,
+    #[serde(default)]
+    offset: i64,
+}
+
+fn default_limit() -> i64 { 50 }
+
+async fn get_calls(Query(q): Query<CallsQuery>) -> Response {
+    let result = match q.sim_id {
+        Some(sim_id) => Call::query_by_sim(&sim_id, q.limit).await.map(|v| {
+            let total = v.len() as i64;
+            json!({ "data": v, "total": total })
+        }),
+        None => Call::query_all(q.limit, q.offset).await.map(|(v, total)| {
+            json!({ "data": v, "total": total })
+        }),
+    };
+    match result {
+        Ok(data) => Json(data).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn make_call(State(cs): State<CallState>, Json(body): Json<MakeCallRequest>) -> Response {
+    match cs.mm.make_call(&body.sim_id, &body.phone).await {
+        Ok(call_id) => {
+            cs.sse.send_call_event(CallEvent {
+                event_type: "outbound_call_started".into(),
+                sim_id: body.sim_id.clone(),
+                call_id: call_id.clone(),
+                phone: Some(body.phone.clone()),
+                direction: "outbound".into(),
+            });
+            Json(json!({ "call_id": call_id })).into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn answer_call(State(mm): State<ModemManagerRef>, Json(body): Json<SimIdRequest>) -> Response {
+    match mm.answer_call(&body.sim_id).await {
+        Ok(()) => StatusCode::OK.into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn hangup_call(State(cs): State<CallState>, Json(body): Json<SimIdRequest>) -> Response {
+    match cs.mm.hangup_call(&body.sim_id).await {
+        Ok(Some((call_id, status))) => {
+            cs.sse.send_call_event(CallEvent {
+                event_type: "call_ended".into(),
+                sim_id: body.sim_id.clone(),
+                call_id,
+                phone: None,
+                direction: "outbound".into(),
+            });
+            StatusCode::OK.into_response()
+        }
+        Ok(None) => StatusCode::OK.into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn calls_sse_events(State(sse_manager): State<Arc<SseManager>>) -> Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
+    let rx = sse_manager.subscribe_calls();
+
+    let stream = futures_util::stream::unfold(rx, |mut rx| async move {
+        loop {
+            match rx.recv().await {
+                Ok(event) => {
+                    if let Ok(data) = serde_json::to_string(&event) {
+                        let sse_event = Event::default().event("call_event").data(data);
+                        return Some((Ok::<_, Infallible>(sse_event), rx));
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    error!("Calls SSE receiver lagged by {} messages", n);
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
+            }
+        }
+    });
+
+    Sse::new(stream).keep_alive(
+        axum::response::sse::KeepAlive::new()
+            .interval(Duration::from_secs(15))
+            .text("keep-alive"),
+    )
 }
 
 async fn static_handler(uri: axum::http::Uri) -> impl IntoResponse {

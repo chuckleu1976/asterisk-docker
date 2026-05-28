@@ -73,6 +73,8 @@ async fn main() {
 
     let sse_manager = Arc::new(api::SseManager::new());
 
+    modem_manager.start_urc_handlers(sse_manager.clone()).await;
+
     let webhook_manager = match config.settings.webhooks.clone() {
         Some(cfgs) => Some(webhook::start_webhook_worker_with_concurrency(
             cfgs,

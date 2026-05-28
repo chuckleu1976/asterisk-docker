@@ -1,15 +1,28 @@
 <script>
+  import { onMount, onDestroy } from "svelte";
   import { updateStorageValue } from "../js/storage";
   import Sidebar from "../components/layout/Sidebar.svelte";
   import MessageList from "../components/message/MessageList.svelte";
   import SimCardModal from "../components/sim-card/SimCardModal.svelte";
+  import IncomingCallBanner from "../components/conversation/IncomingCallBanner.svelte";
+  import CallLogModal from "../components/conversation/CallLogModal.svelte";
   import Icon from "@iconify/svelte";
   import { currentContact } from "../stores/conversation";
+  import { connectCallSSE, disconnectCallSSE } from "../stores/calls.js";
 
   let { onNavigate = () => {}, initialSimId = null } = $props();
 
   let modemInfoCardOpen = $state(false);
   let isSidebarOpen = $state(false);
+  let callLogOpen = $state(false);
+
+  onMount(() => {
+    connectCallSSE();
+  });
+
+  onDestroy(() => {
+    disconnectCallSSE();
+  });
 
   const logout = async () => {
     await updateStorageValue("auth", null);
@@ -18,6 +31,11 @@
 
   function handleSimCardClick() {
     modemInfoCardOpen = true;
+    isSidebarOpen = false;
+  }
+
+  function handleCallLogClick() {
+    callLogOpen = true;
     isSidebarOpen = false;
   }
 
@@ -42,6 +60,8 @@
 </script>
 
 <div class="flex h-dvh w-screen flex-col lg:flex-row font-sans dark:bg-zinc-900 dark:text-white relative">
+  <!-- Global incoming/active call banner -->
+  <IncomingCallBanner />
   {#if isSidebarOpen}
     <div
       class="fixed inset-0 bg-black/40 backdrop-blur-sm z-20 lg:hidden"
@@ -62,6 +82,7 @@
       onLogoutClick={logout}
       onConversationSelect={closeSidebar}
       onSimDashboardClick={onNavigate}
+      onCallLogClick={handleCallLogClick}
     />
   </div>
   
@@ -104,4 +125,9 @@
 <SimCardModal
   isOpen={modemInfoCardOpen}
   onClose={handleModalClose}
+/>
+
+<CallLogModal
+  isOpen={callLogOpen}
+  onClose={() => { callLogOpen = false; }}
 />

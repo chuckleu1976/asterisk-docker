@@ -34,7 +34,6 @@ pub struct ATCommand {
 pub enum ConnectionState {
     Connected,
     Disconnected,
-    Reconnecting,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

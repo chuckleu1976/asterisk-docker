@@ -4,9 +4,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{RwLock, Semaphore};
 
+use crate::api::sse_manager::CallEvent;
 use crate::api::SseManager;
 use crate::config::SmsStorage;
-use crate::db::{Contact, ModemSMS, SimCard};
+use crate::db::{Call, Contact, ModemSMS, SimCard};
 use crate::webhook;
 
 use super::core::Modem;
@@ -494,5 +495,239 @@ impl ModemManager {
     pub async fn update_sim_cache(&self, sim_card: SimCard) {
         let mut cache = self.sim_cards_cache.write().await;
         cache.insert(sim_card.id.clone(), sim_card);
+    }
+
+    // ─── Voice call delegation ────────────────────────────────────────────────
+
+    /// Initiate an outbound call and record it in the DB.
+    /// Returns the new Call UUID on success.
+    pub async fn make_call(&self, sim_id: &str, phone: &str) -> anyhow::Result<String> {
+        let modem = self
+            .get_modem(sim_id)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("Modem not found for SIM ID: {}", sim_id))?;
+        // Send the ATD command first — only record if the modem accepts it.
+        modem.make_call(phone).await?;
+        // Insert a DB record now that the modem confirmed OK.
+        let call_id = Call::insert(sim_id, Some(phone), "outbound").await?;
+        // Store the id on the modem so the URC handler can find it on NO CARRIER / CONNECT.
+        *modem.outbound_call_id.lock().await = Some(call_id.clone());
+        info!("[{}] outbound call {} to {} started", sim_id, call_id, phone);
+        Ok(call_id)
+    }
+
+    pub async fn answer_call(&self, sim_id: &str) -> anyhow::Result<()> {
+        let modem = self
+            .get_modem(sim_id)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("Modem not found for SIM ID: {}", sim_id))?;
+        modem.answer_call().await.map_err(Into::into)
+    }
+
+    /// Hang up the current call.  Returns the call_id and final status of the
+    /// outbound call if one was in progress, so the caller can send an SSE event.
+    pub async fn hangup_call(&self, sim_id: &str) -> anyhow::Result<Option<(String, String)>> {
+        let modem = self
+            .get_modem(sim_id)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("Modem not found for SIM ID: {}", sim_id))?;
+        modem.hangup_call().await?;
+        // After ATH succeeds, take any pending outbound call and mark it ended.
+        // This covers the case where the remote never answered (no NO CARRIER URC).
+        if let Some(call_id) = modem.outbound_call_id.lock().await.take() {
+            // For now we don't have the call_answered flag here; treat a
+            // locally-cancelled call as "missed" (callee never confirmed answer).
+            let status = "missed";
+            if let Err(e) = Call::update_status(&call_id, status).await {
+                error!("[{}] failed to update outbound call {} on hangup: {}", sim_id, call_id, e);
+            } else {
+                info!("[{}] outbound call {} marked {} on hangup", sim_id, call_id, status);
+            }
+            return Ok(Some((call_id, status.to_string())));
+        }
+        Ok(None)
+    }
+
+    // ─── URC handler tasks ────────────────────────────────────────────────────
+
+    /// Spawn one URC handler task per modem.  Must be called once after
+    /// initialization.  Each task owns the modem's `urc_rx` and processes
+    /// RING / +CLIP: / NO CARRIER / VOICE CALL: END messages forever.
+    pub async fn start_urc_handlers(&self, sse_manager: Arc<SseManager>) {
+        let modems = self.modems.read().await;
+        for (sim_id, modem) in modems.iter() {
+            if sim_id.starts_with("fallback_sim_") {
+                continue;
+            }
+            let sim_id = sim_id.clone();
+            let modem = modem.clone();
+            let sse = sse_manager.clone();
+            tokio::spawn(async move {
+                Self::run_urc_handler(sim_id, modem, sse).await;
+            });
+        }
+    }
+
+    async fn run_urc_handler(sim_id: String, modem: Arc<Modem>, sse: Arc<SseManager>) {
+        // Hold the receiver for the task's lifetime — one consumer per modem.
+        let mut rx = modem.urc_rx.lock().await;
+        // active_call_id tracks the current ringing/active call for this modem.
+        let mut active_call_id: Option<String> = None;
+        // Phone number arrives via +CLIP: *after* the first RING on EC20 modems.
+        let mut current_phone: Option<String> = None;
+        // Whether ATA was sent (answered); used to distinguish missed vs ended.
+        let mut call_answered = false;
+
+        info!("[URC {}] handler started", sim_id);
+
+        loop {
+            let line = match rx.recv().await {
+                Some(l) => l,
+                None => {
+                    info!("[URC {}] channel closed, handler exiting", sim_id);
+                    break;
+                }
+            };
+
+            let line = line.trim().to_string();
+            if line.is_empty() {
+                continue;
+            }
+
+            if line.starts_with("+CLIP:") {
+                if let Some(phone) = Modem::parse_clip(&line) {
+                    // If a call record already exists (RING arrived before +CLIP:), update its phone.
+                    if let Some(ref id) = active_call_id {
+                        if let Err(e) = Call::update_phone(id, &phone).await {
+                            error!("[URC {}] failed to update phone on call {}: {}", sim_id, id, e);
+                        }
+                        // Also push an updated SSE event so the frontend shows the number.
+                        sse.send_call_event(CallEvent {
+                            event_type: "incoming_call".into(),
+                            sim_id: sim_id.clone(),
+                            call_id: id.clone(),
+                            phone: Some(phone.clone()),
+                            direction: "inbound".into(),
+                        });
+                    }
+                    current_phone = Some(phone);
+                }
+                continue;
+            }
+
+            if line == "RING" {
+                if active_call_id.is_none() {
+                    // First RING — insert new inbound call record.
+                    // phone may be None here (EC20 sends RING before +CLIP:); we'll patch it when +CLIP: arrives.
+                    match Call::insert(&sim_id, current_phone.as_deref(), "inbound").await {
+                        Ok(id) => {
+                            info!("[URC {}] incoming call {} from {:?}", sim_id, id, current_phone);
+                            sse.send_call_event(CallEvent {
+                                event_type: "incoming_call".into(),
+                                sim_id: sim_id.clone(),
+                                call_id: id.clone(),
+                                phone: current_phone.clone(),
+                                direction: "inbound".into(),
+                            });
+                            active_call_id = Some(id);
+                            call_answered = false;
+                        }
+                        Err(e) => error!("[URC {}] failed to insert call: {}", sim_id, e),
+                    }
+                }
+                // Subsequent RINGs for the same call are ignored (DB record already exists).
+                continue;
+            }
+
+            // ATA response — the call was answered (either by us or via GSM indication).
+            if line == "ATA" || line == "CONNECT" {
+                call_answered = true;
+                if let Some(ref id) = active_call_id {
+                    // Inbound call answered.
+                    if let Err(e) = Call::update_status(id, "active").await {
+                        error!("[URC {}] failed to set call {} active: {}", sim_id, id, e);
+                    }
+                    sse.send_call_event(CallEvent {
+                        event_type: "call_answered".into(),
+                        sim_id: sim_id.clone(),
+                        call_id: id.clone(),
+                        phone: current_phone.clone(),
+                        direction: "inbound".into(),
+                    });
+                } else if let Some(outbound_id) = modem.outbound_call_id.lock().await.clone() {
+                    // Outbound call answered by remote.
+                    if let Err(e) = Call::update_status(&outbound_id, "active").await {
+                        error!("[URC {}] failed to set outbound call {} active: {}", sim_id, outbound_id, e);
+                    }
+                    sse.send_call_event(CallEvent {
+                        event_type: "call_answered".into(),
+                        sim_id: sim_id.clone(),
+                        call_id: outbound_id,
+                        phone: current_phone.clone(),
+                        direction: "outbound".into(),
+                    });
+                }
+                continue;
+            }
+
+            if line == "NO CARRIER" || line == "BUSY" || line.starts_with("VOICE CALL: END") {
+                if let Some(call_id) = active_call_id.take() {
+                    // Missed = inbound call that was never answered; Busy = remote busy
+                    let new_status = if line == "BUSY" {
+                        "missed"
+                    } else if !call_answered {
+                        "missed"
+                    } else {
+                        "ended"
+                    };
+                    call_answered = false;
+                    if let Err(e) = Call::update_status(&call_id, new_status).await {
+                        error!("[URC {}] failed to update call {}: {}", sim_id, call_id, e);
+                    }
+                    sse.send_call_event(CallEvent {
+                        event_type: "call_ended".into(),
+                        sim_id: sim_id.clone(),
+                        call_id,
+                        phone: current_phone.take(),
+                        direction: "inbound".into(),
+                    });
+                } else if let Some(outbound_id) = modem.outbound_call_id.lock().await.take() {
+                    // Outbound call ended (remote hung up, busy, or we hung up).
+                    let new_status = if line == "BUSY" {
+                        "missed"
+                    } else if call_answered {
+                        "ended"
+                    } else {
+                        "missed"
+                    };
+                    call_answered = false;
+                    if let Err(e) = Call::update_status(&outbound_id, new_status).await {
+                        error!("[URC {}] failed to update outbound call {}: {}", sim_id, outbound_id, e);
+                    }
+                    sse.send_call_event(CallEvent {
+                        event_type: "call_ended".into(),
+                        sim_id: sim_id.clone(),
+                        call_id: outbound_id,
+                        phone: current_phone.take(),
+                        direction: "outbound".into(),
+                    });
+                } else {
+                    // Unexpected NO CARRIER with no tracked call.
+                    call_answered = false;
+                    current_phone.take();
+                    sse.send_call_event(CallEvent {
+                        event_type: "call_ended".into(),
+                        sim_id: sim_id.clone(),
+                        call_id: String::new(),
+                        phone: None,
+                        direction: "outbound".into(),
+                    });
+                }
+                continue;
+            }
+
+            // Any other URC (e.g. +CMTI:, +CSQ:) — log at trace level
+            log::trace!("[URC {}] unhandled: {:?}", sim_id, line);
+        }
     }
 }
