@@ -319,7 +319,7 @@ fn collect_binaries(dir: &Path, names: &[String], matches: &mut Vec<PathBuf>) ->
     Ok(())
 }
 
-fn ensure_executable(path: &Path) -> Result<()> {
+fn ensure_executable(_path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

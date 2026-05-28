@@ -601,7 +601,7 @@ async fn answer_call(State(mm): State<ModemManagerRef>, Json(body): Json<SimIdRe
 
 async fn hangup_call(State(cs): State<CallState>, Json(body): Json<SimIdRequest>) -> Response {
     match cs.mm.hangup_call(&body.sim_id).await {
-        Ok(Some((call_id, status))) => {
+        Ok(Some((call_id, _status))) => {
             cs.sse.send_call_event(CallEvent {
                 event_type: "call_ended".into(),
                 sim_id: body.sim_id.clone(),
