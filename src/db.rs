@@ -1,3 +1,4 @@
+// migrations: 20260529000001_calls_recording
 use anyhow::Result;
 use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
@@ -208,6 +209,29 @@ impl Call {
         .fetch_optional(pool)
         .await?;
         Ok(call)
+    }
+
+    /// Save a raw recording blob for a call.
+    pub async fn save_recording(id: &str, data: &[u8]) -> Result<()> {
+        let pool = get_pool()?;
+        sqlx::query(r#"UPDATE calls SET recording = ? WHERE id = ?"#)
+            .bind(data)
+            .bind(id)
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Fetch the raw recording blob for a call. Returns `None` if no recording exists.
+    pub async fn get_recording(id: &str) -> Result<Option<Vec<u8>>> {
+        let pool = get_pool()?;
+        let row: Option<(Vec<u8>,)> = sqlx::query_as(
+            r#"SELECT recording FROM calls WHERE id = ? AND recording IS NOT NULL"#,
+        )
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+        Ok(row.map(|(data,)| data))
     }
 }
 

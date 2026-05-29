@@ -167,6 +167,10 @@ pub async fn run_api(
             "/calls/hangup",
             post(hangup_call).with_state(CallState { mm: modem_manager.clone(), sse: sse_manager.clone() }),
         )
+        .route(
+            "/calls/{id}/recording",
+            get(get_call_recording),
+        )
         .layer(axum::middleware::from_fn_with_state(
             (username.to_string(), password.to_string()),
             auth::basic_auth,
@@ -572,6 +576,22 @@ async fn get_calls(Query(q): Query<CallsQuery>) -> Response {
     };
     match result {
         Ok(data) => Json(data).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn get_call_recording(Path(id): Path<String>) -> Response {
+    match Call::get_recording(&id).await {
+        Ok(Some(data)) => (
+            StatusCode::OK,
+            [
+                (header::CONTENT_TYPE, "audio/amr"),
+                (header::CONTENT_DISPOSITION, format!("attachment; filename=\"{}.amr\"", id).leak()),
+            ],
+            data,
+        )
+            .into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }

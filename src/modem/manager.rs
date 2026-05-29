@@ -2,6 +2,7 @@ use futures::stream::{FuturesUnordered, StreamExt};
 use log::{error, info};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::{RwLock, Semaphore};
 
 use crate::api::sse_manager::CallEvent;
@@ -577,6 +578,8 @@ impl ModemManager {
         let mut current_phone: Option<String> = None;
         // Whether ATA was sent (answered); used to distinguish missed vs ended.
         let mut call_answered = false;
+        // Oneshot sender to cancel the 30-second recording timer. Some = recording active.
+        let mut recording_cancel_tx: Option<tokio::sync::oneshot::Sender<()>> = None;
 
         info!("[URC {}] handler started", sim_id);
 
@@ -629,8 +632,57 @@ impl ModemManager {
                                 phone: current_phone.clone(),
                                 direction: "inbound".into(),
                             });
-                            active_call_id = Some(id);
+                            active_call_id = Some(id.clone());
                             call_answered = false;
+                            // Auto-answer the incoming call.
+                            // EC20 voice calls respond to ATA with OK only — no CONNECT URC.
+                            // So we handle the answered state here rather than in the CONNECT branch.
+                            match modem.answer_call().await {
+                                Err(e) => error!("[URC {}] auto-answer failed: {}", sim_id, e),
+                                Ok(()) => {
+                                    info!("[URC {}] auto-answered incoming call", sim_id);
+                                    call_answered = true;
+                                    if let Err(e) = Call::update_status(&id, "active").await {
+                                        error!("[URC {}] failed to set call {} active: {}", sim_id, id, e);
+                                    }
+                                    sse.send_call_event(CallEvent {
+                                        event_type: "call_answered".into(),
+                                        sim_id: sim_id.clone(),
+                                        call_id: id.clone(),
+                                        phone: current_phone.clone(),
+                                        direction: "inbound".into(),
+                                    });
+                                    // ── Start downlink recording ──────────────────────────
+                                    if let Err(e) = modem.delete_files().await {
+                                        error!("[URC {}] failed to clear modem UFS: {}", sim_id, e);
+                                    }
+                                    match modem.start_recording("a.amr").await {
+                                        Ok(()) => info!("[URC {}] recording started -> a.amr", sim_id),
+                                        Err(e) => error!("[URC {}] failed to start recording: {}", sim_id, e),
+                                    }
+                                    info!("[URC {}] call_answered={} after start_recording", sim_id, call_answered);
+                                    let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
+                                    recording_cancel_tx = Some(cancel_tx);
+                                    let modem_c = modem.clone();
+                                    let sim_id_c = sim_id.clone();
+                                    tokio::spawn(async move {
+                                        tokio::select! {
+                                            _ = tokio::time::sleep(Duration::from_secs(30)) => {
+                                                info!("[URC {}] 30s recording limit, stopping and hanging up", sim_id_c);
+                                                modem_c.stop_recording().await.ok();
+                                                modem_c.hangup_call().await.ok();
+                                                // EC20F may not emit NO CARRIER after ATH — inject
+                                                // a synthetic one so the URC handler always cleans up.
+                                                modem_c.inject_urc("NO CARRIER");
+                                            }
+                                            _ = cancel_rx => {
+                                                info!("[URC {}] recording timer cancelled", sim_id_c);
+                                            }
+                                        }
+                                    });
+                                    // ─────────────────────────────────────────────────────
+                                }
+                            }
                         }
                         Err(e) => error!("[URC {}] failed to insert call: {}", sim_id, e),
                     }
@@ -639,23 +691,11 @@ impl ModemManager {
                 continue;
             }
 
-            // ATA response — the call was answered (either by us or via GSM indication).
+            // CONNECT URC — outbound call answered by remote.
+            // (Inbound auto-answer is handled directly in the RING branch above.)
             if line == "ATA" || line == "CONNECT" {
-                call_answered = true;
-                if let Some(ref id) = active_call_id {
-                    // Inbound call answered.
-                    if let Err(e) = Call::update_status(id, "active").await {
-                        error!("[URC {}] failed to set call {} active: {}", sim_id, id, e);
-                    }
-                    sse.send_call_event(CallEvent {
-                        event_type: "call_answered".into(),
-                        sim_id: sim_id.clone(),
-                        call_id: id.clone(),
-                        phone: current_phone.clone(),
-                        direction: "inbound".into(),
-                    });
-                } else if let Some(outbound_id) = modem.outbound_call_id.lock().await.clone() {
-                    // Outbound call answered by remote.
+                if let Some(outbound_id) = modem.outbound_call_id.lock().await.clone() {
+                    call_answered = true;
                     if let Err(e) = Call::update_status(&outbound_id, "active").await {
                         error!("[URC {}] failed to set outbound call {} active: {}", sim_id, outbound_id, e);
                     }
@@ -671,7 +711,28 @@ impl ModemManager {
             }
 
             if line == "NO CARRIER" || line == "BUSY" || line.starts_with("VOICE CALL: END") {
+                info!("[URC {}] {} received: call_answered={}, has_active={}, has_recording={}",
+                    sim_id, line, call_answered, active_call_id.is_some(), recording_cancel_tx.is_some());
                 if let Some(call_id) = active_call_id.take() {
+                    // ── Stop recording if active ──────────────────────────────
+                    if let Some(tx) = recording_cancel_tx.take() {
+                        modem.stop_recording().await.ok();
+                        tx.send(()).ok(); // cancel the 30s timer task
+                        info!("[URC {}] recording stopped", sim_id);
+                        // Download the recording from modem UFS and save to DB
+                        match modem.download_file("a.amr").await {
+                            Ok(data) => {
+                                info!("[URC {}] recording downloaded: {} bytes", sim_id, data.len());
+                                if let Err(e) = Call::save_recording(&call_id, &data).await {
+                                    error!("[URC {}] failed to save recording to DB: {}", sim_id, e);
+                                } else {
+                                    info!("[URC {}] recording saved to DB", sim_id);
+                                }
+                            }
+                            Err(e) => error!("[URC {}] failed to download recording: {}", sim_id, e),
+                        }
+                    }
+                    // ─────────────────────────────────────────────────────────
                     // Missed = inbound call that was never answered; Busy = remote busy
                     let new_status = if line == "BUSY" {
                         "missed"

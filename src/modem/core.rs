@@ -30,9 +30,11 @@ const MAX_LINE_BUF: usize = 64 * 1024;
 
 /// Shared routing state between the background reader task and the command processor.
 /// When `response_tx` is `Some`, bytes from the serial port are buffered for the command.
-/// When `None`, complete lines are dispatched as URCs via `urc_tx`.
+/// When `raw_response_tx` is `Some`, raw bytes are buffered (for binary transfers like AT+QFDWL).
+/// When both are `None`, complete lines are dispatched as URCs via `urc_tx`.
 struct ReaderState {
     response_tx: Option<tokio::sync::oneshot::Sender<io::Result<String>>>,
+    raw_response_tx: Option<tokio::sync::oneshot::Sender<io::Result<Vec<u8>>>>,
 }
 
 pub struct Modem {
@@ -66,7 +68,7 @@ impl Modem {
 
         let write_half = Arc::new(Mutex::new(Some(write_half_stream)));
         let connection_state = Arc::new(RwLock::new(ConnectionState::Connected));
-        let reader_state = Arc::new(Mutex::new(ReaderState { response_tx: None }));
+        let reader_state = Arc::new(Mutex::new(ReaderState { response_tx: None, raw_response_tx: None }));
 
         // Spawn background reader task — owns ReadHalf, routes bytes to commands or URC channel
         tokio::spawn({
@@ -232,22 +234,35 @@ impl Modem {
         name: &str,
     ) {
         loop {
-            let has_response_tx = reader_state.lock().await.response_tx.is_some();
-            if has_response_tx {
+            let (has_str_tx, has_raw_tx) = {
+                let state = reader_state.lock().await;
+                (state.response_tx.is_some(), state.raw_response_tx.is_some())
+            };
+            if has_str_tx || has_raw_tx {
                 // Command-response mode: buffer until we see a terminator
                 if let Some((term, pos)) = Self::find_terminator(line_buf) {
                     let end = pos + term.len();
-                    let response = String::from_utf8_lossy(&line_buf[..end]).into_owned();
-                    debug!("RX [{}]: {}", name, Self::format_log(&response));
-                    line_buf.drain(..end);
-                    let tx = reader_state.lock().await.response_tx.take();
-                    if let Some(tx) = tx {
+                    let mut state = reader_state.lock().await;
+                    if let Some(tx) = state.raw_response_tx.take() {
+                        // Raw bytes mode (e.g. AT+QFDWL binary download)
+                        let data = line_buf[..end].to_vec();
+                        drop(state);
+                        line_buf.drain(..end);
+                        let _ = tx.send(Ok(data));
+                    } else if let Some(tx) = state.response_tx.take() {
+                        let response = String::from_utf8_lossy(&line_buf[..end]).into_owned();
+                        debug!("RX [{}]: {}", name, Self::format_log(&response));
+                        drop(state);
+                        line_buf.drain(..end);
                         let _ = tx.send(Ok(response.clone()));
+                        // Some modems (e.g. EC20F) embed call-state URCs like NO CARRIER
+                        // inside the command response (before OK). Re-forward them so the
+                        // URC handler can update the call record.
+                        Self::forward_embedded_call_urcs(&response, urc_tx, name);
+                    } else {
+                        drop(state);
+                        line_buf.drain(..end);
                     }
-                    // Some modems (e.g. EC20F) embed call-state URCs like NO CARRIER
-                    // inside the command response (before OK). Re-forward them so the
-                    // URC handler can update the call record.
-                    Self::forward_embedded_call_urcs(&response, urc_tx, name);
                     // Loop continues: remaining bytes may be URCs
                 } else {
                     break; // Need more bytes
@@ -968,6 +983,91 @@ impl Modem {
     pub async fn hangup_call(&self) -> io::Result<()> {
         self.send_command_with_ok("ATH\r\n").await?;
         Ok(())
+    }
+
+    /// Delete all files from modem UFS to free space before a new recording.
+    pub async fn delete_files(&self) -> io::Result<()> {
+        self.send_command_with_ok("AT+QFDEL=\"*\"\r\n").await?;
+        Ok(())
+    }
+
+    /// Start downlink audio recording to UFS (AMR format).
+    /// `filename` is stored in modem UFS, e.g. `"a.amr"`.
+    pub async fn start_recording(&self, filename: &str) -> io::Result<()> {
+        self.send_command_with_ok(&format!("AT+QAUDRD=1,\"{}\",3,1\r\n", filename))
+            .await?;
+        Ok(())
+    }
+
+    /// Stop the active audio recording.
+    pub async fn stop_recording(&self) -> io::Result<()> {
+        self.send_command_with_ok("AT+QAUDRD=0\r\n").await?;
+        Ok(())
+    }
+
+    /// Inject a synthetic URC line into the URC channel.
+    /// Used by the 30s recording timer to guarantee the URC handler processes
+    /// call-end cleanup even when the modem doesn't emit NO CARRIER after ATH.
+    pub fn inject_urc(&self, line: &str) {
+        let _ = self._urc_tx.send(line.to_string());
+    }
+
+    /// Download a file from the modem UFS using AT+QFDWL and return its raw bytes.
+    ///
+    /// Protocol: modem responds `CONNECT\r\n`, then streams binary data, then
+    /// `\r\n+QFDWL: <size>,<checksum>\r\nOK\r\n` when done.
+    pub async fn download_file(&self, filename: &str) -> io::Result<Vec<u8>> {
+        let (raw_tx, raw_rx) = tokio::sync::oneshot::channel::<io::Result<Vec<u8>>>();
+        let command = format!("AT+QFDWL=\"{}\"\r\n", filename);
+
+        {
+            let mut write_guard = self.write_half.lock().await;
+            let write = write_guard.as_mut().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::NotConnected, "Serial port not connected")
+            })?;
+            self.reader_state.lock().await.raw_response_tx = Some(raw_tx);
+            debug!("TX [{}]: {}", self.name, Self::format_log(&command));
+            write.write_all(command.as_bytes()).await?;
+            write.flush().await?;
+            // write_guard drops here, releasing the write lock
+        }
+
+        let raw = match tokio::time::timeout(Duration::from_secs(30), raw_rx).await {
+            Ok(Ok(result)) => result?,
+            Ok(Err(_)) => {
+                return Err(io::Error::new(io::ErrorKind::BrokenPipe, "Reader channel closed"))
+            }
+            Err(_) => {
+                self.reader_state.lock().await.raw_response_tx = None;
+                return Err(io::Error::new(io::ErrorKind::TimedOut, "AT+QFDWL timeout"));
+            }
+        };
+
+        Self::parse_qfdwl_response(&raw)
+    }
+
+    /// Parse the raw bytes returned by `AT+QFDWL`.
+    /// Strips the `CONNECT\r\n` header and `\r\n+QFDWL: <size>,<checksum>\r\nOK\r\n` trailer.
+    fn parse_qfdwl_response(raw: &[u8]) -> io::Result<Vec<u8>> {
+        const CONNECT_MARKER: &[u8] = b"CONNECT\r\n";
+        const TRAILER_MARKER: &[u8] = b"\r\n+QFDWL:";
+
+        let connect_end = raw
+            .windows(CONNECT_MARKER.len())
+            .position(|w| w == CONNECT_MARKER)
+            .map(|p| p + CONNECT_MARKER.len())
+            .ok_or_else(|| io::Error::other("AT+QFDWL: missing CONNECT response"))?;
+
+        let after_connect = &raw[connect_end..];
+        let trailer_pos = after_connect
+            .windows(TRAILER_MARKER.len())
+            .enumerate()
+            .filter(|(_, w)| *w == TRAILER_MARKER)
+            .last()
+            .map(|(pos, _)| pos)
+            .ok_or_else(|| io::Error::other("AT+QFDWL: missing +QFDWL trailer"))?;
+
+        Ok(after_connect[..trailer_pos].to_vec())
     }
 
     /// Extract the caller number from a `+CLIP:` URC line.
