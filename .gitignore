@@ -11,3 +11,8 @@
 /config.toml
 .codex
 AGENTS.md
+*.amr
+*.txt
+!README.md
+!migrations/README.md
+*.ps1
