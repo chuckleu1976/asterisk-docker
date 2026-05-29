@@ -7,6 +7,7 @@ use flexi_logger::{
 };
 use log::LevelFilter;
 use modem::{ModemManager, SmsType};
+use modem::manager::TranscribeConfig;
 use structopt::StructOpt;
 
 mod api;
@@ -14,6 +15,7 @@ mod config;
 mod db;
 mod decode;
 mod modem;
+mod transcribe;
 #[cfg(test)]
 mod tests;
 mod update;
@@ -73,7 +75,8 @@ async fn main() {
 
     let sse_manager = Arc::new(api::SseManager::new());
 
-    modem_manager.start_urc_handlers(sse_manager.clone()).await;
+    let transcribe_cfg = TranscribeConfig::from_settings(&config.settings);
+    modem_manager.start_urc_handlers(sse_manager.clone(), transcribe_cfg).await;
 
     let webhook_manager = match config.settings.webhooks.clone() {
         Some(cfgs) => Some(webhook::start_webhook_worker_with_concurrency(

@@ -1,4 +1,4 @@
-// migrations: 20260529000001_calls_recording
+// migrations: 20260529000001_calls_recording 20260529000002_calls_transcript
 use anyhow::Result;
 use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
@@ -232,6 +232,29 @@ impl Call {
         .fetch_optional(pool)
         .await?;
         Ok(row.map(|(data,)| data))
+    }
+
+    /// Save the Whisper transcript for a call.
+    pub async fn save_transcript(id: &str, text: &str) -> Result<()> {
+        let pool = get_pool()?;
+        sqlx::query(r#"UPDATE calls SET transcript = ? WHERE id = ?"#)
+            .bind(text)
+            .bind(id)
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Fetch the transcript for a call. Returns `None` if not yet transcribed.
+    pub async fn get_transcript(id: &str) -> Result<Option<String>> {
+        let pool = get_pool()?;
+        let row: Option<(String,)> = sqlx::query_as(
+            r#"SELECT transcript FROM calls WHERE id = ? AND transcript IS NOT NULL"#,
+        )
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+        Ok(row.map(|(text,)| text))
     }
 }
 

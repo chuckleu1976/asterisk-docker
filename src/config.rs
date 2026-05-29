@@ -21,6 +21,12 @@ pub struct Settings {
     pub webhooks_max_concurrent: Option<usize>,
     pub webhooks: Option<Vec<WebhookConfig>>,
     pub sms_storage: Option<SmsStorage>,
+    /// Path to ffmpeg executable (used to convert AMR → WAV before transcription).
+    pub ffmpeg_exe: Option<String>,
+    /// Path to whisper-cli executable (whisper.cpp CLI binary).
+    pub whisper_exe: Option<String>,
+    /// Path to the whisper.cpp model file, e.g. ggml-base.en.bin
+    pub whisper_model: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

@@ -171,6 +171,10 @@ pub async fn run_api(
             "/calls/{id}/recording",
             get(get_call_recording),
         )
+        .route(
+            "/calls/{id}/transcript",
+            get(get_call_transcript),
+        )
         .layer(axum::middleware::from_fn_with_state(
             (username.to_string(), password.to_string()),
             auth::basic_auth,
@@ -589,6 +593,19 @@ async fn get_call_recording(Path(id): Path<String>) -> Response {
                 (header::CONTENT_DISPOSITION, format!("attachment; filename=\"{}.amr\"", id).leak()),
             ],
             data,
+        )
+            .into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn get_call_transcript(Path(id): Path<String>) -> Response {
+    match Call::get_transcript(&id).await {
+        Ok(Some(text)) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+            text,
         )
             .into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),

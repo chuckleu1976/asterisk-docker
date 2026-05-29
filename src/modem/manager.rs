@@ -7,12 +7,34 @@ use tokio::sync::{RwLock, Semaphore};
 
 use crate::api::sse_manager::CallEvent;
 use crate::api::SseManager;
-use crate::config::SmsStorage;
+use crate::config::{Settings, SmsStorage};
 use crate::db::{Call, Contact, ModemSMS, SimCard};
 use crate::webhook;
 
 use super::core::Modem;
 use super::types::*;
+
+/// Configuration for local whisper.cpp speech-to-text transcription.
+/// All three fields must be `Some` for transcription to be enabled.
+#[derive(Debug, Clone)]
+pub struct TranscribeConfig {
+    pub ffmpeg_exe: String,
+    pub whisper_exe: String,
+    pub whisper_model: String,
+}
+
+impl TranscribeConfig {
+    pub fn from_settings(s: &Settings) -> Option<Arc<Self>> {
+        match (&s.ffmpeg_exe, &s.whisper_exe, &s.whisper_model) {
+            (Some(ffmpeg), Some(whisper), Some(model)) => Some(Arc::new(Self {
+                ffmpeg_exe: ffmpeg.clone(),
+                whisper_exe: whisper.clone(),
+                whisper_model: model.clone(),
+            })),
+            _ => None,
+        }
+    }
+}
 
 pub struct ModemManager {
     modems: Arc<RwLock<HashMap<String, Arc<Modem>>>>,
@@ -554,7 +576,7 @@ impl ModemManager {
     /// Spawn one URC handler task per modem.  Must be called once after
     /// initialization.  Each task owns the modem's `urc_rx` and processes
     /// RING / +CLIP: / NO CARRIER / VOICE CALL: END messages forever.
-    pub async fn start_urc_handlers(&self, sse_manager: Arc<SseManager>) {
+    pub async fn start_urc_handlers(&self, sse_manager: Arc<SseManager>, transcribe_cfg: Option<Arc<TranscribeConfig>>) {
         let modems = self.modems.read().await;
         for (sim_id, modem) in modems.iter() {
             if sim_id.starts_with("fallback_sim_") {
@@ -563,13 +585,14 @@ impl ModemManager {
             let sim_id = sim_id.clone();
             let modem = modem.clone();
             let sse = sse_manager.clone();
+            let cfg = transcribe_cfg.clone();
             tokio::spawn(async move {
-                Self::run_urc_handler(sim_id, modem, sse).await;
+                Self::run_urc_handler(sim_id, modem, sse, cfg).await;
             });
         }
     }
 
-    async fn run_urc_handler(sim_id: String, modem: Arc<Modem>, sse: Arc<SseManager>) {
+    async fn run_urc_handler(sim_id: String, modem: Arc<Modem>, sse: Arc<SseManager>, transcribe_cfg: Option<Arc<TranscribeConfig>>) {
         // Hold the receiver for the task's lifetime — one consumer per modem.
         let mut rx = modem.urc_rx.lock().await;
         // active_call_id tracks the current ringing/active call for this modem.
@@ -727,6 +750,32 @@ impl ModemManager {
                                     error!("[URC {}] failed to save recording to DB: {}", sim_id, e);
                                 } else {
                                     info!("[URC {}] recording saved to DB", sim_id);
+                                    // ── Spawn transcription (fire-and-forget) ──────────
+                                    if let Some(cfg) = transcribe_cfg.as_ref() {
+                                        let data_c = data.clone();
+                                        let call_id_c = call_id.clone();
+                                        let sim_id_c = sim_id.clone();
+                                        let cfg_c = cfg.clone();
+                                        tokio::spawn(async move {
+                                            info!("[URC {}] transcribing recording for call {}", sim_id_c, call_id_c);
+                                            let t = std::time::Instant::now();
+                                            match crate::transcribe::transcribe(
+                                                &data_c,
+                                                &cfg_c.ffmpeg_exe,
+                                                &cfg_c.whisper_exe,
+                                                &cfg_c.whisper_model,
+                                            ).await {
+                                                Ok(text) => {
+                                                    info!("[URC {}] transcript ({:.1}s): {}", sim_id_c, t.elapsed().as_secs_f64(), text);
+                                                    if let Err(e) = Call::save_transcript(&call_id_c, &text).await {
+                                                        error!("[URC {}] failed to save transcript: {}", sim_id_c, e);
+                                                    }
+                                                }
+                                                Err(e) => error!("[URC {}] transcription failed ({:.1}s): {}", sim_id_c, t.elapsed().as_secs_f64(), e),
+                                            }
+                                        });
+                                    }
+                                    // ───────────────────────────────────────────────────
                                 }
                             }
                             Err(e) => error!("[URC {}] failed to download recording: {}", sim_id, e),
