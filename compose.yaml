@@ -15,7 +15,7 @@ services:
     devices:
       - /dev/net/tun
     ports:
-      - 5061:5061
+      - 5060:5060/udp
       - 10000-11000:10000-11000/udp
     tmpfs:
       - /run
@@ -25,6 +25,28 @@ services:
       - ./config/1/ami_usim.ini:/usr/local/etc/ami_usim.ini:Z,ro
       - ./config/1/telegram_token:/usr/local/etc/telegram_token:Z,ro
       - ../logs/1:/logs:Z
+      - pcsc-sock:/run/pcscd
+    pid: service:pcscd
+    depends_on: [pcscd]
+    restart: always
+
+  asterisk2:
+    image: phcodercat/asterisk-vowifi
+    cap_add:
+      - CAP_NET_ADMIN
+    devices:
+      - /dev/net/tun
+    ports:
+      - 5061:5060/udp              # Different external port
+      - 11001-12001:11001-12001/udp  # Different RTP port range
+    tmpfs:
+      - /run
+    volumes:
+      - ./config/2/epdg.conf:/usr/local/etc/swanctl/conf.d/epdg.conf:Z,ro
+      - ./config/2/asterisk:/etc/asterisk:Z,ro
+      - ./config/2/ami_usim.ini:/usr/local/etc/ami_usim.ini:Z,ro
+      - ./config/2/telegram_token:/usr/local/etc/telegram_token:Z,ro
+      - ../logs/2:/logs:Z
       - pcsc-sock:/run/pcscd
     pid: service:pcscd
     depends_on: [pcscd]
