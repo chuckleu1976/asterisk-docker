@@ -16,7 +16,7 @@ services:
       - /dev/net/tun
     ports:
       - 5060:5060/udp
-      - 10000-11000:10000-11000/udp
+      - 10000-10019:10000-10019/udp
     tmpfs:
       - /run
     volumes:
@@ -38,7 +38,7 @@ services:
       - /dev/net/tun
     ports:
       - 5061:5060/udp              # Different external port
-      - 11001-12001:11001-12001/udp  # Different RTP port range
+      - 11001-11020:10000-10019/udp  # Different external RTP range, same internal range
     tmpfs:
       - /run
     volumes:
