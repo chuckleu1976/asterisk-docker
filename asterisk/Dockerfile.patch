@@ -1,0 +1,11 @@
+# Thin layer on top of the base image: applies the RP-ACK / volte_send_rp_data
+# transport-selector fix so Asterisk reuses the established VoLTE TCP connection
+# instead of trying to bind a new socket (which fails with EADDRINUSE).
+FROM phcodercat/asterisk-vowifi
+
+COPY rpack_fix.py /tmp/rpack_fix.py
+RUN python3 /tmp/rpack_fix.py && \
+    cd /home/asterisk-build/asterisk && \
+    make res -j$(nproc) && \
+    cp res/res_pjsip_messaging.so /usr/lib/asterisk/modules/ && \
+    rm /tmp/rpack_fix.py

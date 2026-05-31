@@ -9,7 +9,10 @@ services:
     devices:
       - /dev/bus/usb:/dev/bus/usb
   asterisk:
-    image: phcodercat/asterisk-vowifi
+    image: asterisk-vowifi-patched
+    build:
+      context: ./asterisk
+      dockerfile: Dockerfile.patch
     cap_add:
       - CAP_NET_ADMIN
     devices:
@@ -31,7 +34,10 @@ services:
     restart: always
 
   asterisk2:
-    image: phcodercat/asterisk-vowifi
+    image: asterisk-vowifi-patched
+    build:
+      context: ./asterisk
+      dockerfile: Dockerfile.patch
     cap_add:
       - CAP_NET_ADMIN
     devices:
