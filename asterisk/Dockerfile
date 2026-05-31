@@ -1,3 +1,6 @@
+# Stage 0: custom pcsc-lite 1.9.9-sysmocom (protocol 4:4, matching pcscd server)
+FROM pcscd-sysmocom AS pcsc
+
 # Stage 1: use the existing image as source for pjproject and asterisk
 # (gitea.sysmocom.de is protected by Anubis bot-protection and blocks git clone)
 FROM phcodercat/asterisk-vowifi AS source
@@ -42,4 +45,13 @@ COPY p-cscf.conf /usr/local/etc/strongswan.d/charon/p-cscf.conf
 COPY osmo-epdg.conf /usr/local/etc/strongswan.d/charon/osmo-epdg.conf
 COPY ims.updown /usr/local/etc/ims.updown
 COPY entrypoint.sh /entrypoint.sh
+# Override system libpcsclite with our 1.9.9-sysmocom build (protocol 4:4)
+COPY --from=pcsc /usr/lib64/libpcsclite.so.1.0.0 /tmp/libpcsclite_1.9.9.so
+RUN ls -la /tmp/libpcsclite_1.9.9.so && \
+    cp /tmp/libpcsclite_1.9.9.so /usr/lib64/libpcsclite.so.1.0.0 && \
+    ln -sf libpcsclite.so.1.0.0 /usr/lib64/libpcsclite.so.1 && \
+    ln -sf libpcsclite.so.1 /usr/lib64/libpcsclite.so && \
+    ldconfig && \
+    rm /tmp/libpcsclite_1.9.9.so && \
+    ls -la /usr/lib64/libpcsclite*
 ENTRYPOINT /entrypoint.sh

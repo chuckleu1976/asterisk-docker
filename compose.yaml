@@ -1,6 +1,9 @@
 services:
   pcscd:
-    image: phcodercat/pcscd
+    build:
+      context: /home/ht/Downloads/osmo_remsim_pcsc
+      dockerfile: /home/ht/docker/asterisk-docker/pcscd/Dockerfile
+    image: pcscd-sysmocom
     restart: always
     volumes:
       - pcsc-sock:/run/pcscd
