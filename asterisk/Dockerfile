@@ -18,6 +18,7 @@ RUN dnf -y update && \
 # Copy pre-checked-out sources from the existing image (cherry-pick already applied)
 COPY --from=source /home/asterisk-build/pjproject /home/asterisk-build/pjproject
 COPY --from=source /home/asterisk-build/asterisk /home/asterisk-build/asterisk
+COPY rpack_fix.py /tmp/rpack_fix.py
 RUN cd asterisk && \
     make distclean || true && \
     sh bootstrap.sh && \
@@ -25,6 +26,7 @@ RUN cd asterisk && \
     ./configure --enable-binary-modules && \
     make menuselect/menuselect menuselect-tree menuselect.makeopts && \
     ./menuselect/menuselect --enable codec_opus --disable BUILD_NATIVE && \
+    python3 /tmp/rpack_fix.py && \
     make -j$(nproc) && \
     make install
 RUN git clone --depth=1 --branch jolly/work https://gitea.osmocom.org/ims-volte-vowifi/strongswan-epdg.git && \
