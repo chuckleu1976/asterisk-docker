@@ -7,7 +7,7 @@ Called by Asterisk extensions.conf on incoming SIP MESSAGE:
 
 Appends raw message to /logs/messages.txt
 Appends extracted OTP (if found) to /logs/otp_sms.txt
-Saves all SMS to /logs/sms.db (SQLite)
+Saves all SMS to /data/sim_inventory.db (shared SQLite, mounted from host)
 """
 import sys
 import re
@@ -15,6 +15,9 @@ import base64
 import os
 import sqlite3
 from datetime import datetime
+
+DB_PATH  = "/data/sim_inventory.db"
+INSTANCE = os.environ.get("HOSTNAME", "unknown")
 
 if len(sys.argv) < 3:
     print("Usage: sms_save.py <from> <base64_body>", file=sys.stderr)
@@ -39,21 +42,13 @@ with open("/logs/messages.txt", "a") as f:
     )
 
 # --- Extract OTP ---
-# Priority order: contextual patterns first, then standalone digits
 OTP_PATTERNS = [
-    # "code is 123456" / "code: 123456" / "code 123456"
     r'(?:verification\s+)?code[:\s]+(\d{4,8})',
-    # "OTP: 123456" / "OTP is 123456"
     r'\bOTP[:\s]+(\d{4,8})',
-    # "PIN: 123456"
     r'\bPIN[:\s]+(\d{4,8})',
-    # "passcode: 123456"
     r'passcode[:\s]+(\d{4,8})',
-    # "password: 123456"
     r'password[:\s]+(\d{4,8})',
-    # "use 123456" / "enter 123456"
     r'(?:use|enter|is)\s+(\d{4,8})\b',
-    # Standalone 4-8 digit number (last resort)
     r'\b(\d{4,8})\b',
 ]
 
@@ -65,34 +60,35 @@ for pattern in OTP_PATTERNS:
         break
 
 if otp:
-    entry = (
-        f"[{timestamp}] From: {sender}\n"
-        f"SMS: {body}\n"
-        f"OTP: {otp}\n"
-        f"{'=' * 50}\n\n"
-    )
     with open("/logs/otp_sms.txt", "a") as f:
-        f.write(entry)
+        f.write(
+            f"[{timestamp}] From: {sender}\n"
+            f"SMS: {body}\n"
+            f"OTP: {otp}\n"
+            f"{'=' * 50}\n\n"
+        )
     print(f"OTP extracted: {otp}")
 else:
     print("No OTP found in SMS body.")
 
-# --- Save to SQLite ---
+# --- Save to shared SQLite (WAL mode for safe concurrent writes) ---
 try:
-    db = sqlite3.connect("/logs/sms.db")
+    db = sqlite3.connect(DB_PATH, timeout=10)
+    db.execute("PRAGMA journal_mode=WAL")
     db.execute('''CREATE TABLE IF NOT EXISTS sms (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        instance    TEXT,
         sender      TEXT,
         body        TEXT,
         otp         TEXT,
         received_at TEXT NOT NULL
     )''')
     db.execute(
-        'INSERT INTO sms (sender, body, otp, received_at) VALUES (?, ?, ?, ?)',
-        (sender, body, otp, timestamp)
+        'INSERT INTO sms (instance, sender, body, otp, received_at) VALUES (?,?,?,?,?)',
+        (INSTANCE, sender, body, otp, timestamp)
     )
     db.commit()
     db.close()
-    print(f"Saved to sms.db: from={sender} otp={otp}")
+    print(f"Saved to sim_inventory.db: instance={INSTANCE} from={sender} otp={otp}")
 except Exception as e:
     print(f"SQLite error: {e}", file=sys.stderr)

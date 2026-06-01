@@ -13,6 +13,7 @@ services:
       - /dev/bus/usb:/dev/bus/usb
   asterisk:
     image: asterisk-vowifi-patched
+    hostname: asterisk1
     build:
       context: ./asterisk
       dockerfile: Dockerfile
@@ -31,6 +32,7 @@ services:
       - ./config/1/ami_usim.ini:/usr/local/etc/ami_usim.ini:Z,ro
       - ./config/1/telegram_token:/usr/local/etc/telegram_token:Z,ro
       - ../logs/1:/logs:Z
+      - ./sim_inventory.db:/data/sim_inventory.db:Z
       - pcsc-sock:/run/pcscd
     pid: service:pcscd
     depends_on: [pcscd]
@@ -38,6 +40,7 @@ services:
 
   asterisk2:
     image: asterisk-vowifi-patched
+    hostname: asterisk2
     build:
       context: ./asterisk
       dockerfile: Dockerfile
@@ -56,6 +59,7 @@ services:
       - ./config/2/ami_usim.ini:/usr/local/etc/ami_usim.ini:Z,ro
       - ./config/2/telegram_token:/usr/local/etc/telegram_token:Z,ro
       - ../logs/2:/logs:Z
+      - ./sim_inventory.db:/data/sim_inventory.db:Z
       - pcsc-sock:/run/pcscd
     pid: service:pcscd
     depends_on: [pcscd]
