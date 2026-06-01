@@ -3,7 +3,9 @@ FROM pcscd-sysmocom AS pcsc
 
 # Stage 1: use the existing image as source for pjproject and asterisk
 # (gitea.sysmocom.de is protected by Anubis bot-protection and blocks git clone)
-FROM phcodercat/asterisk-vowifi AS source
+# --platform=linux/amd64 allows this stage to run on ARM64 (Pi 5) — only used
+# for COPY of source files, no x86_64 binaries end up in the final image.
+FROM --platform=linux/amd64 phcodercat/asterisk-vowifi AS source
 
 # Stage 2: fresh build from source
 FROM fedora:latest
