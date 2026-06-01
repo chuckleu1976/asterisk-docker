@@ -17,12 +17,15 @@ Usage:
 import argparse
 import json
 import re
+import sqlite3
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).parent      # asterisk-docker/
 CONFIG_DIR = SCRIPT_DIR / "config"
+DB_PATH    = SCRIPT_DIR / "sim_inventory.db"
 
 # Container used for APDU reading — must be running, has pyscard + pcsc-sock
 READ_CONTAINER = "asterisk"
@@ -171,6 +174,39 @@ except Exception as e:
 """
 
 
+# ─── SQLite inventory ────────────────────────────────────────────────────────
+
+def db_save(reader_index: int, sim: dict):
+    """Upsert one row per reader into sim_inventory.db."""
+    con = sqlite3.connect(DB_PATH)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS sims (
+            reader      INTEGER PRIMARY KEY,
+            iccid       TEXT,
+            imsi        TEXT,
+            msisdn      TEXT,
+            mcc         TEXT,
+            mnc         TEXT,
+            updated_at  TEXT
+        )
+    """)
+    con.execute("""
+        INSERT INTO sims (reader, iccid, imsi, msisdn, mcc, mnc, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(reader) DO UPDATE SET
+            iccid=excluded.iccid, imsi=excluded.imsi, msisdn=excluded.msisdn,
+            mcc=excluded.mcc, mnc=excluded.mnc, updated_at=excluded.updated_at
+    """, (
+        reader_index,
+        sim.get('iccid'), sim.get('imsi'), sim.get('msisdn'),
+        sim.get('mcc'),   sim.get('mnc'),
+        datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+    ))
+    con.commit()
+    con.close()
+    print(f"  DB: P{reader_index} -> {DB_PATH.name}")
+
+
 # ─── SIM reading via docker compose exec ─────────────────────────────────────
 
 def read_sim(reader_index: int) -> dict:
@@ -228,6 +264,7 @@ def list_readers():
                 print(f"      IMSI:    {sim['imsi']}")
                 print(f"      MSISDN:  {sim['msisdn'] or '(not stored on card)'}")
                 print(f"      MCC/MNC: {sim['mcc']}/{sim['mnc']}")
+                db_save(idx, sim)
             except Exception as e:
                 print(f"      (error reading SIM: {e})")
 
@@ -375,6 +412,7 @@ def main():
                 if args.msisdn:
                     sim['msisdn'] = args.msisdn
                 print(f"  IMSI={sim['imsi']}  MSISDN={sim['msisdn'] or '(none)'}")
+                db_save(i, sim)
                 if update_instance(instance, sim) and args.restart:
                     restart_instance(instance)
             except Exception as e:
@@ -400,6 +438,7 @@ def main():
     print(f"  IMSI:    {sim['imsi']}")
     print(f"  MSISDN:  {sim['msisdn'] or '(not stored on card)'}")
     print(f"  MCC/MNC: {sim['mcc']}/{sim['mnc']}")
+    db_save(idx, sim)
 
     if update_instance(args.instance, sim) and args.restart:
         restart_instance(args.instance)
