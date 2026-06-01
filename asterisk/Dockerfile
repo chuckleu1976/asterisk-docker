@@ -48,12 +48,14 @@ COPY osmo-epdg.conf /usr/local/etc/strongswan.d/charon/osmo-epdg.conf
 COPY ims.updown /usr/local/etc/ims.updown
 COPY entrypoint.sh /entrypoint.sh
 # Override system libpcsclite with our 1.9.9-sysmocom build (protocol 4:4)
+# Fedora 44 pcsc-lite 2.4.1 ships libpcsclite.so.1 AND libpcsclite_real.so.1,
+# both with SONAME=libpcsclite.so.1 — ldconfig picks the newer real file and
+# overrides any symlink we create. Fix: replace both files directly, skip ldconfig.
 COPY --from=pcsc /usr/lib64/libpcsclite.so.1.0.0 /tmp/libpcsclite_1.9.9.so
 RUN ls -la /tmp/libpcsclite_1.9.9.so && \
-    cp /tmp/libpcsclite_1.9.9.so /usr/lib64/libpcsclite.so.1.0.0 && \
-    ln -sf libpcsclite.so.1.0.0 /usr/lib64/libpcsclite.so.1 && \
-    ln -sf libpcsclite.so.1 /usr/lib64/libpcsclite.so && \
-    ldconfig && \
+    cp /tmp/libpcsclite_1.9.9.so /usr/lib64/libpcsclite.so.1 && \
+    cp /tmp/libpcsclite_1.9.9.so /usr/lib64/libpcsclite_real.so.1 && \
+    chmod 755 /usr/lib64/libpcsclite.so.1 /usr/lib64/libpcsclite_real.so.1 && \
     rm /tmp/libpcsclite_1.9.9.so && \
     ls -la /usr/lib64/libpcsclite*
 ENTRYPOINT /entrypoint.sh

@@ -2,7 +2,7 @@ services:
   pcscd:
     build:
       context: ${PCSC_SRC_DIR:-/home/ht/Downloads/osmo_remsim_pcsc}
-      dockerfile: pcscd/Dockerfile
+      dockerfile: /home/ht/docker/asterisk-docker/pcscd/Dockerfile
     image: pcscd-sysmocom
     restart: always
     volumes:
