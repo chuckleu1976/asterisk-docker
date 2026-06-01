@@ -7,11 +7,13 @@ Called by Asterisk extensions.conf on incoming SIP MESSAGE:
 
 Appends raw message to /logs/messages.txt
 Appends extracted OTP (if found) to /logs/otp_sms.txt
+Saves all SMS to /logs/sms.db (SQLite)
 """
 import sys
 import re
 import base64
 import os
+import sqlite3
 from datetime import datetime
 
 if len(sys.argv) < 3:
@@ -74,3 +76,23 @@ if otp:
     print(f"OTP extracted: {otp}")
 else:
     print("No OTP found in SMS body.")
+
+# --- Save to SQLite ---
+try:
+    db = sqlite3.connect("/logs/sms.db")
+    db.execute('''CREATE TABLE IF NOT EXISTS sms (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        sender      TEXT,
+        body        TEXT,
+        otp         TEXT,
+        received_at TEXT NOT NULL
+    )''')
+    db.execute(
+        'INSERT INTO sms (sender, body, otp, received_at) VALUES (?, ?, ?, ?)',
+        (sender, body, otp, timestamp)
+    )
+    db.commit()
+    db.close()
+    print(f"Saved to sms.db: from={sender} otp={otp}")
+except Exception as e:
+    print(f"SQLite error: {e}", file=sys.stderr)
