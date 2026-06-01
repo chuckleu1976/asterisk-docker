@@ -20,6 +20,7 @@ import re
 import sqlite3
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -370,6 +371,45 @@ def restart_instance(instance: int):
         print(f"  Error: {r.stderr.strip()}", file=sys.stderr)
 
 
+# ─── Watch loop ──────────────────────────────────────────────────────────────
+
+def watch_loop(interval: int):
+    """Poll both readers every `interval` seconds; reconfigure on ICCID change."""
+    # reader index -> last seen ICCID (None = empty/error)
+    last_iccid = {0: None, 1: None}
+    # Seed with current state so first poll doesn't trigger spurious restarts
+    print(f"[watch] Starting — polling every {interval}s. Press Ctrl+C to stop.")
+    for i in range(2):
+        try:
+            sim = read_sim(i)
+            last_iccid[i] = sim['iccid']
+            print(f"[watch] P{i}: initial ICCID={sim['iccid']} IMSI={sim['imsi']}")
+        except Exception:
+            print(f"[watch] P{i}: no card")
+
+    while True:
+        time.sleep(interval)
+        for i in range(2):
+            instance = i + 1
+            try:
+                sim = read_sim(i)
+                iccid = sim['iccid']
+            except Exception:
+                if last_iccid[i] is not None:
+                    print(f"[watch] P{i}: card removed")
+                    last_iccid[i] = None
+                continue
+
+            if iccid != last_iccid[i]:
+                ts = datetime.now().strftime('%H:%M:%S')
+                print(f"[{ts}] P{i}: ICCID changed "
+                      f"{last_iccid[i]} -> {iccid} — reconfiguring instance {instance}")
+                last_iccid[i] = iccid
+                db_save(i, sim)
+                if update_instance(instance, sim):
+                    restart_instance(instance)
+
+
 # ─── CLI ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -397,10 +437,18 @@ def main():
                     help='Auto-assign readers to instances (reader 0->1, reader 1->2)')
     ap.add_argument('--restart',  action='store_true',
                     help='Restart Docker container after updating config')
+    ap.add_argument('--watch',    action='store_true',
+                    help='Monitor readers and reconfigure automatically on SIM swap')
+    ap.add_argument('--interval', type=int, default=5, metavar='SEC',
+                    help='Polling interval for --watch in seconds (default: 5)')
     args = ap.parse_args()
 
     if args.list:
         list_readers()
+        return
+
+    if args.watch:
+        watch_loop(args.interval)
         return
 
     if args.auto:
