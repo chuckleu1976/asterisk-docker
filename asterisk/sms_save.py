@@ -71,11 +71,6 @@ if otp:
 else:
     print("No OTP found in SMS body.")
 
-# --- Skip delivery reports (empty body = SMS-DELIVER-REPORT from SMS-SC) ---
-if not body.strip():
-    print("Empty body (delivery report) — skipping save.")
-    sys.exit(0)
-
 # --- Save to shared SQLite (WAL mode for safe concurrent writes) ---
 try:
     db = sqlite3.connect(DB_PATH, timeout=10)
