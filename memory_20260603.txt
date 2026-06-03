@@ -1,0 +1,83 @@
+Session Memory - 2026-06-03
+
+Overview
+- Prepared backups and Pi migration assets.
+- Verified USB copy to /media/ht/D6DE-1EA2.
+- Investigated extension 6000 bad gateway on instance 1.
+- Stopped all containers at session end.
+
+What Was Completed
+1. Backup safety
+- Git tag created: backup/pre-remsim-rename
+- Local backup folder created: _backup/
+- Backed up files:
+  - compose.yaml
+  - asterisk/Dockerfile
+  - asterisk/Dockerfile.patch
+  - pcscd/Dockerfile
+  - pcscd/entrypoint.sh
+
+2. Pi migration backup sync
+- Confirmed backup root is /home/ht/bakcup (not bakcap).
+- Synced project to /home/ht/bakcup/docker/asterisk-docker/.
+- Synced config mirror to /home/ht/bakcup/config/.
+- Updated utility scripts in backup:
+  - /home/ht/bakcup/docker/sim_config.py
+  - /home/ht/bakcup/docker/db_query.py
+  - /home/ht/bakcup/docker/sms_save.py
+- Removed runtime artifact from backup:
+  - /home/ht/bakcup/docker/asterisk-docker/volte.transport
+
+3. Setup instructions for Pi
+- Created /home/ht/bakcup/pi_setup_plan.md.
+- Removed QEMU requirements per user preference.
+
+4. USB copy
+- Copied /home/ht/bakcup -> /media/ht/D6DE-1EA2/bakcup/.
+- Intentionally skipped docker-images-x86_64.tar.gz (not useful for Pi ARM64).
+
+5. Extension 6000 issue findings
+- Endpoint 6000 contact exists.
+- IMS registration on asterisk1 was rejected (401/403 flow).
+- Asterisk log showed: "Sim did not respond, authentication failed".
+- IPsec tunnel was ESTABLISHED (not the issue).
+- Reader check from asterisk container showed both readers with:
+  - No smart card inserted (0x8010000C)
+- Conclusion: bad gateway caused by SIM auth failure due to card not detected/inserted.
+
+6. Runtime state at end
+- All containers stopped cleanly:
+  - asterisk-docker-pcscd-1
+  - asterisk-docker-asterisk-1
+  - asterisk-docker-asterisk2-1
+
+Current Status
+- Containers are stopped.
+- Service rename pcscd -> remsim-client is NOT applied yet.
+- Pi migration payload and setup instructions are ready.
+
+Critical Rule
+- Never run: asterisk -rx "module reload res_pjsip.so"
+- Use restart or dialplan reload only.
+
+Next Session Resume Commands
+1) Start services
+cd /home/ht/docker/asterisk-docker
+sudo docker compose up -d
+
+2) Verify SIM card access from asterisk container
+sudo docker exec asterisk-docker-asterisk-1 python3 -c "from smartcard.System import readers
+r=readers(); print('Readers:',len(r))
+for i,rd in enumerate(r):
+  try:
+    c=rd.createConnection(); c.connect(); print(i, rd, 'OK')
+  except Exception as e:
+    print(i, rd, 'ERROR', e)"
+
+3) Verify IMS registration
+sudo docker exec asterisk-docker-asterisk-1 asterisk -rx "pjsip show registrations"
+
+4) Retest extension 6000 once registration is Registered.
+
+5) If requested, continue planned rename:
+- pcscd -> remsim-client in compose and Dockerfile references.
