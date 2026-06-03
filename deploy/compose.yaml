@@ -1,0 +1,39 @@
+services:
+  pcscd:
+    image: ghcr.io/chuckleu1976/pcscd-sysmocom:latest
+    restart: always
+    environment:
+      - LD_LIBRARY_PATH=/usr/lib64/remsim-libs
+    volumes:
+      - pcsc-sock:/run/pcscd
+      - ./remsim/libs:/usr/lib64/remsim-libs:ro
+      - ./remsim/serial:/usr/lib64/pcsc/drivers/serial:ro
+      - ./remsim/reader.conf.d:/etc/reader.conf.d:ro
+    tmpfs:
+      - /run
+    devices:
+      - /dev/bus/usb:/dev/bus/usb
+
+  asterisk:
+    image: ghcr.io/chuckleu1976/asterisk-vowifi-arm64:latest
+    restart: always
+    cap_add:
+      - CAP_NET_ADMIN
+    devices:
+      - /dev/net/tun
+    ports:
+      - 5060:5060/udp
+      - 10000-10009:10000-10009/udp
+    tmpfs:
+      - /run
+    volumes:
+      - pcsc-sock:/run/pcscd
+      - ./config/asterisk:/etc/asterisk:Z
+      - ./config/ami_usim.ini:/usr/local/etc/ami_usim.ini:Z,ro
+      - ./config/telegram_token:/usr/local/etc/telegram_token:Z,ro
+      - ./logs:/logs:Z
+    depends_on:
+      - pcscd
+
+volumes:
+  pcsc-sock:
