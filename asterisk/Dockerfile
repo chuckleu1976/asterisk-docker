@@ -21,7 +21,7 @@ COPY --from=source /home/asterisk-build/asterisk /home/asterisk-build/asterisk
 COPY rpack_fix.py /tmp/rpack_fix.py
 RUN cd asterisk && \
     make distclean || true && \
-    find . -name "*.o" -delete && 
+    find . -name "*.o" -delete && \
     sh bootstrap.sh && \
     ln -sf ../../../pjproject third-party/pjproject/source && \
     ./configure --enable-binary-modules && \
