@@ -1,22 +1,35 @@
 services:
   pcscd:
-    image: phcodercat/pcscd
+    build:
+      context: ${PCSC_SRC_DIR:-/root/osmo_remsim_pcsc}
+      dockerfile: ${PWD}/pcscd/Dockerfile
+    image: pcscd-sysmocom
     restart: always
+    environment:
+      - LD_LIBRARY_PATH=/usr/lib64/remsim-libs
     volumes:
       - pcsc-sock:/run/pcscd
+      - ./remsim/libs:/usr/lib64/remsim-libs:ro
+      - ./remsim/serial:/usr/lib64/pcsc/drivers/serial:ro
+      - ./remsim/reader.conf.d:/etc/reader.conf.d:ro
     tmpfs:
       - /run
     devices:
       - /dev/bus/usb:/dev/bus/usb
   asterisk:
-    image: phcodercat/asterisk-vowifi
+    image: asterisk-vowifi-patched
+    hostname: asterisk1
+    build:
+      context: ./asterisk
+      dockerfile: Dockerfile
+      network: host
     cap_add:
       - CAP_NET_ADMIN
     devices:
       - /dev/net/tun
     ports:
-      - 5061:5061
-      - 10000-11000:10000-11000/udp
+      - 5060:5060/udp
+      - 10000-10009:10000-10009/udp
     tmpfs:
       - /run
     volumes:
@@ -25,6 +38,34 @@ services:
       - ./config/1/ami_usim.ini:/usr/local/etc/ami_usim.ini:Z,ro
       - ./config/1/telegram_token:/usr/local/etc/telegram_token:Z,ro
       - ../logs/1:/logs:Z
+      - ./sim_inventory.db:/data/sim_inventory.db:Z
+      - pcsc-sock:/run/pcscd
+    pid: service:pcscd
+    depends_on: [pcscd]
+    restart: always
+
+  asterisk2:
+    image: asterisk-vowifi-patched
+    hostname: asterisk2
+    build:
+      context: ./asterisk
+      dockerfile: Dockerfile
+    cap_add:
+      - CAP_NET_ADMIN
+    devices:
+      - /dev/net/tun
+    ports:
+      - 5061:5060/udp              # Different external port
+      - 11001-11010:10000-10009/udp  # Different external RTP range, same internal range
+    tmpfs:
+      - /run
+    volumes:
+      - ./config/2/epdg.conf:/usr/local/etc/swanctl/conf.d/epdg.conf:Z,ro
+      - ./config/2/asterisk:/etc/asterisk:Z,ro
+      - ./config/2/ami_usim.ini:/usr/local/etc/ami_usim.ini:Z,ro
+      - ./config/2/telegram_token:/usr/local/etc/telegram_token:Z,ro
+      - ../logs/2:/logs:Z
+      - ./sim_inventory.db:/data/sim_inventory.db:Z
       - pcsc-sock:/run/pcscd
     pid: service:pcscd
     depends_on: [pcscd]

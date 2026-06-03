@@ -1,0 +1,22 @@
+# Thin layer on top of the base image: applies the RP-ACK / volte_send_rp_data
+# transport-selector fix so Asterisk reuses the established VoLTE TCP connection
+# instead of trying to bind a new socket (which fails with EADDRINUSE).
+FROM pcscd-sysmocom AS pcsc
+
+FROM phcodercat/asterisk-vowifi
+
+COPY rpack_fix.py /tmp/rpack_fix.py
+RUN python3 /tmp/rpack_fix.py && \
+    cd /home/asterisk-build/asterisk && \
+    make res -j$(nproc) && \
+    cp res/res_pjsip_messaging.so /usr/lib/asterisk/modules/ && \
+    rm /tmp/rpack_fix.py
+
+# Override system libpcsclite with 1.9.9-sysmocom (protocol 4:4, matches pcscd)
+COPY --from=pcsc /usr/lib64/libpcsclite.so.1.0.0 /tmp/libpcsclite_1.9.9.so
+RUN ls -la /tmp/libpcsclite_1.9.9.so && \
+    cp /tmp/libpcsclite_1.9.9.so /usr/lib64/libpcsclite.so.1 && \
+    cp /tmp/libpcsclite_1.9.9.so /usr/lib64/libpcsclite_real.so.1 && \
+    ldconfig && \
+    rm /tmp/libpcsclite_1.9.9.so && \
+    ls -la /usr/lib64/libpcsclite*
