@@ -12,6 +12,9 @@ config/2/
 remsim/libs/
 remsim/serial/
 
+# Local environment overrides (contains site-specific settings)
+.env
+
 # Build artifacts
 *.pyc
 __pycache__/

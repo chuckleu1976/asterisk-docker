@@ -41,7 +41,7 @@ RUN dnf -y install dbus-daemon libusb1 systemd-libs polkit && \
     rm -f /usr/sbin && mkdir -p /usr/sbin
 
 COPY --from=builder /install/ /
-RUN printf '#!/bin/sh\nrm -f /run/pcscd/pcscd.*\nmkdir /run/dbus\ndbus-daemon --system\n/usr/lib/polkit-1/polkitd &\npcscd -f\n' > /entrypoint.sh && \
+RUN printf '#!/bin/sh\nrm -f /run/pcscd/pcscd.*\nmkdir /run/dbus\ndbus-daemon --system\n/usr/lib/polkit-1/polkitd &\n\nif [ "${SIM_MODE:-remote}" = "local" ]; then\n    mkdir -p /tmp/empty-reader-conf\n    exec pcscd -f --reader-conf-dir /tmp/empty-reader-conf\nelse\n    exec pcscd -f\nfi\n' > /entrypoint.sh && \
     chmod +x /entrypoint.sh
 
 ENTRYPOINT ["/entrypoint.sh"]
