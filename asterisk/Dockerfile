@@ -21,11 +21,12 @@ COPY --from=source /home/asterisk-build/asterisk /home/asterisk-build/asterisk
 COPY rpack_fix.py /tmp/rpack_fix.py
 RUN cd asterisk && \
     make distclean || true && \
+    find . -name "*.o" -delete && 
     sh bootstrap.sh && \
     ln -sf ../../../pjproject third-party/pjproject/source && \
     ./configure --enable-binary-modules && \
     make menuselect/menuselect menuselect-tree menuselect.makeopts && \
-    ./menuselect/menuselect --enable codec_opus --disable BUILD_NATIVE && \
+    ./menuselect/menuselect --enable codec_opus --disable BUILD_NATIVE --disable res_geolocation && \
     python3 /tmp/rpack_fix.py && \
     make -j$(nproc) && \
     make install
@@ -37,9 +38,9 @@ RUN git clone --depth=1 --branch jolly/work https://gitea.osmocom.org/ims-volte-
     ./configure --enable-eap-sim-pcsc --enable-p-cscf --enable-save-keys --enable-eap-sim --enable-eap-aka --enable-kernel-libipsec && \
     make -j$(nproc) && \
     make install
-RUN pip install panoramisk faster-whisper
-# Pre-download the model using huggingface_hub (avoids network access at runtime)
-RUN python3 -c "from huggingface_hub import snapshot_download; snapshot_download('Systran/faster-whisper-tiny')"
+RUN pip install panoramisk
+# faster-whisper / STT disabled — no network access to model hub at build time
+# To re-enable later: pip install faster-whisper && python3 -c "from huggingface_hub import snapshot_download; snapshot_download('Systran/faster-whisper-tiny')"
 COPY ami_usim.py /usr/local/bin/ami_usim.py
 COPY send_notification.py /usr/local/bin/send_notification.py
 COPY whisper_transcribe.py /usr/local/bin/whisper_transcribe.py

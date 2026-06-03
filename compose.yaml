@@ -2,11 +2,16 @@ services:
   pcscd:
     build:
       context: ${PCSC_SRC_DIR:-/home/ht/Downloads/osmo_remsim_pcsc}
-      dockerfile: /home/ht/docker/asterisk-docker/pcscd/Dockerfile
+      dockerfile: ${PWD}/pcscd/Dockerfile
     image: pcscd-sysmocom
     restart: always
+    environment:
+      - LD_LIBRARY_PATH=/usr/lib64/remsim-libs
     volumes:
       - pcsc-sock:/run/pcscd
+      - ./remsim/libs:/usr/lib64/remsim-libs:ro
+      - ./remsim/serial:/usr/lib64/pcsc/drivers/serial:ro
+      - ./remsim/reader.conf.d:/etc/reader.conf.d:ro
     tmpfs:
       - /run
     devices:
@@ -17,6 +22,7 @@ services:
     build:
       context: ./asterisk
       dockerfile: Dockerfile
+      network: host
     cap_add:
       - CAP_NET_ADMIN
     devices:
