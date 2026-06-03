@@ -1,5 +1,15 @@
+# ============================================================
+# VoWiFi Pi - Production Compose
+# SIM Modes:
+#   Remote remsim : docker compose --profile remote up -d
+#   Local USB SIM : docker compose --profile local  up -d
+# ============================================================
+
 services:
-  pcscd:
+
+  # --- pcscd: Remote SIM via osmo-remsim IFD handler ---
+  pcscd-remote:
+    profiles: [remote]
     image: ghcr.io/chuckleu1976/pcsc-sysmocom-arm64:latest
     restart: always
     environment:
@@ -14,7 +24,21 @@ services:
     devices:
       - /dev/bus/usb:/dev/bus/usb
 
-  asterisk:
+  # --- pcscd: Local USB SIM reader ---
+  pcscd-local:
+    profiles: [local]
+    image: ghcr.io/chuckleu1976/pcsc-sysmocom-arm64:latest
+    restart: always
+    volumes:
+      - pcsc-sock:/run/pcscd
+    tmpfs:
+      - /run
+    devices:
+      - /dev/bus/usb:/dev/bus/usb
+
+  # --- Asterisk: shared by both profiles ---
+  asterisk-remote:
+    profiles: [remote]
     image: ghcr.io/chuckleu1976/asterisk-vowifi-arm64:latest
     restart: always
     cap_add:
@@ -33,7 +57,29 @@ services:
       - ./config/telegram_token:/usr/local/etc/telegram_token:Z,ro
       - ./logs:/logs:Z
     depends_on:
-      - pcscd
+      - pcscd-remote
+
+  asterisk-local:
+    profiles: [local]
+    image: ghcr.io/chuckleu1976/asterisk-vowifi-arm64:latest
+    restart: always
+    cap_add:
+      - CAP_NET_ADMIN
+    devices:
+      - /dev/net/tun
+    ports:
+      - 5060:5060/udp
+      - 10000-10009:10000-10009/udp
+    tmpfs:
+      - /run
+    volumes:
+      - pcsc-sock:/run/pcscd
+      - ./config/asterisk:/etc/asterisk:Z
+      - ./config/ami_usim.ini:/usr/local/etc/ami_usim.ini:Z,ro
+      - ./config/telegram_token:/usr/local/etc/telegram_token:Z,ro
+      - ./logs:/logs:Z
+    depends_on:
+      - pcscd-local
 
 volumes:
   pcsc-sock:
