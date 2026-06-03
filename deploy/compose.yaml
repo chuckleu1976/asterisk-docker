@@ -1,6 +1,6 @@
 services:
   pcscd:
-    image: ghcr.io/chuckleu1976/pcscd-sysmocom:latest
+    image: ghcr.io/chuckleu1976/pcsc-sysmocom-arm64:latest
     restart: always
     environment:
       - LD_LIBRARY_PATH=/usr/lib64/remsim-libs
