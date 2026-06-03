@@ -3,7 +3,7 @@ services:
     build:
       context: ${PCSC_SRC_DIR:-/home/ht/Downloads/osmo_remsim_pcsc}
       dockerfile: ${PWD}/pcscd/Dockerfile
-    image: pcscd-sysmocom
+    image: ghcr.io/chuckleu1976/pcscd-sysmocom:latest
     restart: always
     environment:
       - LD_LIBRARY_PATH=/usr/lib64/remsim-libs
@@ -17,7 +17,7 @@ services:
     devices:
       - /dev/bus/usb:/dev/bus/usb
   asterisk:
-    image: asterisk-vowifi-patched
+    image: ghcr.io/chuckleu1976/asterisk-vowifi-patched:latest
     hostname: asterisk1
     build:
       context: ./asterisk
@@ -45,7 +45,7 @@ services:
     restart: always
 
   asterisk2:
-    image: asterisk-vowifi-patched
+    image: ghcr.io/chuckleu1976/asterisk-vowifi-patched:latest
     hostname: asterisk2
     build:
       context: ./asterisk
