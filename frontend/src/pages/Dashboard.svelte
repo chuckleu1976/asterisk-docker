@@ -9,6 +9,7 @@
   import Icon from "@iconify/svelte";
   import { currentContact } from "../stores/conversation";
   import { connectCallSSE, disconnectCallSSE } from "../stores/calls.js";
+  import { t } from "../js/i18n.js";
 
   let { onNavigate = () => {}, initialSimId = null } = $props();
 
@@ -83,6 +84,7 @@
       onConversationSelect={closeSidebar}
       onSimDashboardClick={onNavigate}
       onCallLogClick={handleCallLogClick}
+      filterSimId={initialSimId}
     />
   </div>
   
@@ -94,11 +96,11 @@
         onclick={toggleSidebar}
       >
         <Icon icon={isSidebarOpen ? "carbon:close" : "carbon:menu"} class="w-5 h-5" />
-        <span class="text-sm">{isSidebarOpen ? 'Close' : 'Conversations'}</span>
+        <span class="text-sm">{isSidebarOpen ? $t('close') : $t('conversations')}</span>
       </button>
       <div class="flex items-center gap-3">
         <p class="text-sm text-gray-700 dark:text-gray-200 truncate max-w-[140px]">
-          {$currentContact ? $currentContact.name : 'Messages'}
+          {$currentContact ? $currentContact.name : $t('messages')}
         </p>
         <button
           class="inline-flex items-center justify-center w-10 h-10 rounded-xl border border-gray-200 dark:border-zinc-700 text-slate-800 dark:text-gray-100 bg-white shadow-sm dark:bg-zinc-800 active:scale-[0.98] transition"

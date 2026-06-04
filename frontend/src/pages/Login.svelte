@@ -4,6 +4,7 @@
     import { fade, fly } from 'svelte/transition'; 
     import { quintOut } from 'svelte/easing';
     import { updateStorageValue } from '../js/storage';
+    import { t } from '../js/i18n.js';
 
     let username = "";
     let password = "";
@@ -27,7 +28,7 @@
 
     const handleLogin = async () => {
         if (!username || !password) {
-            error = "Username and password are required";
+            error = $t('login_err_required');
             return;
         }
 
@@ -58,17 +59,17 @@
                     break;
 
                 case 401:
-                    error = "Invalid credentials";
+                    error = $t('login_err_invalid');
                     break;
 
                 default:
-                    error = `Unexpected error: HTTP ${response.status}`;
+                    error = $t('login_err_unexpected', { status: response.status });
                     break;
             }
         } catch (err) {
             error = err.message.includes("Failed to fetch")
-                ? "Unable to connect to the server"
-                : "Authentication process failed";
+                ? $t('login_err_connect')
+                : $t('login_err_auth');
         } finally {
             isLoading = false;
         }
@@ -86,7 +87,7 @@
     </div>
     <div>
         <h1 class="text-lg font-semibold text-gray-900 dark:text-gray-100">SMS Gateway</h1>
-        <p class="text-xs text-gray-500 dark:text-gray-400">Secure messaging platform</p>
+        <p class="text-xs text-gray-500 dark:text-gray-400">{$t('app_tagline')}</p>
     </div>
 </div>
 
@@ -108,10 +109,10 @@
                     <Icon icon="carbon:user-avatar-filled" class="w-8 h-8 text-gray-100 dark:text-gray-900" />
                 </div>
                 <h2 class="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-gray-100">
-                    Welcome back
+                    {$t('login_welcome')}
                 </h2>
                 <p class="text-sm text-gray-500 dark:text-gray-400 mt-2">
-                    Sign in to continue to SMS Gateway
+                    {$t('login_subtitle')}
                 </p>
             </div>
 
@@ -134,7 +135,7 @@
                 <!-- Username Field -->
                 <div>
                     <label for="username" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                        Username
+                        {$t('login_username')}
                     </label>
                     <div class="relative">
                         <div class="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
@@ -145,7 +146,7 @@
                             name="login-username"
                             type="text"
                             bind:value={username}
-                            placeholder="Enter your username"
+                            placeholder={$t('login_username_ph')}
                             autocomplete="off"
                             autocapitalize="none"
                             spellcheck="false"
@@ -167,7 +168,7 @@
                 <!-- Password Field -->
                 <div>
                     <label for="password" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                        Password
+                        {$t('login_password')}
                     </label>
                     <div class="relative">
                         <div class="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
@@ -178,7 +179,7 @@
                             name="login-password"
                             type={showPassword ? "text" : "password"}
                             bind:value={password}
-                            placeholder="Enter your password"
+                            placeholder={$t('login_password_ph')}
                             autocomplete="new-password"
                             autocapitalize="none"
                             spellcheck="false"
@@ -216,7 +217,7 @@
                                    text-gray-600 focus:ring-gray-500 dark:focus:ring-gray-400
                                    bg-white dark:bg-zinc-900"
                         />
-                        <span class="text-sm text-gray-600 dark:text-gray-400">Remember me</span>
+                        <span class="text-sm text-gray-600 dark:text-gray-400">{$t('login_remember')}</span>
                     </label>
                 </div>
             </div>
@@ -235,10 +236,10 @@
             >
                 {#if isLoading}
                     <Icon icon="carbon:circle-dash" class="w-5 h-5 animate-spin" />
-                    <span>Signing in...</span>
+                    <span>{$t('login_signing_in')}</span>
                 {:else}
                     <Icon icon="carbon:login" class="w-5 h-5" />
-                    <span>Sign in</span>
+                    <span>{$t('login_sign_in')}</span>
                 {/if}
             </button>
         </div>

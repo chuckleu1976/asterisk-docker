@@ -1,8 +1,11 @@
 <!-- frontend/src/lib/components/simcard/SignalStrengthIndicator.svelte -->
 <script>
     import Icon from "@iconify/svelte";
+    import { t } from "../../js/i18n.js";
     
     let { rssi = 99 } = $props();
+    
+    const sigKeys = ['sig_no_signal', 'sig_very_poor', 'sig_poor', 'sig_moderate', 'sig_good', 'sig_excellent'];
     
     function getSignalBars(rssi) {
         if (rssi === 99 || rssi < 2) return 0;
@@ -13,26 +16,14 @@
         return 1;
     }
     
-    function getSignalStrengthLabel(bars) {
-        const signalLabels = [
-            "No Signal",
-            "Very Poor", 
-            "Poor",
-            "Moderate",
-            "Good",
-            "Excellent",
-        ];
-        return signalLabels[bars];
-    }
-    
     const bars = $derived(getSignalBars(rssi));
-    const label = $derived(getSignalStrengthLabel(bars));
+    const label = $derived($t(sigKeys[bars] ?? 'sig_no_signal'));
 </script>
 
 <div class="flex items-center">
     <Icon icon="mage:chart-up-b" class="w-5 h-5 mr-3 text-gray-500 dark:text-gray-400" />
     <div class="flex-grow">
-        <div class="text-xs text-gray-500 dark:text-gray-400">Signal Strength</div>
+        <div class="text-xs text-gray-500 dark:text-gray-400">{$t('signal_strength')}</div>
         <div class="flex items-center">
             <div class="text-sm font-medium mr-2 dark:text-gray-300">
                 {label}

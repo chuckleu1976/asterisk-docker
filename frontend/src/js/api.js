@@ -35,6 +35,16 @@ class ApiClient {
         };
 
         return FetchApi.get('/api/sms', params, undefined, { signal });
+    }
+
+    /**
+     * Get inbox (received) or sent messages as a flat list with contact_name resolved.
+     * @param {'inbox'|'sent'} direction
+     * @param {number} page
+     * @param {number} perPage
+     */
+    async getSmsByDirection(direction, page = 1, perPage = 100) {
+        return FetchApi.get('/api/sms', { direction, page, per_page: perPage });
     }    /**
      * Send an SMS
      * @param {string} simId - Modem ID

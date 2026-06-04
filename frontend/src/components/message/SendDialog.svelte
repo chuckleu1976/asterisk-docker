@@ -2,6 +2,7 @@
     import { fly, fade } from "svelte/transition";
     import { apiClient } from "../../js/api";
     import { simCards } from "../../stores/simcards";
+    import { t } from "../../js/i18n.js";
 
     // 组件状态
     let { value = $bindable() } = $props();
@@ -35,7 +36,7 @@
             await apiClient.sendSms(selectedSim, recipient, message);
             close();
         } catch (err) {
-            error = err.message || "发送失败，请稍后重试";
+            error = err.message || $t('err_send_failed');
         } finally {
             isLoading = false;
         }
@@ -44,9 +45,9 @@
     // 表单验证
     const validateForm = () => {
         error = "";
-        if (!selectedSim) error = "请选择SIM卡";
-        else if (!/^\d{7,15}$/.test(recipient)) error = "请输入有效的电话号码";
-        else if (!message.trim()) error = "请输入消息内容";
+        if (!selectedSim) error = $t('err_select_sim');
+        else if (!/^\d{7,15}$/.test(recipient)) error = $t('err_invalid_phone');
+        else if (!message.trim()) error = $t('err_empty_message');
         return !error;
     };
 
@@ -75,7 +76,7 @@
             <h2
                 class="mb-6 text-2xl font-semibold text-gray-800 dark:text-gray-100"
             >
-                发送新消息
+                {$t('send_new_message')}
             </h2>
 
             <!-- 错误提示 -->
@@ -90,12 +91,12 @@
                 <label
                     class="block mb-2 text-gray-700 dark:text-gray-300 font-medium"
                 >
-                    选择设备:
+                    {$t('select_device')}
                     <select
                         class="block w-full mt-2 px-3 py-2 rounded border border-gray-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition"
                         bind:value={selectedSim}
                     >
-                        <option value="" disabled>请选择SIM卡</option>
+                        <option value="" disabled>{$t('select_sim_ph')}</option>
                         {#each $simCards as simCard (simCard.id)}
                             <option value={simCard.id}>{simCard.alias || simCard.phone_number || simCard.id.slice(-8)}</option>
                         {/each}
@@ -107,11 +108,11 @@
                 <label
                     class="block mb-2 text-gray-700 dark:text-gray-300 font-medium"
                 >
-                    接收号码:
+                    {$t('recipient')}
                     <input
                         type="tel"
                         bind:value={recipient}
-                        placeholder="请输入电话号码"
+                        placeholder={$t('enter_phone')}
                         class="block w-full mt-2 px-3 py-2 rounded border border-gray-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition"
                     />
                 </label>
@@ -121,10 +122,10 @@
                 <label
                     class="block mb-2 text-gray-700 dark:text-gray-300 font-medium"
                 >
-                    消息内容:
+                    {$t('message_label')}
                     <textarea
                         bind:value={message}
-                        placeholder="请输入消息内容（最多500字）"
+                        placeholder={$t('enter_message')}
                         maxlength="500"
                         class="block w-full mt-2 px-3 py-2 rounded border border-gray-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition resize-y min-h-[120px]"
                     ></textarea>
@@ -138,14 +139,14 @@
                     onclick={close}
                     disabled={isLoading}
                     class="flex-1 px-4 py-2 rounded bg-gray-100 dark:bg-zinc-800 text-gray-700 dark:text-gray-300 font-medium hover:bg-gray-200 dark:hover:bg-zinc-700 transition disabled:opacity-70 disabled:cursor-not-allowed"
-                    >取消</button
+                    >{$t('cancel')}</button
                 >
                 <button
                     type="button"
                     onclick={handleSubmit}
                     disabled={isLoading}
                     class="flex-1 px-4 py-2 rounded bg-blue-600 text-white font-medium hover:bg-blue-700 transition disabled:opacity-70 disabled:cursor-not-allowed"
-                    >{isLoading ? "发送中..." : "发送消息"}</button
+                    >{isLoading ? $t('sending') : $t('send')}</button
                 >
             </div>
         </div>

@@ -9,6 +9,7 @@
     import SimCardBasicInfoSkeleton from "./SimCardBasicInfoSkeleton.svelte";
     import SimCardTechnicalInfoSkeleton from "./SimCardTechnicalInfoSkeleton.svelte";
     import EmptyState from "./EmptyState.svelte";
+    import { t } from "../../js/i18n.js";
 
     let {
         simCard = null,
@@ -131,7 +132,7 @@
                            hover:bg-gray-200 dark:hover:bg-zinc-700 hover:text-gray-800 dark:hover:text-gray-200
                            transition-colors duration-200 {isRefreshing ? 'cursor-not-allowed opacity-75' : ''}"
                     onclick={handleRefresh}
-                    title="Refresh SIM info"
+                    title={$t('refresh_sim_info')}
                     disabled={isRefreshing}
                 >
                     <Icon
@@ -177,8 +178,8 @@
             {:else}
                 <!-- Error state -->
                 <EmptyState
-                    title="No Data Available"
-                    description="Unable to load information for this SIM card."
+                    title={$t('no_data_available')}
+                    description={$t('no_data_description')}
                     showRetry={true}
                     onRetry={onRefresh}
                 />
@@ -187,7 +188,7 @@
     </div>
 {:else}
     <EmptyState
-        title="No SIM Cards Found"
-        description="No SIM cards are currently available."
+        title={$t('no_sim_cards')}
+        description={$t('no_sim_available')}
     />
 {/if}

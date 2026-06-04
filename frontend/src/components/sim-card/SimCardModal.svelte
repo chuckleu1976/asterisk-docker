@@ -7,6 +7,7 @@
     import Modal from "../common/Modal.svelte";
     import SimCardTabs from "./SimCardTabs.svelte";
     import SimCardTabContent from "./SimCardTabContent.svelte";
+    import { t } from "../../js/i18n.js";
 
     // Props
     let { isOpen = false, onClose = () => {} } = $props();
@@ -126,7 +127,7 @@
                 <Icon icon="carbon:sim-card" class="w-4 h-4 text-gray-100 dark:text-gray-900" />
             </div>
             <h2 class="text-xl font-semibold text-gray-800 dark:text-gray-100">
-                SIM Card Information
+                {$t('sim_card_information')}
             </h2>
         </div>
         <button

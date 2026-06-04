@@ -27,6 +27,19 @@ pub struct Sms {
     pub status: SmsStatus,
 }
 
+/// SMS row with contact name resolved — used for inbox/sent list view.
+#[derive(Debug, FromRow, Serialize)]
+pub struct SmsRow {
+    pub id: i64,
+    pub contact_id: String,
+    pub contact_name: String,
+    pub timestamp: NaiveDateTime,
+    pub message: String,
+    pub sim_id: String,
+    pub send: bool,
+    pub status: SmsStatus,
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq, sqlx::Type, Default)]
 #[repr(i32)]
 #[serde(into = "i32", from = "i32")]
@@ -376,6 +389,40 @@ impl Sms {
         let total = Sms::count_by_contact_id(contact_id).await?;
 
         Ok((sms_list, total))
+    }
+
+    /// Paginated inbox (send=false) or sent (send=true) view, with contact name resolved.
+    pub async fn paginate_by_direction(send: bool, page: u32, per_page: u32) -> Result<(Vec<SmsRow>, i64)> {
+        if page == 0 {
+            return Err(anyhow::anyhow!("Page number must be greater than 0"));
+        }
+        let offset = (page - 1) * per_page;
+        let pool = get_pool()?;
+
+        let rows = sqlx::query_as::<_, SmsRow>(
+            r#"
+            SELECT s.id, s.contact_id,
+                   COALESCE(c.name, s.contact_id) AS contact_name,
+                   s.timestamp, s.message, s.sim_id, s.send, s.status
+            FROM sms s
+            LEFT JOIN contacts c ON s.contact_id = c.id
+            WHERE s.send = ?
+            ORDER BY s.timestamp DESC, s.id DESC
+            LIMIT ? OFFSET ?
+            "#,
+        )
+        .bind(send)
+        .bind(per_page as i64)
+        .bind(offset as i64)
+        .fetch_all(pool)
+        .await?;
+
+        let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sms WHERE send = ?")
+            .bind(send)
+            .fetch_one(pool)
+            .await?;
+
+        Ok((rows, total))
     }
 
     pub async fn insert(&self) -> Result<i64> {

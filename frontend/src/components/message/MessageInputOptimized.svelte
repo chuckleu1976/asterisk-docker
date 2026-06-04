@@ -2,6 +2,7 @@
   import Icon from "@iconify/svelte";
   import SimSelector from "./SimSelector.svelte";
   import Modal from "../common/Modal.svelte";
+  import { t } from "../../js/i18n.js";
 
   let {
     sendMessageContent = $bindable(""),
@@ -52,7 +53,7 @@
     }
 
     if (!selectedSim) {
-      alert("Please select a SIM card first");
+      alert($t('select_sim_first'));
       return;
     }
 
@@ -102,8 +103,8 @@
             onkeydown={handleKeyDown}
             disabled={showNewMessage && !concatInputText.trim()}
             placeholder={showNewMessage && !concatInputText.trim()
-              ? "Enter contact first"
-              : "Type your message..."}
+              ? $t('enter_contact_first')
+              : $t('type_message')}
             class="w-full h-12 pl-11 pr-16 bg-white dark:bg-zinc-800 border {overLimit ? 'border-red-400 dark:border-red-500' : 'border-gray-300 dark:border-zinc-600'} rounded-lg text-sm text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 transition-all duration-200 outline-none focus:border-gray-500 dark:focus:border-zinc-500 hover:border-gray-400 dark:hover:border-zinc-600"
           />
           {#if charCount > 0}
@@ -150,17 +151,17 @@
           <Icon icon="carbon:send-alt" class="w-6 h-6 text-gray-100 dark:text-gray-900" />
         </div>
         <h3 class="text-xl font-semibold text-gray-900 dark:text-gray-100 mb-2">
-          Confirm Message
+          {$t('confirm_message')}
         </h3>
         <p class="text-sm text-gray-500 dark:text-gray-400">
-          Review message details before sending
+          {$t('confirm_subtitle')}
         </p>
       </div>
 
       <!-- SIM 卡信息 -->
       <div class="mb-6">
         <p class="text-xs text-gray-500 dark:text-gray-400 uppercase tracking-widest mb-3">
-          Sending From
+          {$t('sending_from')}
         </p>
         <div class="bg-gray-50 dark:bg-zinc-800/50 rounded-lg p-4 border border-gray-200 dark:border-zinc-700">
           <div class="flex items-center gap-3">
@@ -169,7 +170,7 @@
             </div>
             <div class="flex-1">
               <p class="text-sm font-medium text-gray-900 dark:text-gray-100">
-                {selectedSim ? selectedSim.alias : 'Not Selected'}
+                {selectedSim ? selectedSim.alias : $t('not_selected')}
               </p>
               <p class="text-xs text-gray-500 dark:text-gray-400 font-mono mt-0.5">
                 {selectedSim ? selectedSim.phone_number : '—'}
@@ -177,7 +178,7 @@
             </div>
             <div class="flex items-center gap-1.5">
               <div class="w-1.5 h-1.5 bg-green-500 rounded-full"></div>
-              <span class="text-xs text-gray-500 dark:text-gray-400">Active</span>
+              <span class="text-xs text-gray-500 dark:text-gray-400">{$t('active_label')}</span>
             </div>
           </div>
         </div>
@@ -188,10 +189,10 @@
         <div class="mb-6">
           <div class="flex items-center justify-between mb-3">
             <p class="text-xs text-gray-500 dark:text-gray-400 uppercase tracking-widest">
-              Message Content
+              {$t('message_content')}
             </p>
             <span class="text-xs font-mono {charCountColor}">
-              {charCount}/{UCS2_SINGLE_MAX}{segments > 1 ? ` · ${segments} SMS` : ''}
+              {charCount}/{UCS2_SINGLE_MAX}{segments > 1 ? ` · ${$t('sms_segments', { n: segments })}` : ''}
             </span>
           </div>
           <div class="bg-white dark:bg-zinc-900 rounded-lg p-4 border border-gray-200 dark:border-zinc-700 max-h-32 overflow-y-auto">
@@ -208,7 +209,7 @@
           <div class="flex items-center gap-2">
             <Icon icon="carbon:warning" class="w-4 h-4 text-amber-500 dark:text-amber-400 flex-shrink-0" />
             <p class="text-xs text-amber-700 dark:text-amber-300 leading-relaxed">
-              Message exceeds 70 characters — will be split into {segments} SMS segments. Carrier charges may apply per segment.
+              {$t('message_too_long', { n: segments })}
             </p>
           </div>
         </div>
@@ -217,7 +218,7 @@
         <div class="flex items-center gap-2">
           <Icon icon="carbon:information" class="w-4 h-4 text-gray-500 dark:text-gray-400 flex-shrink-0" />
           <p class="text-xs text-gray-600 dark:text-gray-400 leading-relaxed">
-            Standard SMS rates apply • Message sends immediately
+            {$t('sms_disclaimer')}
           </p>
         </div>
       </div>
@@ -228,14 +229,14 @@
           onclick={cancelSend}
           class="px-5 py-3 bg-white dark:bg-zinc-800 text-gray-700 dark:text-gray-300 font-medium text-sm rounded-lg border border-gray-300 dark:border-zinc-600 transition-all duration-200 hover:bg-gray-50 dark:hover:bg-zinc-700 hover:border-gray-400 dark:hover:border-zinc-500"
         >
-          Cancel
+          {$t('cancel')}
         </button>
         <button
           onclick={confirmSend}
           class="px-5 py-3 bg-gray-800 dark:bg-gray-100 text-gray-100 dark:text-gray-900 font-medium text-sm rounded-lg transition-all duration-200 hover:bg-gray-700 dark:hover:bg-gray-200 active:scale-[0.98] flex items-center justify-center gap-2"
         >
           <Icon icon="carbon:send-filled" class="w-4 h-4" />
-          <span>Send</span>
+          <span>{$t('send')}</span>
         </button>
       </div>
     </div>

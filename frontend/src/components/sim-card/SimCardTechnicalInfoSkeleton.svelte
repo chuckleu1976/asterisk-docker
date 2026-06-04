@@ -1,7 +1,10 @@
 <!-- frontend/src/lib/components/simcard/SimCardTechnicalInfoSkeleton.svelte -->
+<script>
+    import { t } from "../../js/i18n.js";
+</script>
 <div class="space-y-4">
     <h4 class="text-md font-semibold text-gray-700 dark:text-gray-300 border-b border-gray-200 dark:border-gray-600 pb-2">
-        Technical Details
+        {$t('technical_details')}
     </h4>
     
     <!-- Signal Strength Skeleton -->
@@ -24,7 +27,7 @@
     
     <!-- Enhanced Information Section -->
     <div class="border-t border-gray-200 dark:border-gray-700 pt-4 space-y-3">
-        <h5 class="text-sm font-medium text-gray-600 dark:text-gray-400">Enhanced Information</h5>
+        <h5 class="text-sm font-medium text-gray-600 dark:text-gray-400">{$t('enhanced_information')}</h5>
         
         <!-- SMS Center Skeleton -->
         <div class="flex items-center text-sm">

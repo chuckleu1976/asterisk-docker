@@ -326,7 +326,8 @@ impl Modem {
     }
 
     /// Send one AT command and await its response.
-    /// Holds the write lock for the entire command-response cycle to prevent interleaving.
+    /// Write lock is released immediately after flushing, before waiting for the response,
+    /// so reconnect logic is never blocked by a pending command timeout.
     async fn execute_command_impl(
         write_half: &Arc<Mutex<Option<WriteHalf<SerialStream>>>>,
         reader_state: &Arc<Mutex<ReaderState>>,
@@ -335,14 +336,16 @@ impl Modem {
         timeout_dur: Duration,
     ) -> io::Result<String> {
         let (tx, rx) = tokio::sync::oneshot::channel::<io::Result<String>>();
-        let mut write_guard = write_half.lock().await;
-        let write = write_guard.as_mut().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::NotConnected, "Serial port not connected")
-        })?;
-        reader_state.lock().await.response_tx = Some(tx);
-        debug!("TX [{}]: {}", name, Self::format_log(command));
-        write.write_all(command.as_bytes()).await?;
-        write.flush().await?;
+        {
+            let mut write_guard = write_half.lock().await;
+            let write = write_guard.as_mut().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::NotConnected, "Serial port not connected")
+            })?;
+            reader_state.lock().await.response_tx = Some(tx);
+            debug!("TX [{}]: {}", name, Self::format_log(command));
+            write.write_all(command.as_bytes()).await?;
+            write.flush().await?;
+        } // write_guard drops here, releasing the write lock before waiting for response
         match tokio::time::timeout(timeout_dur, rx).await {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => Err(io::Error::new(io::ErrorKind::BrokenPipe, "Reader channel closed")),
@@ -354,7 +357,6 @@ impl Modem {
                 ))
             }
         }
-        // write_guard drops here, releasing the write lock
     }
 
     /// Forward any call-state URC lines embedded inside a command response buffer.

@@ -2,8 +2,9 @@
   import Icon from "@iconify/svelte";
   import ConversationList from "../conversation/ConversationList.svelte";
   import { incomingCall, activeCall } from "../../stores/calls.js";
+  import { t, toggleLang, lang } from "../../js/i18n.js";
 
-  let { onSimCardClick = () => {}, onLogoutClick = () => {}, onConversationSelect = () => {}, onSimDashboardClick = () => {}, onCallLogClick = () => {} } = $props();
+  let { onSimCardClick = () => {}, onLogoutClick = () => {}, onConversationSelect = () => {}, onSimDashboardClick = () => {}, onCallLogClick = () => {}, filterSimId = null } = $props();
 
   let hasCallActivity = $derived($incomingCall !== null || $activeCall !== null);
 </script>
@@ -12,7 +13,7 @@
   class="h-full lg:h-dvh w-full lg:w-80 bg-white dark:bg-zinc-900 p-4 border-r border-gray-200 dark:border-zinc-700 flex flex-col"
 >
   <div class="flex-1 overflow-hidden">
-    <ConversationList onConversationSelect={onConversationSelect} />
+    <ConversationList onConversationSelect={onConversationSelect} {filterSimId} />
   </div>
 
   <!-- Divider -->
@@ -34,10 +35,10 @@
       </div>
       <div class="flex flex-col items-start flex-1">
         <span class="text-xs font-semibold text-gray-800 dark:text-gray-100 leading-tight">
-          SIM Dashboard
+          {$t('sim_dashboard')}
         </span>
         <span class="text-[10px] text-gray-500 dark:text-gray-400 leading-tight">
-          View all SIMs
+          {$t('sim_dashboard_sub')}
         </span>
       </div>
       <Icon
@@ -61,10 +62,10 @@
       </div>
       <div class="flex flex-col items-start flex-1">
         <span class="text-xs font-semibold text-gray-800 dark:text-gray-100 leading-tight">
-          Call Log
+          {$t('call_log')}
         </span>
         <span class="text-[10px] text-gray-500 dark:text-gray-400 leading-tight">
-          {hasCallActivity ? 'Call in progress' : 'History & dial'}
+          {hasCallActivity ? $t('call_in_progress') : $t('call_log_sub_history')}
         </span>
       </div>
       <Icon
@@ -88,10 +89,10 @@
       </div>
       <div class="flex flex-col items-start flex-1">
         <span class="text-xs font-semibold text-gray-800 dark:text-gray-100 leading-tight">
-          SIM Cards
+          {$t('sim_cards')}
         </span>
         <span class="text-[10px] text-gray-500 dark:text-gray-400 leading-tight">
-          Manage Device Info
+          {$t('sim_cards_sub')}
         </span>
       </div>
       <Icon
@@ -115,12 +116,37 @@
       </div>
       <div class="flex flex-col items-start flex-1">
         <span class="text-xs font-semibold text-gray-800 dark:text-gray-100 leading-tight">
-          Logout
+          {$t('logout')}
         </span>
         <span class="text-[10px] text-gray-500 dark:text-gray-400 leading-tight">
-          Safe Logout
+          {$t('logout_sub')}
         </span>
       </div>
+    </button>
+
+    <!-- Language Toggle -->
+    <button
+      class="group w-full flex items-center gap-2 p-2 rounded-lg border border-gray-200 dark:border-zinc-700
+             bg-white dark:bg-zinc-900 hover:bg-gray-50 dark:hover:bg-zinc-800
+             transition-all duration-200 active:scale-[0.98]"
+      onclick={toggleLang}
+      title={$t('lang_tooltip')}
+    >
+      <div class="w-8 h-8 bg-gray-100 dark:bg-zinc-800 rounded-md flex items-center justify-center border border-gray-200 dark:border-zinc-700">
+        <Icon icon="carbon:language" class="w-4 h-4 text-gray-600 dark:text-gray-400" />
+      </div>
+      <div class="flex flex-col items-start flex-1">
+        <span class="text-xs font-semibold text-gray-800 dark:text-gray-100 leading-tight">
+          {$lang === 'zh' ? 'English' : '中文'}
+        </span>
+        <span class="text-[10px] text-gray-500 dark:text-gray-400 leading-tight">
+          {$t('lang_tooltip')}
+        </span>
+      </div>
+      <Icon
+        icon="carbon:chevron-right"
+        class="w-4 h-4 text-gray-400 dark:text-gray-500 group-hover:text-gray-600 dark:group-hover:text-gray-300 transition-colors"
+      />
       <Icon
         icon="carbon:chevron-right"
         class="w-4 h-4 text-gray-400 dark:text-gray-500 group-hover:text-gray-600 dark:group-hover:text-gray-300 transition-colors"

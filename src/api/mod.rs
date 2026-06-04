@@ -206,9 +206,29 @@ pub struct SmsQuery {
     per_page: u32,
     #[serde(default)]
     contact_id: Option<String>,
+    /// "inbox" = received, "sent" = sent. Returns SmsRow with contact_name resolved.
+    #[serde(default)]
+    direction: Option<String>,
 }
 
 async fn get_sms_paginated(Query(query): Query<SmsQuery>) -> Response {
+    // Direction-filtered view (inbox / sent) — returns SmsRow (includes contact_name)
+    if let Some(ref dir) = query.direction {
+        let send = dir.as_str() == "sent";
+        return match crate::db::Sms::paginate_by_direction(send, query.page, query.per_page).await {
+            Ok((rows, total)) => Json(json!({
+                "data": rows,
+                "total": total,
+                "page": query.page,
+                "per_page": query.per_page,
+            })).into_response(),
+            Err(e) => {
+                error!("{}", e);
+                (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to get SMS: {}", e)).into_response()
+            }
+        };
+    }
+
     let result = match &query.contact_id {
         Some(contact_id) => {
             Sms::paginate_by_contact_id(contact_id, query.page, query.per_page).await

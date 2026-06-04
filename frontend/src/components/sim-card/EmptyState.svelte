@@ -1,10 +1,11 @@
 <!-- frontend/src/lib/components/simcard/EmptyState.svelte -->
 <script>
     import Icon from "@iconify/svelte";
+    import { t } from "../../js/i18n.js";
 
     let {
         icon = "mage:memory-card",
-        title = "No Data",
+        title = "",
         description = "",
         showRetry = false,
         onRetry = () => {},
@@ -28,7 +29,7 @@
                 onRetry();
             }}
         >
-            Try Again
+            {$t('try_again')}
         </button>
     {/if}
 </div>

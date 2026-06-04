@@ -76,7 +76,7 @@ async fn main() {
     let sse_manager = Arc::new(api::SseManager::new());
 
     let transcribe_cfg = TranscribeConfig::from_settings(&config.settings);
-    modem_manager.start_urc_handlers(sse_manager.clone(), transcribe_cfg).await;
+    modem_manager.start_urc_handlers(sse_manager.clone(), transcribe_cfg.clone()).await;
 
     let webhook_manager = match config.settings.webhooks.clone() {
         Some(cfgs) => Some(webhook::start_webhook_worker_with_concurrency(
@@ -106,6 +106,7 @@ async fn main() {
         sms_storage_map,
         sse_manager.clone(),
         webhook_manager.clone(),
+        transcribe_cfg,
     ));
 
     if let Ok(_) = api::run_api(
@@ -144,11 +145,12 @@ async fn recheck_fallback_worker(
     sms_storage_map: std::collections::HashMap<String, Option<crate::config::SmsStorage>>,
     sse_manager: Arc<SseManager>,
     webhook_manager: Option<webhook::WebhookManager>,
+    transcribe_cfg: Option<Arc<modem::manager::TranscribeConfig>>,
 ) {
     loop {
         tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
         modem_manager
-            .recheck_fallback_modems(&sms_storage_map, sse_manager.clone(), webhook_manager.clone())
+            .recheck_fallback_modems(&sms_storage_map, sse_manager.clone(), webhook_manager.clone(), transcribe_cfg.clone())
             .await;
     }
 }

@@ -2,6 +2,7 @@
   import { fly } from 'svelte/transition';
   import Icon from '@iconify/svelte';
   import { incomingCall, activeCall, callActions } from '../../stores/calls.js';
+  import { t } from '../../js/i18n.js';
 
   let call = $derived($incomingCall);
   let active = $derived($activeCall);
@@ -28,15 +29,13 @@
     finally { busy = false; }
   }
 
-  function formatPhone(phone) {
-    return phone || 'Unknown number';
-  }
+  let statusText = $derived(
+    call ? $t('incoming_call') :
+    active?.direction === 'outbound' ? $t('calling') :
+    $t('call_in_progress_banner')
+  );
 
-  function statusLabel() {
-    if (call) return 'Incoming call';
-    if (active?.direction === 'outbound') return 'Calling…';
-    return 'Call in progress';
-  }
+  let phoneText = $derived(call?.phone ?? active?.phone ?? $t('unknown_number'));
 </script>
 
 {#if show}
@@ -57,8 +56,8 @@
 
       <!-- Info -->
       <div class="flex-1 min-w-0">
-        <p class="text-xs text-zinc-400 leading-none mb-0.5">{statusLabel()}</p>
-        <p class="font-semibold truncate leading-snug">{formatPhone(call?.phone ?? active?.phone)}</p>
+        <p class="text-xs text-zinc-400 leading-none mb-0.5">{statusText}</p>
+        <p class="font-semibold truncate leading-snug">{phoneText}</p>
         {#if call?.sim_id || active?.sim_id}
           <p class="text-xs text-zinc-500 truncate">{call?.sim_id ?? active?.sim_id}</p>
         {/if}

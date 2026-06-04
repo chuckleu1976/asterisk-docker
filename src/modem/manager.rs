@@ -293,6 +293,7 @@ impl ModemManager {
         sms_storage_map: &std::collections::HashMap<String, Option<crate::config::SmsStorage>>,
         sse_manager: Arc<SseManager>,
         webhook_manager: Option<webhook::WebhookManager>,
+        transcribe_cfg: Option<Arc<TranscribeConfig>>,
     ) {
         // ── Demotion: parallel AT+CCID on all real-ICCID modems ──────────────
         let active_entries: Vec<(String, Arc<Modem>)> = {
@@ -386,11 +387,21 @@ impl ModemManager {
                 if let Some(modem) = promoted_modem {
                     let sse = sse_manager.clone();
                     let wh = webhook_manager.clone();
+                    let modem_sms = modem.clone();
+                    let com_port_sms = com_port.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = modem.read_sms_async_insert(SmsType::All, sse, wh).await {
-                            log::warn!("Failed to read SMS after SIM swap on {}: {}", com_port, e);
+                        if let Err(e) = modem_sms.read_sms_async_insert(SmsType::All, sse, wh).await {
+                            log::warn!("Failed to read SMS after SIM swap on {}: {}", com_port_sms, e);
                         }
                     });
+                    // Spawn a URC handler for the newly promoted modem so it can
+                    // receive RING / NO CARRIER events on this line going forward.
+                    tokio::spawn(Self::run_urc_handler(
+                        iccid.clone(),
+                        modem,
+                        sse_manager.clone(),
+                        transcribe_cfg.clone(),
+                    ));
                 }
             }
         }

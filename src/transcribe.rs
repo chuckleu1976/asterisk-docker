@@ -1,6 +1,7 @@
 use anyhow::{bail, Context, Result};
 use log::{debug, error};
 use std::path::PathBuf;
+use std::time::Duration;
 use tokio::process::Command;
 use uuid::Uuid;
 
@@ -34,7 +35,7 @@ pub async fn transcribe(
         .context("failed to write temp AMR file")?;
 
     // ── Step 2: ffmpeg AMR → 16 kHz mono WAV ─────────────────────────────────
-    let ffmpeg_status = Command::new(ffmpeg_exe)
+    let ffmpeg_child = Command::new(ffmpeg_exe)
         .args([
             "-y",               // overwrite output without asking
             "-i", amr_path.to_str().unwrap(),
@@ -42,12 +43,27 @@ pub async fn transcribe(
             "-ac", "1",         // mono
             wav_path.to_str().unwrap(),
         ])
-        .output()
-        .await
+        .kill_on_drop(true)
+        .spawn()
         .context("failed to launch ffmpeg (is it installed and on PATH?)")?;
 
-    if !ffmpeg_status.status.success() {
-        let stderr = String::from_utf8_lossy(&ffmpeg_status.stderr);
+    let ffmpeg_out = match tokio::time::timeout(
+        Duration::from_secs(60),
+        ffmpeg_child.wait_with_output(),
+    ).await {
+        Ok(Ok(out)) => out,
+        Ok(Err(e)) => {
+            cleanup(&[&amr_path, &wav_path, &txt_path]).await;
+            bail!("ffmpeg error: {}", e);
+        }
+        Err(_) => {
+            cleanup(&[&amr_path, &wav_path, &txt_path]).await;
+            bail!("ffmpeg timed out after 60s");
+        }
+    };
+
+    if !ffmpeg_out.status.success() {
+        let stderr = String::from_utf8_lossy(&ffmpeg_out.stderr);
         cleanup(&[&amr_path, &wav_path, &txt_path]).await;
         bail!("ffmpeg failed: {}", stderr.trim());
     }
@@ -55,7 +71,7 @@ pub async fn transcribe(
     debug!("transcribe: ffmpeg ok, wav={}", wav_path.display());
 
     // ── Step 3: whisper-cli transcription ─────────────────────────────────────
-    let whisper_status = Command::new(whisper_exe)
+    let whisper_child = Command::new(whisper_exe)
         .args([
             "-m", whisper_model,
             "-l", "en",         // English only
@@ -64,12 +80,27 @@ pub async fn transcribe(
             "-nt",              // no timestamps in output
             "-of", txt_path.with_extension("").to_str().unwrap(), // output path without .txt ext
         ])
-        .output()
-        .await
+        .kill_on_drop(true)
+        .spawn()
         .context("failed to launch whisper-cli (is it installed?)")?;
 
-    if !whisper_status.status.success() {
-        let stderr = String::from_utf8_lossy(&whisper_status.stderr);
+    let whisper_out = match tokio::time::timeout(
+        Duration::from_secs(120),
+        whisper_child.wait_with_output(),
+    ).await {
+        Ok(Ok(out)) => out,
+        Ok(Err(e)) => {
+            cleanup(&[&amr_path, &wav_path, &txt_path]).await;
+            bail!("whisper-cli error: {}", e);
+        }
+        Err(_) => {
+            cleanup(&[&amr_path, &wav_path, &txt_path]).await;
+            bail!("whisper-cli timed out after 120s");
+        }
+    };
+
+    if !whisper_out.status.success() {
+        let stderr = String::from_utf8_lossy(&whisper_out.stderr);
         cleanup(&[&amr_path, &wav_path, &txt_path]).await;
         bail!("whisper-cli failed: {}", stderr.trim());
     }

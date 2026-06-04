@@ -39,7 +39,7 @@
             navigator.clipboard.writeText('${code}');
             const toast = document.createElement('div');
             toast.className = 'fixed bottom-24 left-1/2 transform -translate-x-1/2 bg-gray-800 dark:bg-zinc-700 text-gray-100 dark:text-gray-200 px-4 py-2 rounded-lg text-sm opacity-0 transition-opacity duration-300 shadow-lg';
-            toast.textContent = '验证码已复制';
+            toast.textContent = localStorage.getItem('lang') === 'zh' ? '验证码已复制' : 'Code copied';
             document.body.appendChild(toast);
             requestAnimationFrame(() => toast.style.opacity = '1');
             setTimeout(() => {

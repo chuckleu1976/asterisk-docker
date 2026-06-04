@@ -1,5 +1,6 @@
 <script>
   import { currentContact, conversationLoading } from "../../stores/conversation";
+  import { t } from "../../js/i18n.js";
 
   let {
     showNewMessage = false,
@@ -36,7 +37,7 @@
   class:dark:text-gray-200={showNewMessage}
   class:dark:text-gray-400={!showNewMessage}
 >
-  收件人:
+  {$t('to_label')}
   {#if !$conversationLoading}
     {#if showNewMessage}
       <input

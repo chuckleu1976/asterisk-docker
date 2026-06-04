@@ -5,6 +5,7 @@
   import { simCards } from '../../stores/simcards.js';
   import { formatDate } from '../../js/dateFormat.js';
   import { apiClient } from '../../js/api.js';
+  import { t } from '../../js/i18n.js';
 
   /** @type {string|null} */
   let selectedSimId = $state(null);
@@ -79,17 +80,17 @@
 <div class="flex flex-col h-full bg-white dark:bg-zinc-900 overflow-hidden">
   <!-- Header -->
   <div class="px-4 py-3 border-b border-gray-200/70 dark:border-zinc-800 shrink-0">
-    <h2 class="text-base font-semibold text-gray-900 dark:text-white">Call Log</h2>
+    <h2 class="text-base font-semibold text-gray-900 dark:text-white">{$t('call_log_title')}</h2>
     <p class="text-xs text-gray-500 dark:text-zinc-500 mt-0.5">
       SSE: <span class={$callSseConnected ? 'text-green-500' : 'text-red-400'}>
-        {$callSseConnected ? 'connected' : 'disconnected'}
+        {$callSseConnected ? $t('sse_connected') : $t('sse_disconnected')}
       </span>
     </p>
   </div>
 
   <!-- Make a call -->
   <div class="px-4 py-3 border-b border-gray-200/70 dark:border-zinc-800 shrink-0">
-    <p class="text-xs font-medium text-gray-500 dark:text-zinc-400 mb-2 uppercase tracking-wide">Make a call</p>
+    <p class="text-xs font-medium text-gray-500 dark:text-zinc-400 mb-2 uppercase tracking-wide">{$t('make_a_call')}</p>
     <div class="flex gap-2 items-center">
       <select
         bind:value={makeCallSimId}
@@ -101,7 +102,7 @@
       </select>
       <input
         type="tel"
-        placeholder="Phone number"
+        placeholder={$t('phone_number_ph')}
         bind:value={makeCallPhone}
         onkeydown={(e) => e.key === 'Enter' && handleMakeCall()}
         class="flex-1 text-sm rounded-lg border border-gray-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-gray-800 dark:text-gray-100 px-3 py-1.5 outline-none focus:ring-2 focus:ring-green-500/50"
@@ -125,7 +126,7 @@
     {#if log.length === 0}
       <div class="flex flex-col items-center justify-center h-full gap-2 text-zinc-400">
         <Icon icon="carbon:phone-off" class="w-10 h-10 opacity-30" />
-        <p class="text-sm">No calls yet</p>
+        <p class="text-sm">{$t('no_calls')}</p>
       </div>
     {:else}
       {#each log as call (call.id)}
@@ -141,7 +142,7 @@
           <!-- Info -->
           <div class="flex-1 min-w-0">
             <p class="text-sm font-medium text-gray-900 dark:text-white truncate">
-              {call.phone ?? 'Unknown'}
+              {call.phone ?? $t('unknown')}
             </p>
             <p class="text-xs text-gray-500 dark:text-zinc-500 truncate">
               {call.sim_id.slice(0, 12)}… · {call.status}
