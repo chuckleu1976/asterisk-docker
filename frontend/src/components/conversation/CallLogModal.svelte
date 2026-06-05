@@ -3,7 +3,7 @@
   import CallLog from './CallLog.svelte';
   import Icon from '@iconify/svelte';
 
-  let { isOpen = false, onClose = () => {} } = $props();
+  let { isOpen = false, onClose = () => {}, filterSimId = null } = $props();
 </script>
 
 <Modal {isOpen} {onClose} maxWidth="max-w-lg">
@@ -25,7 +25,7 @@
 
     <!-- Call log content -->
     <div class="flex-1 overflow-hidden">
-      <CallLog />
+      <CallLog {filterSimId} />
     </div>
   </div>
 </Modal>

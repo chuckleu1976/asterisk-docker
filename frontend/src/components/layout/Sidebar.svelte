@@ -2,7 +2,7 @@
   import Icon from "@iconify/svelte";
   import ConversationList from "../conversation/ConversationList.svelte";
   import { incomingCall, activeCall } from "../../stores/calls.js";
-  import { t, toggleLang, lang } from "../../js/i18n.js";
+  import { t } from "../../js/i18n.js";
 
   let { onSimCardClick = () => {}, onLogoutClick = () => {}, onConversationSelect = () => {}, onSimDashboardClick = () => {}, onCallLogClick = () => {}, filterSimId = null } = $props();
 
@@ -124,33 +124,5 @@
       </div>
     </button>
 
-    <!-- Language Toggle -->
-    <button
-      class="group w-full flex items-center gap-2 p-2 rounded-lg border border-gray-200 dark:border-zinc-700
-             bg-white dark:bg-zinc-900 hover:bg-gray-50 dark:hover:bg-zinc-800
-             transition-all duration-200 active:scale-[0.98]"
-      onclick={toggleLang}
-      title={$t('lang_tooltip')}
-    >
-      <div class="w-8 h-8 bg-gray-100 dark:bg-zinc-800 rounded-md flex items-center justify-center border border-gray-200 dark:border-zinc-700">
-        <Icon icon="carbon:language" class="w-4 h-4 text-gray-600 dark:text-gray-400" />
-      </div>
-      <div class="flex flex-col items-start flex-1">
-        <span class="text-xs font-semibold text-gray-800 dark:text-gray-100 leading-tight">
-          {$lang === 'zh' ? 'English' : '中文'}
-        </span>
-        <span class="text-[10px] text-gray-500 dark:text-gray-400 leading-tight">
-          {$t('lang_tooltip')}
-        </span>
-      </div>
-      <Icon
-        icon="carbon:chevron-right"
-        class="w-4 h-4 text-gray-400 dark:text-gray-500 group-hover:text-gray-600 dark:group-hover:text-gray-300 transition-colors"
-      />
-      <Icon
-        icon="carbon:chevron-right"
-        class="w-4 h-4 text-gray-400 dark:text-gray-500 group-hover:text-gray-600 dark:group-hover:text-gray-300 transition-colors"
-      />
-    </button>
   </div>
 </div>

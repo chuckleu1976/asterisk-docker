@@ -10,6 +10,35 @@
   // 'sim' | 'messages'
   let currentPage = $state('sim');
   let initialSimId = $state(null);
+  let openCallLogOnEnter = $state(false);
+  let openSimOnEnter = $state(false);
+
+  function openMessages(simId) {
+    initialSimId = simId;
+    openCallLogOnEnter = false;
+    openSimOnEnter = false;
+    currentPage = 'messages';
+  }
+
+  function openCallLog(simId) {
+    initialSimId = simId;
+    openCallLogOnEnter = true;
+    openSimOnEnter = false;
+    currentPage = 'messages';
+  }
+
+  function openSim(simId) {
+    initialSimId = simId;
+    openCallLogOnEnter = false;
+    openSimOnEnter = true;
+    currentPage = 'messages';
+  }
+
+  function backToSimDashboard() {
+    openCallLogOnEnter = false;
+    openSimOnEnter = false;
+    currentPage = 'sim';
+  }
 
   // 监听认证状态变化
   $effect(() => {
@@ -31,14 +60,14 @@
             in:fly={{ x: -50, duration: 400, easing: quartOut }}
             out:fly={{ x: 50, duration: 300, easing: quartOut }}
           >
-            <SimDashboard onNavigate={(simId) => { initialSimId = simId; currentPage = 'messages'; }} />
+            <SimDashboard onNavigate={openMessages} onNavigateCall={openCallLog} onNavigateSim={openSim} />
           </div>
         {:else}
           <div
             in:fly={{ x: 50, duration: 400, easing: quartOut }}
             out:fly={{ x: -50, duration: 300, easing: quartOut }}
           >
-            <Dashboard onNavigate={() => (currentPage = 'sim')} {initialSimId} />
+            <Dashboard onNavigate={backToSimDashboard} {initialSimId} openCallLogOnMount={openCallLogOnEnter} openSimOnMount={openSimOnEnter} />
           </div>
         {/if}
       {:else}

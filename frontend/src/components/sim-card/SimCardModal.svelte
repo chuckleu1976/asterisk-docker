@@ -10,7 +10,7 @@
     import { t } from "../../js/i18n.js";
 
     // Props
-    let { isOpen = false, onClose = () => {} } = $props();
+    let { isOpen = false, onClose = () => {}, filterSimId = null } = $props();
 
     // State management
     let activeSimId = $state(null);
@@ -26,8 +26,14 @@
     let previousIsOpen = false;
     $effect(() => {
         if (isOpen && !previousIsOpen && $simCards.length > 0) {
+            // If a filterSimId was provided and exists, jump to it; otherwise first tab
+            const target = filterSimId && $simCards.find(s => s.id === filterSimId)
+                ? filterSimId
+                : $simCards[0]?.id;
             if (!activeSimId || !$simCards.find((s) => s.id === activeSimId)) {
-                activeSimId = $simCards[0]?.id;
+                activeSimId = target;
+            } else if (filterSimId) {
+                activeSimId = target;
             }
             if (activeSimId) {
                 loadTabData(activeSimId);

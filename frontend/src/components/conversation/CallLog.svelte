@@ -7,8 +7,8 @@
   import { apiClient } from '../../js/api.js';
   import { t } from '../../js/i18n.js';
 
-  /** @type {string|null} */
-  let selectedSimId = $state(null);
+  let { filterSimId = null } = $props();
+
   let makeCallPhone = $state('');
   let makeCallSimId = $state('');
   let making = $state(false);
@@ -16,13 +16,24 @@
 
   let sims = $derived($simCards);
   let log = $derived($callLog);
+  let filteredLog = $derived(filterSimId ? log.filter(call => call.sim_id === filterSimId) : log);
   let incoming = $derived($incomingCall);
   let active = $derived($activeCall);
 
   onMount(() => {
     callActions.refreshLog();
+    if (filterSimId) {
+      makeCallSimId = filterSimId;
+      return;
+    }
     if (sims.length > 0 && !makeCallSimId) {
       makeCallSimId = sims[0].id;
+    }
+  });
+
+  $effect(() => {
+    if (filterSimId) {
+      makeCallSimId = filterSimId;
     }
   });
 
@@ -81,6 +92,9 @@
   <!-- Header -->
   <div class="px-4 py-3 border-b border-gray-200/70 dark:border-zinc-800 shrink-0">
     <h2 class="text-base font-semibold text-gray-900 dark:text-white">{$t('call_log_title')}</h2>
+    {#if filterSimId}
+      <p class="text-xs text-blue-600 dark:text-blue-400 mt-0.5">SIM: {filterSimId.slice(0, 12)}…</p>
+    {/if}
     <p class="text-xs text-gray-500 dark:text-zinc-500 mt-0.5">
       SSE: <span class={$callSseConnected ? 'text-green-500' : 'text-red-400'}>
         {$callSseConnected ? $t('sse_connected') : $t('sse_disconnected')}
@@ -91,10 +105,11 @@
   <!-- Make a call -->
   <div class="px-4 py-3 border-b border-gray-200/70 dark:border-zinc-800 shrink-0">
     <p class="text-xs font-medium text-gray-500 dark:text-zinc-400 mb-2 uppercase tracking-wide">{$t('make_a_call')}</p>
-    <div class="flex gap-2 items-center">
+    <div class="flex gap-2 items-center flex-wrap">
       <select
         bind:value={makeCallSimId}
-        class="text-sm rounded-lg border border-gray-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-gray-800 dark:text-gray-100 px-2 py-1.5 min-w-0 w-32 shrink-0"
+        disabled={!!filterSimId}
+        class="text-sm rounded-lg border border-gray-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-gray-800 dark:text-gray-100 px-2 py-1.5 min-w-0 max-w-[180px] shrink-0"
       >
         {#each sims as sim}
           <option value={sim.id}>{sim.alias ?? sim.phone_number ?? sim.id.slice(0, 8)}</option>
@@ -123,13 +138,13 @@
 
   <!-- Log list -->
   <div class="flex-1 overflow-y-auto divide-y divide-gray-100 dark:divide-zinc-800/70">
-    {#if log.length === 0}
+    {#if filteredLog.length === 0}
       <div class="flex flex-col items-center justify-center h-full gap-2 text-zinc-400">
         <Icon icon="carbon:phone-off" class="w-10 h-10 opacity-30" />
         <p class="text-sm">{$t('no_calls')}</p>
       </div>
     {:else}
-      {#each log as call (call.id)}
+      {#each filteredLog as call (call.id)}
         <div class="flex items-center gap-3 px-4 py-3 hover:bg-gray-50 dark:hover:bg-zinc-800/40 transition-colors">
           <!-- Direction + status icon -->
           <div class="relative shrink-0 w-10 h-10 rounded-full bg-gray-100 dark:bg-zinc-800 flex items-center justify-center">

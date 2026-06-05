@@ -337,8 +337,8 @@ const translations = {
 
 // ── Store ─────────────────────────────────────────────────────────────────────
 const stored = typeof localStorage !== 'undefined'
-  ? (localStorage.getItem('lang') || 'zh')
-  : 'zh';
+  ? (localStorage.getItem('lang') || 'en')
+  : 'en';
 
 export const lang = writable(stored);
 

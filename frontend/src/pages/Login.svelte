@@ -4,7 +4,7 @@
     import { fade, fly } from 'svelte/transition'; 
     import { quintOut } from 'svelte/easing';
     import { updateStorageValue } from '../js/storage';
-    import { t } from '../js/i18n.js';
+    import { t, toggleLang, lang } from '../js/i18n.js';
 
     let username = "";
     let password = "";
@@ -89,6 +89,23 @@
         <h1 class="text-lg font-semibold text-gray-900 dark:text-gray-100">SMS Gateway</h1>
         <p class="text-xs text-gray-500 dark:text-gray-400">{$t('app_tagline')}</p>
     </div>
+</div>
+
+<!-- Language toggle -->
+<div class="fixed top-6 right-6 sm:top-8 sm:right-8 z-10">
+    <button
+        type="button"
+        onclick={toggleLang}
+        class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
+               border border-gray-200 dark:border-zinc-700
+               bg-white dark:bg-zinc-800
+               text-gray-600 dark:text-gray-300
+               hover:bg-gray-50 dark:hover:bg-zinc-700 transition"
+        title={$t('lang_tooltip')}
+    >
+        <Icon icon="carbon:language" class="w-4 h-4" />
+        {$lang === 'zh' ? 'English' : '中文'}
+    </button>
 </div>
 
 <!-- Main Container -->
