@@ -19,6 +19,8 @@ read_sms_frequency = 30          # How often to check for new SMS messages
 # whisper_exe      = "/path/to/whisper-cli"
 # whisper_model    = "/path/to/ggml-base.bin"
 # whisper_language = "auto"   # "auto" = detect language, or "en", "zh", "ja", "ko", etc.
+# auto_answer_enabled = true                # Whether to auto-answer incoming calls (default true)
+# auto_answer_delay_secs = 2               # Delay before auto-answering (0=immediate, 2=default)
 
 # Webhook configuration
 webhooks_max_concurrent = 10     # Maximum concurrent webhook requests

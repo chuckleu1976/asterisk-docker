@@ -30,6 +30,10 @@ pub struct Settings {
     /// Language code for Whisper transcription: "en", "zh", "ja", etc.
     /// Set to "auto" (default) to auto-detect the language.
     pub whisper_language: Option<String>,
+    /// Delay in seconds before auto-answering incoming calls (0 = immediate, default 2 = let it ring briefly).
+    pub auto_answer_delay_secs: Option<u64>,
+    /// Enable or disable auto-answering of incoming calls (default true = enabled).
+    pub auto_answer_enabled: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

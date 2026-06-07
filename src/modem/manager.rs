@@ -23,6 +23,10 @@ pub struct TranscribeConfig {
     pub whisper_model: String,
     /// Language code: "en", "zh", "ja", etc., or "auto" for auto-detect.
     pub whisper_language: String,
+    /// Delay before auto-answering incoming calls (seconds).
+    pub auto_answer_delay_secs: u64,
+    /// Whether to enable auto-answer for incoming calls.
+    pub auto_answer_enabled: bool,
 }
 
 impl TranscribeConfig {
@@ -33,6 +37,8 @@ impl TranscribeConfig {
                 whisper_exe: whisper.clone(),
                 whisper_model: model.clone(),
                 whisper_language: s.whisper_language.clone().unwrap_or_else(|| "auto".to_string()),
+                auto_answer_delay_secs: s.auto_answer_delay_secs.unwrap_or(2),
+                auto_answer_enabled: s.auto_answer_enabled.unwrap_or(true),
             })),
             _ => None,
         }
@@ -671,10 +677,27 @@ impl ModemManager {
                             });
                             active_call_id = Some(id.clone());
                             call_answered = false;
-                            // Auto-answer the incoming call.
-                            // EC20 voice calls respond to ATA with OK only — no CONNECT URC.
-                            // So we handle the answered state here rather than in the CONNECT branch.
-                            match modem.answer_call().await {
+                            // Check if auto-answer is enabled
+                            let should_auto_answer = transcribe_cfg
+                                .as_ref()
+                                .map(|cfg| cfg.auto_answer_enabled)
+                                .unwrap_or(true);
+                            if should_auto_answer {
+                                // Wait before auto-answering to let the phone ring briefly.
+                                if let Some(cfg) = transcribe_cfg.as_ref() {
+                                    if cfg.auto_answer_delay_secs > 0 {
+                                        info!(
+                                            "[URC {}] waiting {}s before auto-answer",
+                                            sim_id, cfg.auto_answer_delay_secs
+                                        );
+                                        tokio::time::sleep(Duration::from_secs(cfg.auto_answer_delay_secs))
+                                            .await;
+                                    }
+                                }
+                                // Auto-answer the incoming call.
+                                // EC20 voice calls respond to ATA with OK only — no CONNECT URC.
+                                // So we handle the answered state here rather than in the CONNECT branch.
+                                match modem.answer_call().await {
                                 Err(e) => error!("[URC {}] auto-answer failed: {}", sim_id, e),
                                 Ok(()) => {
                                     info!("[URC {}] auto-answered incoming call", sim_id);
@@ -720,6 +743,9 @@ impl ModemManager {
                                     // ─────────────────────────────────────────────────────
                                 }
                             }
+                        } else {
+                            info!("[URC {}] auto-answer disabled, call waiting for manual answer", sim_id);
+                        }
                         }
                         Err(e) => error!("[URC {}] failed to insert call: {}", sim_id, e),
                     }

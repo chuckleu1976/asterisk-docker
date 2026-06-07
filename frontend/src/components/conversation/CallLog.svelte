@@ -161,7 +161,7 @@
             </p>
             <p class="text-xs text-gray-500 dark:text-zinc-500 truncate">
               {call.sim_id.slice(0, 12)}… · {call.status}
-              {#if call.ended_at}
+              {#if call.ended_at && call.status === 'ended'}
                 · {durationLabel(call.started_at, call.ended_at)}
               {/if}
             </p>
