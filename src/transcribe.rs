@@ -10,16 +10,18 @@ use uuid::Uuid;
 /// Steps:
 /// 1. Write `amr_bytes` to `<tmpdir>/<id>.amr`
 /// 2. Run ffmpeg to convert to 16 kHz mono WAV: `<tmpdir>/<id>.wav`
-/// 3. Run whisper-cli with English-only mode and `--output-txt`
+/// 3. Run whisper-cli with `--output-txt` (language auto-detected or forced)
 /// 4. Read the generated `<tmpdir>/<id>.wav.txt` transcript
 /// 5. Delete all temp files
 ///
+/// `language`: language code ("en", "zh", "ja", etc.) or "auto" for auto-detect.
 /// Returns the trimmed transcript string on success.
 pub async fn transcribe(
     amr_bytes: &[u8],
     ffmpeg_exe: &str,
     whisper_exe: &str,
     whisper_model: &str,
+    language: &str,
 ) -> Result<String> {
     let tmp = std::env::temp_dir();
     let id = Uuid::new_v4().to_string();
@@ -71,15 +73,24 @@ pub async fn transcribe(
     debug!("transcribe: ffmpeg ok, wav={}", wav_path.display());
 
     // ── Step 3: whisper-cli transcription ─────────────────────────────────────
+    // Build args dynamically: omit "-l" when language is "auto" so Whisper
+    // performs its own language detection pass.
+    let output_prefix = txt_path.with_extension("");
+    let output_prefix_str = output_prefix.to_str().unwrap();
+    let wav_str = wav_path.to_str().unwrap();
+    let mut whisper_args: Vec<&str> = vec![
+        "-m", whisper_model,
+        "-f", wav_str,
+        "--output-txt",     // write transcript to <-of>.txt
+        "-nt",              // no timestamps in output
+        "-of", output_prefix_str,
+    ];
+    if language != "auto" {
+        whisper_args.push("-l");
+        whisper_args.push(language);
+    }
     let whisper_child = Command::new(whisper_exe)
-        .args([
-            "-m", whisper_model,
-            "-l", "en",         // English only
-            "-f", wav_path.to_str().unwrap(),
-            "--output-txt",     // write transcript to <-of>.txt
-            "-nt",              // no timestamps in output
-            "-of", txt_path.with_extension("").to_str().unwrap(), // output path without .txt ext
-        ])
+        .args(&whisper_args)
         .kill_on_drop(true)
         .spawn()
         .context("failed to launch whisper-cli (is it installed?)")?;

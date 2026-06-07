@@ -25,8 +25,11 @@ pub struct Settings {
     pub ffmpeg_exe: Option<String>,
     /// Path to whisper-cli executable (whisper.cpp CLI binary).
     pub whisper_exe: Option<String>,
-    /// Path to the whisper.cpp model file, e.g. ggml-base.en.bin
+    /// Path to the whisper.cpp model file, e.g. ggml-base.bin
     pub whisper_model: Option<String>,
+    /// Language code for Whisper transcription: "en", "zh", "ja", etc.
+    /// Set to "auto" (default) to auto-detect the language.
+    pub whisper_language: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

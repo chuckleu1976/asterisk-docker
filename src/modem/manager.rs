@@ -21,6 +21,8 @@ pub struct TranscribeConfig {
     pub ffmpeg_exe: String,
     pub whisper_exe: String,
     pub whisper_model: String,
+    /// Language code: "en", "zh", "ja", etc., or "auto" for auto-detect.
+    pub whisper_language: String,
 }
 
 impl TranscribeConfig {
@@ -30,6 +32,7 @@ impl TranscribeConfig {
                 ffmpeg_exe: ffmpeg.clone(),
                 whisper_exe: whisper.clone(),
                 whisper_model: model.clone(),
+                whisper_language: s.whisper_language.clone().unwrap_or_else(|| "auto".to_string()),
             })),
             _ => None,
         }
@@ -775,6 +778,7 @@ impl ModemManager {
                                                 &cfg_c.ffmpeg_exe,
                                                 &cfg_c.whisper_exe,
                                                 &cfg_c.whisper_model,
+                                                &cfg_c.whisper_language,
                                             ).await {
                                                 Ok(text) => {
                                                     info!("[URC {}] transcript ({:.1}s): {}", sim_id_c, t.elapsed().as_secs_f64(), text);

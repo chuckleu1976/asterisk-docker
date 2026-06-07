@@ -13,6 +13,13 @@ password = "your_secure_password" # Web interface password
 # SMS reading frequency in seconds
 read_sms_frequency = 30          # How often to check for new SMS messages
 
+# Speech-to-text via whisper.cpp (optional). Remove these lines to disable transcription.
+# Download multilingual model: https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin
+# ffmpeg_exe       = "/path/to/ffmpeg"
+# whisper_exe      = "/path/to/whisper-cli"
+# whisper_model    = "/path/to/ggml-base.bin"
+# whisper_language = "auto"   # "auto" = detect language, or "en", "zh", "ja", "ko", etc.
+
 # Webhook configuration
 webhooks_max_concurrent = 10     # Maximum concurrent webhook requests
 
