@@ -296,7 +296,7 @@
   </header>
 
   <!-- ── Table area ──────────────────────────────────────────────────────── -->
-  <div class="flex-1 overflow-auto">
+  <div class="flex-1 overflow-auto pb-10">
     {#if error}
       <div class="flex items-center justify-center h-full">
         <div class="text-center">

@@ -11,7 +11,7 @@
   import { connectCallSSE, disconnectCallSSE } from "../stores/calls.js";
   import { t } from "../js/i18n.js";
 
-  let { onNavigate = () => {}, initialSimId = null, openCallLogOnMount = false, openSimOnMount = false } = $props();
+  let { onNavigate = () => {}, initialSimId = null } = $props();
 
   let modemInfoCardOpen = $state(false);
   let isSidebarOpen = $state(false);
@@ -19,18 +19,6 @@
 
   onMount(() => {
     connectCallSSE();
-  });
-
-  $effect(() => {
-    if (openCallLogOnMount) {
-      callLogOpen = true;
-    }
-  });
-
-  $effect(() => {
-    if (openSimOnMount) {
-      modemInfoCardOpen = true;
-    }
   });
 
   onDestroy(() => {
@@ -91,11 +79,7 @@
       ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}
   >
     <Sidebar 
-      onSimCardClick={handleSimCardClick}
-      onLogoutClick={logout}
       onConversationSelect={closeSidebar}
-      onSimDashboardClick={onNavigate}
-      onCallLogClick={handleCallLogClick}
       filterSimId={initialSimId}
     />
   </div>
