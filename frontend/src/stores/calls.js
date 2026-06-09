@@ -35,6 +35,7 @@ const handleCallEvent = (/** @type {CallEvent} */ event) => {
             incomingCall.set(event);
             break;
         case 'outbound_call':
+        case 'outbound_call_started':
             activeCall.set(event);
             break;
         case 'call_answered':
@@ -104,8 +105,21 @@ export const disconnectCallSSE = () => {
 
 export const callActions = {
     async make(simId, phone) {
-        await apiClient.makeCall(simId, phone);
+        // Set banner BEFORE the await so SSE call_ended can clear it correctly.
+        // If we set it AFTER, a fast rejection sends call_ended before the await
+        // resolves, clears activeCall, then the post-await set re-shows the banner forever.
         activeCall.set({ event_type: 'outbound_call', sim_id: simId, call_id: '', phone, direction: 'outbound' });
+        try {
+            const res = await apiClient.makeCall(simId, phone);
+            // Patch in the real call_id, but only if the call hasn't already been ended by SSE.
+            const callId = res?.data?.call_id ?? res?.call_id ?? '';
+            if (callId) {
+                activeCall.update(v => v ? { ...v, call_id: callId } : null);
+            }
+        } catch (e) {
+            activeCall.set(null);
+            throw e;
+        }
     },
 
     async answer(simId) {
