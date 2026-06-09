@@ -367,6 +367,7 @@ impl Modem {
             if matches!(trimmed, "NO CARRIER" | "BUSY" | "RING" | "CONNECT")
                 || trimmed.starts_with("VOICE CALL: END")
                 || trimmed.starts_with("+CLIP:")
+                || trimmed.starts_with("+CEND:")
             {
                 debug!("Re-forwarding embedded URC [{}]: {}", name, trimmed);
                 let _ = urc_tx.send(trimmed.to_string());

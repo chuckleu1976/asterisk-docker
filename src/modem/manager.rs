@@ -788,7 +788,7 @@ impl ModemManager {
                 continue;
             }
 
-            if line == "NO CARRIER" || line == "BUSY" || line.starts_with("VOICE CALL: END") {
+            if line == "NO CARRIER" || line == "BUSY" || line.starts_with("VOICE CALL: END") || line.starts_with("+CEND:") {
                 info!("[URC {}] {} received: call_answered={}, has_active={}, has_recording={}",
                     sim_id, line, call_answered, active_call_id.is_some(), recording_cancel_tx.is_some());
                 if let Some(call_id) = active_call_id.take() {
