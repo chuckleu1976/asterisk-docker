@@ -535,6 +535,21 @@ impl ModemManager {
         self.sim_cards_cache.read().await.get(sim_id).cloned()
     }
 
+    /// Find the sim_id (ICCID) that matches a given SIM phone number.
+    /// Searches the in-memory cache, so the SIM must have been seen at least once.
+    pub async fn find_sim_id_by_phone_number(&self, phone_number: &str) -> Option<String> {
+        let cache = self.sim_cards_cache.read().await;
+        cache.iter().find_map(|(sim_id, sim_card)| {
+            sim_card.phone_number.as_deref().and_then(|p| {
+                if p == phone_number {
+                    Some(sim_id.clone())
+                } else {
+                    None
+                }
+            })
+        })
+    }
+
     pub async fn update_sim_cache(&self, sim_card: SimCard) {
         let mut cache = self.sim_cards_cache.write().await;
         cache.insert(sim_card.id.clone(), sim_card);

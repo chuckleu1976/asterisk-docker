@@ -1,0 +1,701 @@
+{
+  "info": {
+    "_postman_id": "7bf5fb15-c9f6-4e2f-b4df-8e5b9a649bc8",
+    "name": "sms-gateway API",
+    "description": "Postman collection for sms-gateway REST APIs under /api. Uses Basic Auth from collection variables.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "basic",
+    "basic": [
+      {
+        "key": "username",
+        "value": "{{username}}",
+        "type": "string"
+      },
+      {
+        "key": "password",
+        "value": "{{password}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://127.0.0.1:8080"
+    },
+    {
+      "key": "username",
+      "value": "admin"
+    },
+    {
+      "key": "password",
+      "value": "123456"
+    },
+    {
+      "key": "sim_id",
+      "value": "REPLACE_WITH_SIM_ID"
+    },
+    {
+      "key": "phone",
+      "value": "18126101015"
+    },
+    {
+      "key": "contact_id",
+      "value": "REPLACE_WITH_CONTACT_ID"
+    },
+    {
+      "key": "call_id",
+      "value": "REPLACE_WITH_CALL_ID"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "Check Auth",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/check",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "check"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "SMS",
+      "item": [
+        {
+          "name": "Get SMS Paginated",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/sms?page=1&per_page=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "sms"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "per_page",
+                  "value": "20"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get SMS By Direction (inbox/sent)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/sms?direction=inbox&page=1&per_page=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "sms"
+              ],
+              "query": [
+                {
+                  "key": "direction",
+                  "value": "inbox"
+                },
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "per_page",
+                  "value": "20"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Send SMS (by sim_id)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"sim_id\": \"{{sim_id}}\",\n  \"contact\": {\n    \"id\": \"{{phone}}\",\n    \"name\": \"{{phone}}\"\n  },\n  \"message\": \"hello from postman\",\n  \"new\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/sms",
+              "host": [ "{{baseUrl}}" ],
+              "path": [ "api", "sms" ]
+            }
+          }
+        },
+        {
+          "name": "Send SMS (by phone_number)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone_number\": \"+8613590401700\",\n  \"contact\": {\n    \"id\": \"{{phone}}\",\n    \"name\": \"{{phone}}\"\n  },\n  \"message\": \"hello from postman via phone_number\",\n  \"new\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/sms",
+              "host": [ "{{baseUrl}}" ],
+              "path": [ "api", "sms" ]
+            },
+            "description": "Send SMS using the SIM phone number instead of sim_id. The phone_number must match a SIM card configured in the gateway."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Contacts & Conversations",
+      "item": [
+        {
+          "name": "Get Contacts",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/contacts",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "contacts"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create Contact",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"id\": \"{{phone}}\",\n  \"name\": \"Test Contact\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/contacts",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "contacts"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Contact",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{baseUrl}}/api/contacts/{{contact_id}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "contacts",
+                "{{contact_id}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Conversations",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/conversation",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "conversation"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Conversation Unread",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "{{baseUrl}}/api/conversations/{{contact_id}}/unread",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "conversations",
+                "{{contact_id}}",
+                "unread"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "SIMs",
+      "item": [
+        {
+          "name": "Get All SIM Runtime Info",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/sims/info",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "sims",
+                "info"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Refresh SIM SMS",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/sims/{{sim_id}}/refresh",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "sims",
+                "{{sim_id}}",
+                "refresh"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get SIM Cards",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/sim-cards",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "sim-cards"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get SIM Stats",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/sims/stats",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "sims",
+                "stats"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Enhanced SIM Info",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/sims/{{sim_id}}/info",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "sims",
+                "{{sim_id}}",
+                "info"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update SIM Alias",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"alias\": \"Office SIM\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/sim-cards/{{sim_id}}/alias",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "sim-cards",
+                "{{sim_id}}",
+                "alias"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update SIM Phone",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone_number\": \"+8618126101015\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/sim-cards/{{sim_id}}/phone",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "sim-cards",
+                "{{sim_id}}",
+                "phone"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get SMS Storage Status",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/sims/{{sim_id}}/storage",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "sims",
+                "{{sim_id}}",
+                "storage"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Set SMS Storage",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"storage\": \"SIM\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/sims/{{sim_id}}/storage",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "sims",
+                "{{sim_id}}",
+                "storage"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Calls",
+      "item": [
+        {
+          "name": "Get Calls",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/calls?limit=50&offset=0",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "calls"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "50"
+                },
+                {
+                  "key": "offset",
+                  "value": "0"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Calls By SIM",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/calls?sim_id={{sim_id}}&limit=50",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "calls"
+              ],
+              "query": [
+                {
+                  "key": "sim_id",
+                  "value": "{{sim_id}}"
+                },
+                {
+                  "key": "limit",
+                  "value": "50"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Make Call",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"sim_id\": \"{{sim_id}}\",\n  \"phone\": \"{{phone}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/calls/make",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "calls",
+                "make"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Answer Call",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"sim_id\": \"{{sim_id}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/calls/answer",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "calls",
+                "answer"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Hangup Call",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"sim_id\": \"{{sim_id}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/calls/hangup",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "calls",
+                "hangup"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Call Recording",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/calls/{{call_id}}/recording",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "calls",
+                "{{call_id}}",
+                "recording"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Call Transcript",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/calls/{{call_id}}/transcript",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "calls",
+                "{{call_id}}",
+                "transcript"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "SSE (Streaming)",
+      "item": [
+        {
+          "name": "SMS SSE",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "text/event-stream"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/sms/sse",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "sms",
+                "sse"
+              ]
+            },
+            "description": "SSE endpoint. Use Postman v10+ stream viewer or another EventSource-capable client."
+          }
+        },
+        {
+          "name": "Calls SSE",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "text/event-stream"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/calls/sse",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "calls",
+                "sse"
+              ]
+            },
+            "description": "SSE endpoint for call events."
+          }
+        }
+      ]
+    }
+  ]
+}

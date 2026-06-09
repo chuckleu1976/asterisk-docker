@@ -261,12 +261,30 @@ async fn send_sms(
     State((modem_manager, sse_manager)): State<(ModemManagerRef, Arc<SseManager>)>,
     Json(mut payload): Json<SmsPayload>,
 ) -> impl IntoResponse {
+    // Resolve the sim_id: use sim_id directly, or look it up from phone_number.
+    let sim_id = match payload.sim_id.clone() {
+        Some(id) => id,
+        None => match payload.phone_number.as_deref() {
+            Some(phone) => match modem_manager.find_sim_id_by_phone_number(phone).await {
+                Some(id) => id,
+                None => return (
+                    StatusCode::NOT_FOUND,
+                    format!("No SIM card found with phone number: {}", phone),
+                ).into_response(),
+            },
+            None => return (
+                StatusCode::BAD_REQUEST,
+                "Either sim_id or phone_number must be provided".to_string(),
+            ).into_response(),
+        },
+    };
+
     if payload.new {
         payload.contact.find_or_create().await.unwrap();
     }
 
     match modem_manager
-        .send_sms(&payload.sim_id, &payload.contact, &payload.message)
+        .send_sms(&sim_id, &payload.contact, &payload.message)
         .await
     {
         Ok((sms_id, contact_id)) => {
@@ -763,7 +781,10 @@ async fn get_conversation_unread(Path(id): Path<String>) -> Response {
 
 #[derive(serde::Deserialize)]
 pub struct SmsPayload {
-    sim_id: String,
+    /// ICCID-based SIM identifier. Either this or `phone_number` must be supplied.
+    sim_id: Option<String>,
+    /// SIM phone number (e.g. "+8618126101015"). Used as an alternative to `sim_id`.
+    phone_number: Option<String>,
     contact: Contact,
     message: String,
     new: bool,
