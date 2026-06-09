@@ -350,6 +350,7 @@ lang.subscribe(v => {
 // Usage in components: import { t } from '...'; then $t('key') or $t('key', { n: 3 })
 export const t = derived(lang, ($lang) => (key, params = {}) => {
   const dict = translations[$lang] || translations.en;
+  // @ts-ignore
   let str = dict[key] ?? translations.en[key] ?? key;
   for (const [k, v] of Object.entries(params)) {
     str = str.replace(`{${k}}`, String(v));

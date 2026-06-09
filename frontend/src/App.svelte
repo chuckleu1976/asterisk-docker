@@ -3,6 +3,7 @@
   import { quartOut } from "svelte/easing";
   import { isAuthenticated, isAuthLoading } from "./stores/auth";
   import { initConversation } from "./stores/conversation";
+  import { connectCallSSE, disconnectCallSSE } from "./stores/calls.js";
   import Login from "./pages/Login.svelte";
   import Dashboard from "./pages/Dashboard.svelte";
   import SimDashboard from "./pages/SimDashboard.svelte";
@@ -36,6 +37,9 @@
   $effect(() => {
     if ($isAuthenticated) {
       initConversation();
+      connectCallSSE();
+    } else {
+      disconnectCallSSE();
     }
   });
 </script>

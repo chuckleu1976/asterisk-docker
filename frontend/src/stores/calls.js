@@ -20,6 +20,39 @@ let eventSource = null;
 let reconnectTimeout = null;
 const RECONNECT_DELAY = 5000;
 
+// ── Call status polling (fallback for missed SSE events) ──────────────────────
+let callStatusPoller = null;
+
+function startCallStatusPolling(callId) {
+    stopCallStatusPolling();
+    let pollCount = 0;
+    callStatusPoller = setInterval(async () => {
+        // Stop after 120 seconds max (safety net)
+        if (++pollCount > 60) { activeCall.set(null); stopCallStatusPolling(); return; }
+        try {
+            const res = await apiClient.getCallLog(null, 20);
+            const calls = res.data?.data ?? [];
+            const call = calls.find(c => c.id === callId);
+            if (call && call.status !== 'ringing') {
+                // Call is no longer ringing — update banner based on actual status
+                if (call.status === 'active') {
+                    activeCall.update(v => v ? { ...v, event_type: 'call_answered' } : null);
+                } else {
+                    // ended or missed — clear banner
+                    activeCall.set(null);
+                    callLog.set(calls);
+                    stopCallStatusPolling();
+                }
+            }
+        } catch (_) { /* ignore poll errors */ }
+    }, 2000);
+}
+
+function stopCallStatusPolling() {
+    if (callStatusPoller) { clearInterval(callStatusPoller); callStatusPoller = null; }
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 const getAuthHeader = () => {
     const auth = sessionStorage.getItem('auth');
     if (auth) {
@@ -46,6 +79,7 @@ const handleCallEvent = (/** @type {CallEvent} */ event) => {
         case 'call_ended':
             incomingCall.set(null);
             activeCall.set(null);
+            stopCallStatusPolling();
             // Refresh the top of the call log
             callActions.refreshLog();
             break;
@@ -115,6 +149,9 @@ export const callActions = {
             const callId = res?.data?.call_id ?? res?.call_id ?? '';
             if (callId) {
                 activeCall.update(v => v ? { ...v, call_id: callId } : null);
+                // Always start polling — SSE may have already cleared activeCall but
+                // polling ensures the banner reflects true call state regardless.
+                startCallStatusPolling(callId);
             }
         } catch (e) {
             activeCall.set(null);
@@ -133,6 +170,7 @@ export const callActions = {
         await apiClient.hangupCall(simId);
         incomingCall.set(null);
         activeCall.set(null);
+        stopCallStatusPolling();
         await this.refreshLog();
     },
 

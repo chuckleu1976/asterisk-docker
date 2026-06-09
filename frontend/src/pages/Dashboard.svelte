@@ -1,5 +1,4 @@
 <script>
-  import { onMount, onDestroy } from "svelte";
   import { updateStorageValue } from "../js/storage";
   import Sidebar from "../components/layout/Sidebar.svelte";
   import MessageList from "../components/message/MessageList.svelte";
@@ -8,7 +7,6 @@
   import CallLogModal from "../components/conversation/CallLogModal.svelte";
   import Icon from "@iconify/svelte";
   import { currentContact } from "../stores/conversation";
-  import { connectCallSSE, disconnectCallSSE } from "../stores/calls.js";
   import { t } from "../js/i18n.js";
 
   let { onNavigate = () => {}, initialSimId = null } = $props();
@@ -16,14 +14,6 @@
   let modemInfoCardOpen = $state(false);
   let isSidebarOpen = $state(false);
   let callLogOpen = $state(false);
-
-  onMount(() => {
-    connectCallSSE();
-  });
-
-  onDestroy(() => {
-    disconnectCallSSE();
-  });
 
   const logout = async () => {
     await updateStorageValue("auth", null);

@@ -31,7 +31,7 @@
 
   let statusText = $derived(
     call ? $t('incoming_call') :
-    active?.direction === 'outbound' ? $t('calling') :
+    active?.direction === 'outbound' && active?.event_type !== 'call_answered' ? $t('calling') :
     $t('call_in_progress_banner')
   );
 

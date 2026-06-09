@@ -564,6 +564,26 @@ impl ModemManager {
             .get_modem(sim_id)
             .await
             .ok_or_else(|| anyhow::anyhow!("Modem not found for SIM ID: {}", sim_id))?;
+
+        // Cancel any existing outbound poller and finalize the previous call as missed.
+        // This prevents the old poller's poll_cancel_rx from firing when we replace
+        // outbound_poll_cancel_tx, which would leave the previous call stuck as 'ringing'.
+        if let Some(tx) = modem.outbound_poll_cancel_tx.lock().await.take() {
+            let _ = tx.send(());
+        }
+        if let Some(old_id) = modem.outbound_call_id.lock().await.take() {
+            if let Err(e) = Call::update_status(&old_id, "missed").await {
+                error!("[{}] failed to finalize previous outbound call {}: {}", sim_id, old_id, e);
+            }
+            sse.send_call_event(CallEvent {
+                event_type: "call_ended".into(),
+                sim_id: sim_id.to_string(),
+                call_id: old_id,
+                phone: None,
+                direction: "outbound".into(),
+            });
+        }
+
         // Send the ATD command first — only record if the modem accepts it.
         modem.make_call(phone).await?;
         // Insert a DB record now that the modem confirmed OK.
@@ -573,9 +593,9 @@ impl ModemManager {
         *modem.outbound_call_id.lock().await = Some(call_id.clone());
         info!("[{}] outbound call {} to {} started", sim_id, call_id, phone);
 
-        // Spawn AT+CLCC polling task.
-        // EC20F does not reliably emit NO CARRIER / +CEND: for rejected calls;
-        // polling CLCC is the only reliable way to track outbound call state.
+        // Spawn AT+CLCC polling task — sole mechanism for detecting outbound call state.
+        // EC20F does not reliably emit NO CARRIER for rejected calls; NO CARRIER is
+        // also unreliable when inbound calls are active (it gets consumed by the inbound handler).
         let call_id_c = call_id.clone();
         let phone_c   = phone.to_string();
         let modem_c   = modem.clone();
@@ -590,8 +610,12 @@ impl ModemManager {
             info!("[CLCC {}] polling started for call {}", sim_id_c, call_id_c);
             loop {
                 tokio::select! {
-                    _ = &mut poll_cancel_rx => {
-                        info!("[CLCC {}] polling cancelled (user hung up)", sim_id_c);
+                    result = &mut poll_cancel_rx => {
+                        // Cancelled explicitly by hangup_call() — finalize properly.
+                        // Ignore if sender was dropped (overlapping call scenario already handled).
+                        if result.is_ok() {
+                            info!("[CLCC {}] polling cancelled (user hung up)", sim_id_c);
+                        }
                         break;
                     }
                     _ = tokio::time::sleep(Duration::from_secs(1)) => {}
@@ -622,22 +646,22 @@ impl ModemManager {
                                 _ => {}
                             }
                         } else {
-                            // No MO (dir=0) entry — our outbound call is gone
-                            // (may still have MT entries from auto-answered inbound calls).
+                            // No MO (dir=0) entry — outbound call is gone.
                             consecutive_empty += 1;
                             info!("[CLCC {}] no MO call in CLCC ({}/2)", sim_id_c, consecutive_empty);
                             if consecutive_empty >= 2 {
-                                // Try to take outbound_call_id and finalize in DB.
-                                // May already be None if the URC handler (NO CARRIER) got there first.
                                 let status = if call_answered { "ended" } else { "missed" };
-                                if let Some(cid) = modem_c.outbound_call_id.lock().await.take() {
-                                    if let Err(e) = Call::update_status(&cid, status).await {
-                                        error!("[CLCC {}] failed to finalize call {}: {}", sim_id_c, cid, e);
-                                    }
-                                    info!("[CLCC {}] call finalized in DB (status={})", sim_id_c, status);
+                                // Always update using call_id_c (captured) — never the mutex,
+                                // which may have been replaced by a newer call.
+                                if let Err(e) = Call::update_status(&call_id_c, status).await {
+                                    error!("[CLCC {}] failed to finalize call {}: {}", sim_id_c, call_id_c, e);
                                 }
-                                // Always send call_ended SSE — guarantees the frontend banner clears
-                                // even if the URC handler already sent one (idempotent on frontend).
+                                // Remove from mutex only if it still holds our call_id.
+                                let mut lock = modem_c.outbound_call_id.lock().await;
+                                if lock.as_deref() == Some(call_id_c.as_str()) {
+                                    *lock = None;
+                                }
+                                drop(lock);
                                 sse_c.send_call_event(CallEvent {
                                     event_type: "call_ended".into(),
                                     sim_id:     sim_id_c.clone(),
@@ -968,37 +992,12 @@ impl ModemManager {
                         phone: current_phone.take(),
                         direction: "inbound".into(),
                     });
-                } else if let Some(outbound_id) = modem.outbound_call_id.lock().await.take() {
-                    // Outbound call ended (remote hung up, busy, or we hung up).
-                    let new_status = if line == "BUSY" {
-                        "missed"
-                    } else if call_answered {
-                        "ended"
-                    } else {
-                        "missed"
-                    };
-                    call_answered = false;
-                    if let Err(e) = Call::update_status(&outbound_id, new_status).await {
-                        error!("[URC {}] failed to update outbound call {}: {}", sim_id, outbound_id, e);
-                    }
-                    sse.send_call_event(CallEvent {
-                        event_type: "call_ended".into(),
-                        sim_id: sim_id.clone(),
-                        call_id: outbound_id,
-                        phone: current_phone.take(),
-                        direction: "outbound".into(),
-                    });
                 } else {
-                    // Unexpected NO CARRIER with no tracked call.
+                    // NO CARRIER with no tracked inbound call.
+                    // Outbound call lifecycle is handled entirely by the CLCC poller —
+                    // do not interfere here. Just reset local state.
                     call_answered = false;
                     current_phone.take();
-                    sse.send_call_event(CallEvent {
-                        event_type: "call_ended".into(),
-                        sim_id: sim_id.clone(),
-                        call_id: String::new(),
-                        phone: None,
-                        direction: "outbound".into(),
-                    });
                 }
                 continue;
             }
