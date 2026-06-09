@@ -559,7 +559,7 @@ impl ModemManager {
 
     /// Initiate an outbound call and record it in the DB.
     /// Returns the new Call UUID on success.
-    pub async fn make_call(&self, sim_id: &str, phone: &str) -> anyhow::Result<String> {
+    pub async fn make_call(&self, sim_id: &str, phone: &str, sse: Arc<SseManager>) -> anyhow::Result<String> {
         let modem = self
             .get_modem(sim_id)
             .await
@@ -568,10 +568,106 @@ impl ModemManager {
         modem.make_call(phone).await?;
         // Insert a DB record now that the modem confirmed OK.
         let call_id = Call::insert(sim_id, Some(phone), "outbound").await?;
-        // Store the id on the modem so the URC handler can find it on NO CARRIER / CONNECT.
+        // Reset per-call state.
+        *modem.outbound_call_answered.lock().await = false;
         *modem.outbound_call_id.lock().await = Some(call_id.clone());
         info!("[{}] outbound call {} to {} started", sim_id, call_id, phone);
+
+        // Spawn AT+CLCC polling task.
+        // EC20F does not reliably emit NO CARRIER / +CEND: for rejected calls;
+        // polling CLCC is the only reliable way to track outbound call state.
+        let call_id_c = call_id.clone();
+        let phone_c   = phone.to_string();
+        let modem_c   = modem.clone();
+        let sim_id_c  = sim_id.to_string();
+        let sse_c     = sse;
+        let (poll_cancel_tx, mut poll_cancel_rx) = tokio::sync::oneshot::channel::<()>();
+        *modem.outbound_poll_cancel_tx.lock().await = Some(poll_cancel_tx);
+
+        tokio::spawn(async move {
+            let mut call_answered     = false;
+            let mut consecutive_empty: u8 = 0;
+            info!("[CLCC {}] polling started for call {}", sim_id_c, call_id_c);
+            loop {
+                tokio::select! {
+                    _ = &mut poll_cancel_rx => {
+                        info!("[CLCC {}] polling cancelled (user hung up)", sim_id_c);
+                        break;
+                    }
+                    _ = tokio::time::sleep(Duration::from_secs(1)) => {}
+                }
+                match modem_c.query_clcc().await {
+                    Ok(ref resp) if resp.contains("+CLCC:") => {
+                        consecutive_empty = 0;
+                        match Self::parse_clcc_stat(resp) {
+                            Some(0) if !call_answered => {
+                                call_answered = true;
+                                *modem_c.outbound_call_answered.lock().await = true;
+                                if let Err(e) = Call::update_status(&call_id_c, "active").await {
+                                    error!("[CLCC {}] failed to set active: {}", sim_id_c, e);
+                                }
+                                sse_c.send_call_event(CallEvent {
+                                    event_type: "call_answered".into(),
+                                    sim_id:     sim_id_c.clone(),
+                                    call_id:    call_id_c.clone(),
+                                    phone:      Some(phone_c.clone()),
+                                    direction:  "outbound".into(),
+                                });
+                                info!("[CLCC {}] call {} answered by remote", sim_id_c, call_id_c);
+                            }
+                            Some(3) => info!("[CLCC {}] remote ringing", sim_id_c),
+                            Some(2) => info!("[CLCC {}] dialing", sim_id_c),
+                            _ => {}
+                        }
+                    }
+                    Ok(_) => {
+                        // No +CLCC: lines — no active call.
+                        consecutive_empty += 1;
+                        if consecutive_empty >= 2 {
+                            if let Some(cid) = modem_c.outbound_call_id.lock().await.take() {
+                                let status = if call_answered { "ended" } else { "missed" };
+                                if let Err(e) = Call::update_status(&cid, status).await {
+                                    error!("[CLCC {}] failed to finalize call {}: {}", sim_id_c, cid, e);
+                                }
+                                sse_c.send_call_event(CallEvent {
+                                    event_type: "call_ended".into(),
+                                    sim_id:     sim_id_c.clone(),
+                                    call_id:    cid,
+                                    phone:      Some(phone_c.clone()),
+                                    direction:  "outbound".into(),
+                                });
+                                info!("[CLCC {}] call finalized (status={})", sim_id_c, status);
+                            }
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        error!("[CLCC {}] AT+CLCC failed: {}", sim_id_c, e);
+                    }
+                }
+            }
+            info!("[CLCC {}] polling ended", sim_id_c);
+        });
+
         Ok(call_id)
+    }
+
+    /// Parse the stat field from the first +CLCC line in an AT+CLCC response.
+    /// stat: 0=active, 1=held, 2=dialing(MO), 3=alerting(MO), 4=incoming(MT), 5=waiting.
+    fn parse_clcc_stat(response: &str) -> Option<u8> {
+        for line in response.lines() {
+            let line = line.trim();
+            if let Some(rest) = line.strip_prefix("+CLCC:") {
+                // Format: <idx>,<dir>,<stat>,<mode>,<mpty>[,"<num>",<type>]
+                let parts: Vec<&str> = rest.split(',').collect();
+                if parts.len() >= 3 {
+                    if let Ok(stat) = parts[2].trim().parse::<u8>() {
+                        return Some(stat);
+                    }
+                }
+            }
+        }
+        None
     }
 
     pub async fn answer_call(&self, sim_id: &str) -> anyhow::Result<()> {
@@ -590,12 +686,14 @@ impl ModemManager {
             .await
             .ok_or_else(|| anyhow::anyhow!("Modem not found for SIM ID: {}", sim_id))?;
         modem.hangup_call().await?;
-        // After ATH succeeds, take any pending outbound call and mark it ended.
-        // This covers the case where the remote never answered (no NO CARRIER URC).
+        // Cancel the CLCC polling task so it does not race with our finalization below.
+        if let Some(tx) = modem.outbound_poll_cancel_tx.lock().await.take() {
+            let _ = tx.send(());
+        }
+        // Take any pending outbound call and finalize it.
         if let Some(call_id) = modem.outbound_call_id.lock().await.take() {
-            // For now we don't have the call_answered flag here; treat a
-            // locally-cancelled call as "missed" (callee never confirmed answer).
-            let status = "missed";
+            let answered = *modem.outbound_call_answered.lock().await;
+            let status = if answered { "ended" } else { "missed" };
             if let Err(e) = Call::update_status(&call_id, status).await {
                 error!("[{}] failed to update outbound call {} on hangup: {}", sim_id, call_id, e);
             } else {

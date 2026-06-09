@@ -56,6 +56,10 @@ pub struct Modem {
     pub urc_rx: Arc<Mutex<mpsc::UnboundedReceiver<String>>>,
     /// Call ID of the active outbound call, set by manager after ATD succeeds.
     pub outbound_call_id: Arc<tokio::sync::Mutex<Option<String>>>,
+    /// Cancel sender for the CLCC polling task; send () to stop polling (e.g. on user hangup).
+    pub outbound_poll_cancel_tx: Arc<tokio::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
+    /// Becomes true when the CLCC poller observes stat=0 (remote answered the call).
+    pub outbound_call_answered: Arc<tokio::sync::Mutex<bool>>,
 }
 
 impl Modem {
@@ -112,6 +116,8 @@ impl Modem {
             _urc_tx: urc_tx,
             urc_rx: Arc::new(Mutex::new(urc_rx)),
             outbound_call_id: Arc::new(tokio::sync::Mutex::new(None)),
+            outbound_poll_cancel_tx: Arc::new(tokio::sync::Mutex::new(None)),
+            outbound_call_answered: Arc::new(tokio::sync::Mutex::new(false)),
         })
     }
 
@@ -974,6 +980,11 @@ impl Modem {
     pub async fn make_call(&self, phone: &str) -> io::Result<()> {
         self.send_command_with_ok(&format!("ATD{};\r\n", phone)).await?;
         Ok(())
+    }
+
+    /// Query the current call list. Returns raw response (contains "+CLCC:" lines when calls active).
+    pub async fn query_clcc(&self) -> io::Result<String> {
+        self.send_command_with_ok("AT+CLCC\r\n").await
     }
 
     /// Answer an incoming call.

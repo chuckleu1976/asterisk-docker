@@ -652,7 +652,7 @@ async fn get_call_transcript(Path(id): Path<String>) -> Response {
 }
 
 async fn make_call(State(cs): State<CallState>, Json(body): Json<MakeCallRequest>) -> Response {
-    match cs.mm.make_call(&body.sim_id, &body.phone).await {
+    match cs.mm.make_call(&body.sim_id, &body.phone, cs.sse.clone()).await {
         Ok(call_id) => {
             cs.sse.send_call_event(CallEvent {
                 event_type: "outbound_call_started".into(),
