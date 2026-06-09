@@ -627,20 +627,25 @@ impl ModemManager {
                             consecutive_empty += 1;
                             info!("[CLCC {}] no MO call in CLCC ({}/2)", sim_id_c, consecutive_empty);
                             if consecutive_empty >= 2 {
+                                // Try to take outbound_call_id and finalize in DB.
+                                // May already be None if the URC handler (NO CARRIER) got there first.
+                                let status = if call_answered { "ended" } else { "missed" };
                                 if let Some(cid) = modem_c.outbound_call_id.lock().await.take() {
-                                    let status = if call_answered { "ended" } else { "missed" };
                                     if let Err(e) = Call::update_status(&cid, status).await {
                                         error!("[CLCC {}] failed to finalize call {}: {}", sim_id_c, cid, e);
                                     }
-                                    sse_c.send_call_event(CallEvent {
-                                        event_type: "call_ended".into(),
-                                        sim_id:     sim_id_c.clone(),
-                                        call_id:    cid,
-                                        phone:      Some(phone_c.clone()),
-                                        direction:  "outbound".into(),
-                                    });
-                                    info!("[CLCC {}] call finalized (status={})", sim_id_c, status);
+                                    info!("[CLCC {}] call finalized in DB (status={})", sim_id_c, status);
                                 }
+                                // Always send call_ended SSE — guarantees the frontend banner clears
+                                // even if the URC handler already sent one (idempotent on frontend).
+                                sse_c.send_call_event(CallEvent {
+                                    event_type: "call_ended".into(),
+                                    sim_id:     sim_id_c.clone(),
+                                    call_id:    call_id_c.clone(),
+                                    phone:      Some(phone_c.clone()),
+                                    direction:  "outbound".into(),
+                                });
+                                info!("[CLCC {}] call_ended SSE sent (status={})", sim_id_c, status);
                                 break;
                             }
                         }
