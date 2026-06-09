@@ -1,19 +1,16 @@
 <script>
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount } from 'svelte';
   import Icon from '@iconify/svelte';
   import CallLog from '../components/conversation/CallLog.svelte';
   import IncomingCallBanner from '../components/conversation/IncomingCallBanner.svelte';
-  import { connectCallSSE, disconnectCallSSE } from '../stores/calls.js';
   import { simCardActions } from '../stores/simcards.js';
   import { t } from '../js/i18n.js';
 
   let { onBack = () => {}, filterSimId = null } = $props();
 
   onMount(async () => {
-    connectCallSSE();
     await simCardActions.loadAll();
   });
-  onDestroy(() => disconnectCallSSE());
 </script>
 
 <div class="flex flex-col h-dvh w-screen bg-white dark:bg-zinc-900 font-sans">
