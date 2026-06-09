@@ -597,48 +597,52 @@ impl ModemManager {
                     _ = tokio::time::sleep(Duration::from_secs(1)) => {}
                 }
                 match modem_c.query_clcc().await {
-                    Ok(ref resp) if resp.contains("+CLCC:") => {
-                        consecutive_empty = 0;
-                        match Self::parse_clcc_stat(resp) {
-                            Some(0) if !call_answered => {
-                                call_answered = true;
-                                *modem_c.outbound_call_answered.lock().await = true;
-                                if let Err(e) = Call::update_status(&call_id_c, "active").await {
-                                    error!("[CLCC {}] failed to set active: {}", sim_id_c, e);
+                    Ok(ref resp) => {
+                        if let Some(stat) = Self::parse_clcc_mo_stat(resp) {
+                            // MO call still in CLCC — reset empty counter.
+                            consecutive_empty = 0;
+                            match stat {
+                                0 if !call_answered => {
+                                    call_answered = true;
+                                    *modem_c.outbound_call_answered.lock().await = true;
+                                    if let Err(e) = Call::update_status(&call_id_c, "active").await {
+                                        error!("[CLCC {}] failed to set active: {}", sim_id_c, e);
+                                    }
+                                    sse_c.send_call_event(CallEvent {
+                                        event_type: "call_answered".into(),
+                                        sim_id:     sim_id_c.clone(),
+                                        call_id:    call_id_c.clone(),
+                                        phone:      Some(phone_c.clone()),
+                                        direction:  "outbound".into(),
+                                    });
+                                    info!("[CLCC {}] call {} answered by remote", sim_id_c, call_id_c);
                                 }
-                                sse_c.send_call_event(CallEvent {
-                                    event_type: "call_answered".into(),
-                                    sim_id:     sim_id_c.clone(),
-                                    call_id:    call_id_c.clone(),
-                                    phone:      Some(phone_c.clone()),
-                                    direction:  "outbound".into(),
-                                });
-                                info!("[CLCC {}] call {} answered by remote", sim_id_c, call_id_c);
+                                3 => info!("[CLCC {}] remote ringing", sim_id_c),
+                                2 => info!("[CLCC {}] dialing", sim_id_c),
+                                _ => {}
                             }
-                            Some(3) => info!("[CLCC {}] remote ringing", sim_id_c),
-                            Some(2) => info!("[CLCC {}] dialing", sim_id_c),
-                            _ => {}
-                        }
-                    }
-                    Ok(_) => {
-                        // No +CLCC: lines — no active call.
-                        consecutive_empty += 1;
-                        if consecutive_empty >= 2 {
-                            if let Some(cid) = modem_c.outbound_call_id.lock().await.take() {
-                                let status = if call_answered { "ended" } else { "missed" };
-                                if let Err(e) = Call::update_status(&cid, status).await {
-                                    error!("[CLCC {}] failed to finalize call {}: {}", sim_id_c, cid, e);
+                        } else {
+                            // No MO (dir=0) entry — our outbound call is gone
+                            // (may still have MT entries from auto-answered inbound calls).
+                            consecutive_empty += 1;
+                            info!("[CLCC {}] no MO call in CLCC ({}/2)", sim_id_c, consecutive_empty);
+                            if consecutive_empty >= 2 {
+                                if let Some(cid) = modem_c.outbound_call_id.lock().await.take() {
+                                    let status = if call_answered { "ended" } else { "missed" };
+                                    if let Err(e) = Call::update_status(&cid, status).await {
+                                        error!("[CLCC {}] failed to finalize call {}: {}", sim_id_c, cid, e);
+                                    }
+                                    sse_c.send_call_event(CallEvent {
+                                        event_type: "call_ended".into(),
+                                        sim_id:     sim_id_c.clone(),
+                                        call_id:    cid,
+                                        phone:      Some(phone_c.clone()),
+                                        direction:  "outbound".into(),
+                                    });
+                                    info!("[CLCC {}] call finalized (status={})", sim_id_c, status);
                                 }
-                                sse_c.send_call_event(CallEvent {
-                                    event_type: "call_ended".into(),
-                                    sim_id:     sim_id_c.clone(),
-                                    call_id:    cid,
-                                    phone:      Some(phone_c.clone()),
-                                    direction:  "outbound".into(),
-                                });
-                                info!("[CLCC {}] call finalized (status={})", sim_id_c, status);
+                                break;
                             }
-                            break;
                         }
                     }
                     Err(e) => {
@@ -652,17 +656,21 @@ impl ModemManager {
         Ok(call_id)
     }
 
-    /// Parse the stat field from the first +CLCC line in an AT+CLCC response.
-    /// stat: 0=active, 1=held, 2=dialing(MO), 3=alerting(MO), 4=incoming(MT), 5=waiting.
-    fn parse_clcc_stat(response: &str) -> Option<u8> {
+    /// Parse the stat field from the first +CLCC line with dir=0 (MO = mobile-originated).
+    /// stat: 0=active, 1=held, 2=dialing(MO), 3=alerting/ringing(MO), 4=incoming(MT), 5=waiting.
+    /// Returns None if no MO call is present (CLCC empty or only MT entries).
+    fn parse_clcc_mo_stat(response: &str) -> Option<u8> {
         for line in response.lines() {
             let line = line.trim();
             if let Some(rest) = line.strip_prefix("+CLCC:") {
                 // Format: <idx>,<dir>,<stat>,<mode>,<mpty>[,"<num>",<type>]
                 let parts: Vec<&str> = rest.split(',').collect();
                 if parts.len() >= 3 {
-                    if let Ok(stat) = parts[2].trim().parse::<u8>() {
-                        return Some(stat);
+                    let dir: u8 = parts[1].trim().parse().unwrap_or(255);
+                    if dir == 0 {  // 0 = MO (mobile originated)
+                        if let Ok(stat) = parts[2].trim().parse::<u8>() {
+                            return Some(stat);
+                        }
                     }
                 }
             }
