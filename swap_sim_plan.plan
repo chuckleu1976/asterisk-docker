@@ -1,0 +1,58 @@
+Swap SIM Plan
+
+Purpose:
+- Safely swap a SIM, update configs (AMI/epdg/pjsip), and optionally restart Asterisk.
+
+Prerequisites:
+- `asterisk` and `pcscd` containers running.
+- `sim_config.py` present in repository root (asterisk-docker).
+- Backup current configs: copy `config/1` to `config/1.bak` before changing.
+
+Pre-swap checklist:
+- Backup configs:
+  cp -a config/1 config/1.bak
+- Note current SIM:
+  python3 sim_config.py --list
+  sqlite3 sim_inventory.db "SELECT * FROM sims;"
+
+Swap steps (one-shot):
+1. Physically swap the SIM in the reader.
+2. Read new SIM and update configs (one-shot):
+   cd /home/ht/docker/asterisk-docker
+   python3 sim_config.py --instance 1 --reader 0 --restart
+   # Optional: provide IMEI if device changed:
+   python3 sim_config.py --instance 1 --reader 0 --imei 355123456789012 --restart
+
+Auto-detect (continuous):
+- Start watch mode to auto-detect swaps and reconfigure:
+  python3 sim_config.py --watch --interval 5
+
+What is updated:
+- `config/1/ami_usim.ini` -> `reader=imsi:{IMSI}`
+- `config/1/epdg.conf` -> `remote_addrs` and NAI `id` updated for `mcc`/`mnc`/`imsi`
+- `config/1/asterisk/pjsip.conf` -> `imei`, `client_uri`, `from_domain`, `username`, `smsc_uri`, callerid/from_user, and section headers
+
+Verification (after update):
+- Check SIM inventory DB:
+  sqlite3 sim_inventory.db "SELECT reader, iccid, imsi, msisdn, updated_at FROM sims;"
+- Confirm `ami_usim.ini` updated:
+  grep -n "^reader" config/1/ami_usim.ini
+- Confirm `epdg.conf` domain/NAI updated:
+  grep -n "remote_addrs\|nai.epc" config/1/epdg.conf
+- Confirm `pjsip.conf` changes:
+  grep -n "imei\|ims.mnc" config/1/asterisk/pjsip.conf
+- Reload Asterisk dialplan and check logs:
+  docker compose exec asterisk asterisk -rx "dialplan reload"
+  docker compose exec asterisk tail -n 200 /var/log/asterisk/messages
+
+Rollback:
+- Restore from backup:
+  rm -rf config/1
+  mv config/1.bak config/1
+- Restart Asterisk:
+  docker compose restart asterisk
+
+Notes & tips:
+- MSISDN may not be on card — use `--msisdn` to set callerid if needed.
+- To explicitly set IMEI when swapping modem/device, pass `--imei` as shown.
+- For safe operation in production, run `--instance ...` without `--restart` first, inspect diffs, then restart.
