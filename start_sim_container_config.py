@@ -867,6 +867,8 @@ def watch_loop(interval, devices=None):
 
     last_iccid          = {}
     last_reader_indices = set()
+    _pcscd_fail_count   = 0
+    _PCSCD_FAIL_LIMIT   = 3   # restart pcscd after this many consecutive empty polls
 
     print(f"[watch] Polling every {interval}s. Press Ctrl+C to stop.\n")
 
@@ -874,6 +876,26 @@ def watch_loop(interval, devices=None):
         time.sleep(interval)
 
         reader_indices = set(enumerate_readers_in_container())
+
+        # ── pcscd recovery ───────────────────────────────────────────────────
+        # enumerate_readers_in_container() returns empty both when all readers
+        # are genuinely unplugged AND when pcscd has lost its USB context (e.g.
+        # after physically moving a SIM card and the reader re-enumerated).
+        # After _PCSCD_FAIL_LIMIT consecutive empty polls we restart pcscd so
+        # it re-scans the USB bus, then skip the rest of this iteration.
+        expected_readers = len(devices) if devices else 0
+        if len(reader_indices) == 0 and expected_readers > 0:
+            _pcscd_fail_count += 1
+            if _pcscd_fail_count >= _PCSCD_FAIL_LIMIT:
+                ts = datetime.now().strftime('%H:%M:%S')
+                print(f"[{ts}] No readers detected for {_pcscd_fail_count} polls "
+                      f"— restarting pcscd to recover USB context...")
+                docker_compose("restart", "pcscd", timeout=30)
+                time.sleep(5)
+                _pcscd_fail_count = 0
+            continue
+        else:
+            _pcscd_fail_count = 0
 
         # ── hotplug ──────────────────────────────────────────────────────────
         if reader_indices != last_reader_indices:
