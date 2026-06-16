@@ -16,6 +16,7 @@ License: MIT
 
 * Create a `logs` directory near `asterisk-docker` folder. It will contain call and message logs 
 * Copy `config/example` configs to `config/1` and modify them
+* For a single local SIM card, set `SIM_MODE=local` before starting the stack. Do not use the remote SIM setup unless you have an osmo-remsim backend.
   | Replace                 | With                                                | How to obtain                                                                                  |
   |-------------------------|-----------------------------------------------------|------------------------------------------------------------------------------------------------|
   | `262011503723016`       | Your IMSI                                           | From the SIM card using `pysim-read.py`                                                        |
@@ -33,6 +34,7 @@ License: MIT
 * If you're using SELinux, install semodules by running `./semodules_install.sh`
 * If you're using user namespaces, change UID in `80-ccid.rules` and install it to `/etc/udev/rules.d/80-ccid.rules`
 * Start the container by running `docker-compose up -d` in this directory
+* For the local one-SIM setup, only `pcscd` and `asterisk` are needed; `asterisk2` is for the second-instance example only.
 
 # Running several instances
 

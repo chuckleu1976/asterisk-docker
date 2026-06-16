@@ -5,10 +5,12 @@ services:
       dockerfile: ${PWD}/pcscd/Dockerfile
     image: ghcr.io/chuckleu1976/pcscd-sysmocom:latest
     restart: always
+    privileged: true
     environment:
       - LD_LIBRARY_PATH=/usr/lib64/remsim-libs
-      - SIM_MODE=${SIM_MODE:-remote}
+      - SIM_MODE=${SIM_MODE:-local}
     volumes:
+      - ./pcscd/entrypoint.sh:/entrypoint.sh:ro
       - pcsc-sock:/run/pcscd
       - ./remsim/libs:/usr/lib64/remsim-libs:ro
       - ./remsim/serial:/usr/lib64/pcsc/drivers/serial:ro
@@ -26,8 +28,10 @@ services:
       network: host
     cap_add:
       - CAP_NET_ADMIN
+    privileged: true
     devices:
       - /dev/net/tun
+      - /dev/bus/usb:/dev/bus/usb
     ports:
       - 5060:5060/udp
       - 10000-10009:10000-10009/udp
@@ -44,20 +48,22 @@ services:
     pid: service:pcscd
     depends_on: [pcscd]
     restart: always
-
   asterisk2:
     image: ghcr.io/chuckleu1976/asterisk-vowifi-patched:latest
     hostname: asterisk2
     build:
       context: ./asterisk
       dockerfile: Dockerfile
+      network: host
     cap_add:
       - CAP_NET_ADMIN
+    privileged: true
     devices:
       - /dev/net/tun
+      - /dev/bus/usb:/dev/bus/usb
     ports:
-      - 5061:5060/udp              # Different external port
-      - 11001-11010:10000-10009/udp  # Different external RTP range, same internal range
+      - 5062:5060/udp
+      - 10010-10019:10010-10019/udp
     tmpfs:
       - /run
     volumes:
@@ -66,6 +72,180 @@ services:
       - ./config/2/ami_usim.ini:/usr/local/etc/ami_usim.ini:Z,ro
       - ./config/2/telegram_token:/usr/local/etc/telegram_token:Z,ro
       - ../logs/2:/logs:Z
+      - ./sim_inventory.db:/data/sim_inventory.db:Z
+      - pcsc-sock:/run/pcscd
+    pid: service:pcscd
+    depends_on: [pcscd]
+    restart: always
+  asterisk3:
+    image: ghcr.io/chuckleu1976/asterisk-vowifi-patched:latest
+    hostname: asterisk3
+    build:
+      context: ./asterisk
+      dockerfile: Dockerfile
+      network: host
+    cap_add:
+      - CAP_NET_ADMIN
+    privileged: true
+    devices:
+      - /dev/net/tun
+      - /dev/bus/usb:/dev/bus/usb
+    ports:
+      - 5064:5060/udp
+      - 10020-10029:10020-10029/udp
+    tmpfs:
+      - /run
+    volumes:
+      - ./config/3/epdg.conf:/usr/local/etc/swanctl/conf.d/epdg.conf:Z,ro
+      - ./config/3/asterisk:/etc/asterisk:Z,ro
+      - ./config/3/ami_usim.ini:/usr/local/etc/ami_usim.ini:Z,ro
+      - ./config/3/telegram_token:/usr/local/etc/telegram_token:Z,ro
+      - ../logs/3:/logs:Z
+      - ./sim_inventory.db:/data/sim_inventory.db:Z
+      - pcsc-sock:/run/pcscd
+    pid: service:pcscd
+    depends_on: [pcscd]
+    restart: always
+  asterisk4:
+    image: ghcr.io/chuckleu1976/asterisk-vowifi-patched:latest
+    hostname: asterisk4
+    build:
+      context: ./asterisk
+      dockerfile: Dockerfile
+      network: host
+    cap_add:
+      - CAP_NET_ADMIN
+    privileged: true
+    devices:
+      - /dev/net/tun
+      - /dev/bus/usb:/dev/bus/usb
+    ports:
+      - 5066:5060/udp
+      - 10030-10039:10030-10039/udp
+    tmpfs:
+      - /run
+    volumes:
+      - ./config/4/epdg.conf:/usr/local/etc/swanctl/conf.d/epdg.conf:Z,ro
+      - ./config/4/asterisk:/etc/asterisk:Z,ro
+      - ./config/4/ami_usim.ini:/usr/local/etc/ami_usim.ini:Z,ro
+      - ./config/4/telegram_token:/usr/local/etc/telegram_token:Z,ro
+      - ../logs/4:/logs:Z
+      - ./sim_inventory.db:/data/sim_inventory.db:Z
+      - pcsc-sock:/run/pcscd
+    pid: service:pcscd
+    depends_on: [pcscd]
+    restart: always
+  asterisk5:
+    image: ghcr.io/chuckleu1976/asterisk-vowifi-patched:latest
+    hostname: asterisk5
+    build:
+      context: ./asterisk
+      dockerfile: Dockerfile
+      network: host
+    cap_add:
+      - CAP_NET_ADMIN
+    privileged: true
+    devices:
+      - /dev/net/tun
+      - /dev/bus/usb:/dev/bus/usb
+    ports:
+      - 5068:5060/udp
+      - 10040-10049:10040-10049/udp
+    tmpfs:
+      - /run
+    volumes:
+      - ./config/5/epdg.conf:/usr/local/etc/swanctl/conf.d/epdg.conf:Z,ro
+      - ./config/5/asterisk:/etc/asterisk:Z,ro
+      - ./config/5/ami_usim.ini:/usr/local/etc/ami_usim.ini:Z,ro
+      - ./config/5/telegram_token:/usr/local/etc/telegram_token:Z,ro
+      - ../logs/5:/logs:Z
+      - ./sim_inventory.db:/data/sim_inventory.db:Z
+      - pcsc-sock:/run/pcscd
+    pid: service:pcscd
+    depends_on: [pcscd]
+    restart: always
+  asterisk6:
+    image: ghcr.io/chuckleu1976/asterisk-vowifi-patched:latest
+    hostname: asterisk6
+    build:
+      context: ./asterisk
+      dockerfile: Dockerfile
+      network: host
+    cap_add:
+      - CAP_NET_ADMIN
+    privileged: true
+    devices:
+      - /dev/net/tun
+      - /dev/bus/usb:/dev/bus/usb
+    ports:
+      - 5070:5060/udp
+      - 10050-10059:10050-10059/udp
+    tmpfs:
+      - /run
+    volumes:
+      - ./config/6/epdg.conf:/usr/local/etc/swanctl/conf.d/epdg.conf:Z,ro
+      - ./config/6/asterisk:/etc/asterisk:Z,ro
+      - ./config/6/ami_usim.ini:/usr/local/etc/ami_usim.ini:Z,ro
+      - ./config/6/telegram_token:/usr/local/etc/telegram_token:Z,ro
+      - ../logs/6:/logs:Z
+      - ./sim_inventory.db:/data/sim_inventory.db:Z
+      - pcsc-sock:/run/pcscd
+    pid: service:pcscd
+    depends_on: [pcscd]
+    restart: always
+  asterisk7:
+    image: ghcr.io/chuckleu1976/asterisk-vowifi-patched:latest
+    hostname: asterisk7
+    build:
+      context: ./asterisk
+      dockerfile: Dockerfile
+      network: host
+    cap_add:
+      - CAP_NET_ADMIN
+    privileged: true
+    devices:
+      - /dev/net/tun
+      - /dev/bus/usb:/dev/bus/usb
+    ports:
+      - 5072:5060/udp
+      - 10060-10069:10060-10069/udp
+    tmpfs:
+      - /run
+    volumes:
+      - ./config/7/epdg.conf:/usr/local/etc/swanctl/conf.d/epdg.conf:Z,ro
+      - ./config/7/asterisk:/etc/asterisk:Z,ro
+      - ./config/7/ami_usim.ini:/usr/local/etc/ami_usim.ini:Z,ro
+      - ./config/7/telegram_token:/usr/local/etc/telegram_token:Z,ro
+      - ../logs/7:/logs:Z
+      - ./sim_inventory.db:/data/sim_inventory.db:Z
+      - pcsc-sock:/run/pcscd
+    pid: service:pcscd
+    depends_on: [pcscd]
+    restart: always
+  asterisk8:
+    image: ghcr.io/chuckleu1976/asterisk-vowifi-patched:latest
+    hostname: asterisk8
+    build:
+      context: ./asterisk
+      dockerfile: Dockerfile
+      network: host
+    cap_add:
+      - CAP_NET_ADMIN
+    privileged: true
+    devices:
+      - /dev/net/tun
+      - /dev/bus/usb:/dev/bus/usb
+    ports:
+      - 5074:5060/udp
+      - 10070-10079:10070-10079/udp
+    tmpfs:
+      - /run
+    volumes:
+      - ./config/8/epdg.conf:/usr/local/etc/swanctl/conf.d/epdg.conf:Z,ro
+      - ./config/8/asterisk:/etc/asterisk:Z,ro
+      - ./config/8/ami_usim.ini:/usr/local/etc/ami_usim.ini:Z,ro
+      - ./config/8/telegram_token:/usr/local/etc/telegram_token:Z,ro
+      - ../logs/8:/logs:Z
       - ./sim_inventory.db:/data/sim_inventory.db:Z
       - pcsc-sock:/run/pcscd
     pid: service:pcscd

@@ -1,0 +1,33 @@
+[settings]
+
+[[readers]]
+P0= "asterisk1"
+IMEI=359801043400751
+
+[[readers]]
+P1= "asterisk2"
+IMEI=353295065048026
+
+[[readers]]
+P2= "asterisk3"
+IMEI=354661041559247
+
+[[readers]]
+P3= "asterisk4"
+IMEI=351603044474985
+
+[[readers]]
+P4= "asterisk5"
+IMEI=354766027182755
+
+[[readers]]
+P5= "asterisk6"
+IMEI=356007107617594
+
+[[readers]]
+P6= "asterisk7"
+IMEI=356007105621127
+
+[[readers]]
+P7= "asterisk8"
+IMEI=356007104676825

@@ -48,6 +48,7 @@ COPY sms_save.py /usr/local/bin/sms_save.py
 RUN chmod +x /usr/local/bin/whisper_transcribe.py /usr/local/bin/sms_save.py
 COPY p-cscf.conf /usr/local/etc/strongswan.d/charon/p-cscf.conf
 COPY osmo-epdg.conf /usr/local/etc/strongswan.d/charon/osmo-epdg.conf
+COPY charon-logging.conf /usr/local/etc/strongswan.d/charon-logging.conf
 COPY ims.updown /usr/local/etc/ims.updown
 COPY entrypoint.sh /entrypoint.sh
 # Override system libpcsclite with our 1.9.9-sysmocom build (protocol 4:4)

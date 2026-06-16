@@ -4,7 +4,60 @@ case "$PLUTO_VERB:$1" in
 up-client-v6:)
         echo "Adding default route to interface ipsec0"
         ip route add ::/0 dev ipsec0
-	rasterisk -x "pjsip send register volte_ims"
+
+        # Extract first P-CSCF IPv6 address from strongSwan log
+        # Charon logs "received P-CSCF server IP <addr>" just before running updown
+        PCSCF_IP=$(tail -200 /var/log/strongswan.log 2>/dev/null \
+            | grep "received P-CSCF server IP" \
+            | head -1 \
+            | sed -E 's/.*received P-CSCF server IP ([0-9a-f:]+).*/\1/')
+
+        if [ -n "$PCSCF_IP" ]; then
+            echo "Found P-CSCF IP: $PCSCF_IP — updating pjsip.conf"
+            python3 << PYTHON_EOF
+import re, sys
+
+pcscf = "$PCSCF_IP"
+conf_file = "/etc/asterisk/pjsip.conf"
+
+try:
+    with open(conf_file, 'r') as f:
+        content = f.read()
+
+    # Update [volte_ims] type=identify  match=
+    content = re.sub(
+        r'(\[volte_ims\]\s*\ntype=identify\s*\nendpoint=volte_ims\s*\nmatch=)[^\n]+',
+        r'\g<1>' + pcscf,
+        content)
+
+    # Update [ims.mncXX.mccXX.3gppnetwork.org] type=resolve  ip=
+    content = re.sub(
+        r'(\[ims\.mnc\d+\.mcc\d+\.3gppnetwork\.org\]\s*\ntype=resolve\s*\nip=)[^\n]+',
+        r'\g<1>' + pcscf,
+        content)
+
+    # Update [smsoip.ims.mncXX.mccXX.3gppnetwork.org] type=resolve  ip=
+    content = re.sub(
+        r'(\[smsoip\.ims\.mnc\d+\.mcc\d+\.3gppnetwork\.org\]\s*\ntype=resolve\s*\nip=)[^\n]+',
+        r'\g<1>' + pcscf,
+        content)
+
+    with open(conf_file, 'w') as f:
+        f.write(content)
+
+    print(f"pjsip.conf updated: P-CSCF = {pcscf}")
+except Exception as e:
+    print(f"Error updating pjsip.conf: {e}", file=sys.stderr)
+PYTHON_EOF
+
+            sleep 1
+            rasterisk -x "module reload res_pjsip.so" >/dev/null 2>&1
+            sleep 2
+        else
+            echo "Warning: P-CSCF IP not found in strongswan.log — registering anyway"
+        fi
+
+        rasterisk -x "pjsip send register volte_ims"
         ;;
 down-client-v6:)
         ;;

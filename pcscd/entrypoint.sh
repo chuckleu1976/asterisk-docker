@@ -8,7 +8,7 @@ dbus-daemon --system
 if [ "${SIM_MODE:-remote}" = "local" ]; then
     # Local USB reader: skip remsim config, let pcscd auto-detect USB readers
     mkdir -p /tmp/empty-reader-conf
-    exec pcscd -f --reader-conf-dir /tmp/empty-reader-conf
+    exec pcscd -f -c /tmp/empty-reader-conf
 else
     # Remote SIM via osmo-remsim IFD handler (default)
     exec pcscd -f
