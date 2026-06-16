@@ -5,11 +5,12 @@ up-client-v6:)
         echo "Adding default route to interface ipsec0"
         ip route add ::/0 dev ipsec0
 
-        # Extract first P-CSCF IPv6 address from strongSwan log
-        # Charon logs "received P-CSCF server IP <addr>" just before running updown
+        # Extract first P-CSCF IPv6 address from the most recent IKE_AUTH batch.
+        # Each connection announces 3 P-CSCFs consecutively; tail -3|head -1
+        # gives the primary address from the latest tunnel establishment.
         PCSCF_IP=$(tail -200 /var/log/strongswan.log 2>/dev/null \
             | grep "received P-CSCF server IP" \
-            | head -1 \
+            | tail -3 | head -1 \
             | sed -E 's/.*received P-CSCF server IP ([0-9a-f:]+).*/\1/')
 
         if [ -n "$PCSCF_IP" ]; then

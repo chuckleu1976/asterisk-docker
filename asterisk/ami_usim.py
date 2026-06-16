@@ -11,7 +11,10 @@ import time
 def make_connection_index(reader_index):
     r = readers()
     connection = r[reader_index].createConnection()
-    connection.connect()
+    try:
+        connection.connect()
+    except Exception:
+        return None
     # Select EF.DIR
     data, sw1, sw2 = connection.transmit(toBytes('00a40004022f0000'))
     if sw1 != 97:

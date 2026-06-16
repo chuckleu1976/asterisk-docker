@@ -7,7 +7,7 @@ sleep 3
 ipsec start
 sleep 2
 swanctl --load-creds && swanctl --load-conns && swanctl --initiate --child ims
-swanctl --log &
+swanctl --log 2>&1 | tee -a /var/log/strongswan.log &
 (backoff=4; while true; do
      sleep 1;
      if ! swanctl --list-sas|grep '^ims:' > /dev/null; then
