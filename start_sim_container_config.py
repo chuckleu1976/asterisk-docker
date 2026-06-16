@@ -49,6 +49,7 @@ DEVICES_TOML = SCRIPT_DIR / "devices.toml"
 COMPOSE_FILE = SCRIPT_DIR / "compose.yaml"
 
 # Container used for APDU reading — must be running, has pyscard + pcsc-sock
+# This is resolved dynamically at runtime; see get_read_container()
 READ_CONTAINER = "asterisk"
 
 # ─── Embedded reader script (runs inside container via docker compose exec) ───
@@ -611,11 +612,25 @@ def restart_instance(instance):
 
 # ─── Reader enumeration ──────────────────────────────────────────────────────
 
+def get_read_container():
+    """Return the name of the first running asterisk container, or READ_CONTAINER."""
+    r = docker_compose("ps", "--format", "{{.Service}}\t{{.State}}", timeout=10)
+    if r.returncode == 0:
+        for line in r.stdout.splitlines():
+            parts = line.strip().split('\t')
+            if len(parts) == 2:
+                svc, state = parts
+                if svc.startswith('asterisk') and state == 'running':
+                    return svc
+    return READ_CONTAINER
+
+
 def enumerate_readers_in_container():
-    """Return list of reader indices visible inside the asterisk container."""
+    """Return list of reader indices visible inside a running asterisk container."""
     script = "from smartcard.System import readers\nr=readers()\nprint(len(r))\n"
+    container = get_read_container()
     try:
-        r = docker_compose("exec", "-T", READ_CONTAINER, "python3", "-c", script,
+        r = docker_compose("exec", "-T", container, "python3", "-c", script,
                            timeout=30)
     except subprocess.TimeoutExpired:
         return []
@@ -630,9 +645,10 @@ def enumerate_readers_in_container():
 # ─── SIM reading ─────────────────────────────────────────────────────────────
 
 def read_sim(reader_index):
-    """Run APDU reader inside the asterisk container; return dict."""
+    """Run APDU reader inside a running asterisk container; return dict."""
+    container = get_read_container()
     try:
-        r = docker_compose("exec", "-T", READ_CONTAINER,
+        r = docker_compose("exec", "-T", container,
                            "python3", "-c", _READER_SCRIPT, str(reader_index),
                            timeout=30)
     except subprocess.TimeoutExpired:
@@ -867,8 +883,6 @@ def watch_loop(interval, devices=None):
 
     last_iccid          = {}
     last_reader_indices = set()
-    _pcscd_fail_count   = 0
-    _PCSCD_FAIL_LIMIT   = 3   # restart pcscd after this many consecutive empty polls
 
     print(f"[watch] Polling every {interval}s. Press Ctrl+C to stop.\n")
 
@@ -876,26 +890,6 @@ def watch_loop(interval, devices=None):
         time.sleep(interval)
 
         reader_indices = set(enumerate_readers_in_container())
-
-        # ── pcscd recovery ───────────────────────────────────────────────────
-        # enumerate_readers_in_container() returns empty both when all readers
-        # are genuinely unplugged AND when pcscd has lost its USB context (e.g.
-        # after physically moving a SIM card and the reader re-enumerated).
-        # After _PCSCD_FAIL_LIMIT consecutive empty polls we restart pcscd so
-        # it re-scans the USB bus, then skip the rest of this iteration.
-        expected_readers = len(devices) if devices else 0
-        if len(reader_indices) == 0 and expected_readers > 0:
-            _pcscd_fail_count += 1
-            if _pcscd_fail_count >= _PCSCD_FAIL_LIMIT:
-                ts = datetime.now().strftime('%H:%M:%S')
-                print(f"[{ts}] No readers detected for {_pcscd_fail_count} polls "
-                      f"— restarting pcscd to recover USB context...")
-                docker_compose("restart", "pcscd", timeout=30)
-                time.sleep(5)
-                _pcscd_fail_count = 0
-            continue
-        else:
-            _pcscd_fail_count = 0
 
         # ── hotplug ──────────────────────────────────────────────────────────
         if reader_indices != last_reader_indices:
