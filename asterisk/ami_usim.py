@@ -10,34 +10,35 @@ import time
 
 def make_connection_index(reader_index):
     r = readers()
-    connection = r[reader_index].createConnection()
     try:
+        connection = r[reader_index].createConnection()
         connection.connect()
-    except Exception:
+        # Select EF.DIR
+        data, sw1, sw2 = connection.transmit(toBytes('00a40004022f0000'))
+        if sw1 != 97:
+            print("Failed to select EF.DIR")
+            return None
+        data, sw1, sw2 = connection.transmit(toBytes('00C00000') + [sw2])
+        result = toHexString(data).replace(" ", "")
+        record_length = data[7]
+        # Read first AID
+        data, sw1, sw2 = connection.transmit(toBytes('00b20104') + [record_length])
+        if sw1 != 144:
+            print("Failed to get AID")
+            return None
+        result = toHexString(data).replace(" ", "")
+        aid_length = data[3]
+        aid = result[8:(8 + aid_length * 2)]
+        print(f"Using aid={aid}")
+        # Select AID
+        data, sw1, sw2 = connection.transmit(toBytes('00a40404') + [aid_length] + toBytes(aid))
+        if sw1 != 97:
+            print("Failed to select AID")
+            return None
+        return connection
+    except Exception as e:
+        print(f"P{reader_index}: connection error: {e}")
         return None
-    # Select EF.DIR
-    data, sw1, sw2 = connection.transmit(toBytes('00a40004022f0000'))
-    if sw1 != 97:
-        print("Failed to select EF.DIR")
-        return None
-    data, sw1, sw2 = connection.transmit(toBytes('00C00000') + [sw2])
-    result = toHexString(data).replace(" ", "")
-    record_length = data[7]
-    # Read first AID
-    data, sw1, sw2 = connection.transmit(toBytes('00b20104') + [record_length])
-    if sw1 != 144:
-        print("Failed to get AID")
-        return None
-    result = toHexString(data).replace(" ", "")
-    aid_length = data[3]
-    aid = result[8:(8 + aid_length * 2)]
-    print(f"Using aid={aid}")
-    # Select AID
-    data, sw1, sw2 = connection.transmit(toBytes('00a40404') + [aid_length] + toBytes(aid))
-    if sw1 != 97:
-        print("Failed to select AID")
-        return None
-    return connection
 
 
 def swap_nibbles(s: Hexstr) -> hexstr:
