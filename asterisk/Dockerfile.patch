@@ -24,3 +24,4 @@ RUN ls -la /tmp/libpcsclite_1.9.9.so && \
 # Apply runtime fixes (no rebuild of asterisk required)
 COPY ami_usim.py /usr/local/bin/ami_usim.py
 COPY ims.updown /usr/local/etc/ims.updown
+COPY entrypoint.sh /entrypoint.sh
