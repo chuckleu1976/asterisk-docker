@@ -553,7 +553,7 @@ def generate_compose(devices):
             f"      - /run",
             f"    volumes:",
             f"      - ./config/{instance}/epdg.conf:/usr/local/etc/swanctl/conf.d/epdg.conf:Z,ro",
-            f"      - ./config/{instance}/asterisk:/etc/asterisk:Z,ro",
+            f"      - ./config/{instance}/asterisk:/etc/asterisk:Z",
             f"      - ./config/{instance}/ami_usim.ini:/usr/local/etc/ami_usim.ini:Z,ro",
             f"      - ./config/{instance}/telegram_token:/usr/local/etc/telegram_token:Z,ro",
             f"      - ../logs/{instance}:/logs:Z",

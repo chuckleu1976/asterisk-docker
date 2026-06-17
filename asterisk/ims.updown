@@ -56,6 +56,8 @@ PYTHON_EOF
             sleep 2
         else
             echo "Warning: P-CSCF IP not found in strongswan.log — registering anyway"
+            rasterisk -x "module reload res_pjsip.so" >/dev/null 2>&1
+            sleep 2
         fi
 
         rasterisk -x "pjsip send register volte_ims"

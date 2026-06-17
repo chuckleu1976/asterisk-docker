@@ -39,7 +39,7 @@ services:
       - /run
     volumes:
       - ./config/1/epdg.conf:/usr/local/etc/swanctl/conf.d/epdg.conf:Z,ro
-      - ./config/1/asterisk:/etc/asterisk:Z,ro
+      - ./config/1/asterisk:/etc/asterisk:Z
       - ./config/1/ami_usim.ini:/usr/local/etc/ami_usim.ini:Z,ro
       - ./config/1/telegram_token:/usr/local/etc/telegram_token:Z,ro
       - ../logs/1:/logs:Z
@@ -68,7 +68,7 @@ services:
       - /run
     volumes:
       - ./config/2/epdg.conf:/usr/local/etc/swanctl/conf.d/epdg.conf:Z,ro
-      - ./config/2/asterisk:/etc/asterisk:Z,ro
+      - ./config/2/asterisk:/etc/asterisk:Z
       - ./config/2/ami_usim.ini:/usr/local/etc/ami_usim.ini:Z,ro
       - ./config/2/telegram_token:/usr/local/etc/telegram_token:Z,ro
       - ../logs/2:/logs:Z
@@ -97,7 +97,7 @@ services:
       - /run
     volumes:
       - ./config/3/epdg.conf:/usr/local/etc/swanctl/conf.d/epdg.conf:Z,ro
-      - ./config/3/asterisk:/etc/asterisk:Z,ro
+      - ./config/3/asterisk:/etc/asterisk:Z
       - ./config/3/ami_usim.ini:/usr/local/etc/ami_usim.ini:Z,ro
       - ./config/3/telegram_token:/usr/local/etc/telegram_token:Z,ro
       - ../logs/3:/logs:Z
@@ -126,7 +126,7 @@ services:
       - /run
     volumes:
       - ./config/4/epdg.conf:/usr/local/etc/swanctl/conf.d/epdg.conf:Z,ro
-      - ./config/4/asterisk:/etc/asterisk:Z,ro
+      - ./config/4/asterisk:/etc/asterisk:Z
       - ./config/4/ami_usim.ini:/usr/local/etc/ami_usim.ini:Z,ro
       - ./config/4/telegram_token:/usr/local/etc/telegram_token:Z,ro
       - ../logs/4:/logs:Z
@@ -155,7 +155,7 @@ services:
       - /run
     volumes:
       - ./config/5/epdg.conf:/usr/local/etc/swanctl/conf.d/epdg.conf:Z,ro
-      - ./config/5/asterisk:/etc/asterisk:Z,ro
+      - ./config/5/asterisk:/etc/asterisk:Z
       - ./config/5/ami_usim.ini:/usr/local/etc/ami_usim.ini:Z,ro
       - ./config/5/telegram_token:/usr/local/etc/telegram_token:Z,ro
       - ../logs/5:/logs:Z
@@ -184,7 +184,7 @@ services:
       - /run
     volumes:
       - ./config/6/epdg.conf:/usr/local/etc/swanctl/conf.d/epdg.conf:Z,ro
-      - ./config/6/asterisk:/etc/asterisk:Z,ro
+      - ./config/6/asterisk:/etc/asterisk:Z
       - ./config/6/ami_usim.ini:/usr/local/etc/ami_usim.ini:Z,ro
       - ./config/6/telegram_token:/usr/local/etc/telegram_token:Z,ro
       - ../logs/6:/logs:Z
@@ -213,7 +213,7 @@ services:
       - /run
     volumes:
       - ./config/7/epdg.conf:/usr/local/etc/swanctl/conf.d/epdg.conf:Z,ro
-      - ./config/7/asterisk:/etc/asterisk:Z,ro
+      - ./config/7/asterisk:/etc/asterisk:Z
       - ./config/7/ami_usim.ini:/usr/local/etc/ami_usim.ini:Z,ro
       - ./config/7/telegram_token:/usr/local/etc/telegram_token:Z,ro
       - ../logs/7:/logs:Z
@@ -242,7 +242,7 @@ services:
       - /run
     volumes:
       - ./config/8/epdg.conf:/usr/local/etc/swanctl/conf.d/epdg.conf:Z,ro
-      - ./config/8/asterisk:/etc/asterisk:Z,ro
+      - ./config/8/asterisk:/etc/asterisk:Z
       - ./config/8/ami_usim.ini:/usr/local/etc/ami_usim.ini:Z,ro
       - ./config/8/telegram_token:/usr/local/etc/telegram_token:Z,ro
       - ../logs/8:/logs:Z
