@@ -617,6 +617,13 @@ def stop_instance(instance):
     print(" OK" if r.returncode == 0 else f" Error: {r.stderr.strip()}")
 
 
+def start_instance(instance):
+    svc = "asterisk" if instance == 1 else f"asterisk{instance}"
+    print(f"  Starting {svc}...", end="", flush=True)
+    r = docker_compose("up", "-d", svc)
+    print(" OK" if r.returncode == 0 else f" Error: {r.stderr.strip()}")
+
+
 # ─── Reader enumeration ──────────────────────────────────────────────────────
 
 def get_read_container():
@@ -891,6 +898,8 @@ def watch_loop(interval, devices=None):
 
     last_iccid          = {}
     last_reader_indices = set()
+    read_failures       = {}   # consecutive failure count per reader index
+    REMOVE_THRESHOLD    = 3    # require this many consecutive failures before "card removed"
 
     print(f"[watch] Polling every {interval}s. Press Ctrl+C to stop.\n")
 
@@ -931,11 +940,13 @@ def watch_loop(interval, devices=None):
             try:
                 sim   = read_sim(i)
                 iccid = sim['iccid']
+                read_failures[i] = 0
                 db_save_reader(i, f"P{i}", "available",
                                hostname=dev.get('hostname', ''),
                                imei=dev.get('imei', ''))
             except Exception:
-                if last_iccid[i] is not None:
+                read_failures[i] = read_failures.get(i, 0) + 1
+                if last_iccid[i] is not None and read_failures[i] >= REMOVE_THRESHOLD:
                     ts = datetime.now().strftime('%H:%M:%S')
                     print(f"[{ts}] P{i}: card removed")
                     db_save_reader(i, f"P{i}", "empty",
@@ -952,7 +963,7 @@ def watch_loop(interval, devices=None):
                 last_iccid[i] = iccid
                 db_save_sim(i, sim)
                 if update_instance(instance, sim):
-                    restart_instance(instance)
+                    start_instance(instance)
 
 
 # ─── CLI ──────────────────────────────────────────────────────────────────────
