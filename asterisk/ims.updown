@@ -13,9 +13,9 @@ up-client-v6:)
             | tail -3 | head -1 \
             | sed -E 's/.*received P-CSCF server IP ([0-9a-f:]+).*/\1/')
 
-        # Wait up to 60s for asterisk socket to be available
+        # Wait up to 120s for asterisk socket to be available
         WAIT=0
-        while [ ! -S /var/run/asterisk/asterisk.ctl ] && [ $WAIT -lt 60 ]; do
+        while [ ! -S /var/run/asterisk/asterisk.ctl ] && [ $WAIT -lt 120 ]; do
             echo "Waiting for asterisk socket... (${WAIT}s)"
             sleep 3
             WAIT=$((WAIT + 3))
