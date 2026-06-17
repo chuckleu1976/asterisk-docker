@@ -19,7 +19,7 @@ up-client-v6:)
 
         if [ -n "$PCSCF_IP" ]; then
             echo "Found P-CSCF IP: $PCSCF_IP - updating pjsip.conf"
-            sed -i "s|match=::1|match=${PCSCF_IP}|g; s|ip=::1|ip=${PCSCF_IP}|g" /etc/asterisk/pjsip.conf \
+            sed -i -E "s|match=[0-9a-f:]+|match=${PCSCF_IP}|g; s|ip=[0-9a-f:]+|ip=${PCSCF_IP}|g" /etc/asterisk/pjsip.conf \
                 && echo "pjsip.conf updated: P-CSCF = $PCSCF_IP" \
                 || echo "ERROR: failed to update pjsip.conf"
         else
