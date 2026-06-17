@@ -953,6 +953,7 @@ def watch_loop(interval, devices=None):
                                    hostname=dev.get('hostname', ''),
                                    imei=dev.get('imei', ''))
                     last_iccid[i] = None
+                    stop_instance(instance)
                 continue
 
             if iccid != last_iccid[i]:
