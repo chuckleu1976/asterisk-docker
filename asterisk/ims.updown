@@ -5,15 +5,31 @@ up-client-v6:)
         echo "Adding default route to interface ipsec0"
         ip route add ::/0 dev ipsec0
 
-        # Extract first P-CSCF IPv6 address from the most recent IKE_AUTH batch.
-        # Each connection announces 3 P-CSCFs consecutively; tail -3|head -1
-        # gives the primary address from the latest tunnel establishment.
-        PCSCF_IP=$(tail -200 /var/log/strongswan.log 2>/dev/null \
-            | grep "received P-CSCF server IP" \
-            | tail -3 | head -1 \
-            | sed -E 's/.*received P-CSCF server IP ([0-9a-f:]+).*/\1/')
+        # Extract P-CSCF from charon filelog — [CFG] received P-CSCF server IP
+        # Retry up to 10s to handle small timing gap between SA install and log flush.
+        PCSCF_IP=""
+        RETRY=0
+        while [ -z "$PCSCF_IP" ] && [ $RETRY -lt 10 ]; do
+            PCSCF_IP=$(grep "received P-CSCF server IP" /var/log/strongswan-pcscf.log 2>/dev/null \
+                | tail -3 | head -1 \
+                | sed -E 's/.*received P-CSCF server IP ([0-9a-f:]+).*/\1/')
+            [ -z "$PCSCF_IP" ] && sleep 2
+            RETRY=$((RETRY + 2))
+        done
+
+        if [ -n "$PCSCF_IP" ]; then
+            echo "Found P-CSCF IP: $PCSCF_IP - updating pjsip.conf"
+            sed -i "s|match=::1|match=${PCSCF_IP}|g; s|ip=::1|ip=${PCSCF_IP}|g" /etc/asterisk/pjsip.conf \
+                && echo "pjsip.conf updated: P-CSCF = $PCSCF_IP" \
+                || echo "ERROR: failed to update pjsip.conf"
+        else
+            echo "Warning: P-CSCF IP not found in log - proceeding with ::1"
+        fi
+        # Signal entrypoint.sh to proceed (pjsip.conf updated or gave up)
+        echo "${PCSCF_IP:-::1}" > /tmp/pcscf_ip
 
         # Wait up to 120s for asterisk socket to be available
+        # (pjsip.conf is already updated above, so entrypoint.sh can proceed)
         WAIT=0
         while [ ! -S /var/run/asterisk/asterisk.ctl ] && [ $WAIT -lt 120 ]; do
             echo "Waiting for asterisk socket... (${WAIT}s)"
@@ -21,51 +37,12 @@ up-client-v6:)
             WAIT=$((WAIT + 3))
         done
 
-        if [ -n "$PCSCF_IP" ]; then
-            echo "Found P-CSCF IP: $PCSCF_IP — updating pjsip.conf"
-            python3 << PYTHON_EOF
-import re, sys
-
-pcscf = "$PCSCF_IP"
-conf_file = "/etc/asterisk/pjsip.conf"
-
-try:
-    with open(conf_file, 'r') as f:
-        content = f.read()
-
-    # Update [volte_ims] type=identify  match=
-    content = re.sub(
-        r'(\[volte_ims\]\s*\ntype=identify\s*\nendpoint=volte_ims\s*\nmatch=)[^\n]+',
-        r'\g<1>' + pcscf,
-        content)
-
-    # Update [ims.mncXX.mccXX.3gppnetwork.org] type=resolve  ip=
-    content = re.sub(
-        r'(\[ims\.mnc\d+\.mcc\d+\.3gppnetwork\.org\]\s*\ntype=resolve\s*\nip=)[^\n]+',
-        r'\g<1>' + pcscf,
-        content)
-
-    # Update [smsoip.ims.mncXX.mccXX.3gppnetwork.org] type=resolve  ip=
-    content = re.sub(
-        r'(\[smsoip\.ims\.mnc\d+\.mcc\d+\.3gppnetwork\.org\]\s*\ntype=resolve\s*\nip=)[^\n]+',
-        r'\g<1>' + pcscf,
-        content)
-
-    with open(conf_file, 'w') as f:
-        f.write(content)
-
-    print(f"pjsip.conf updated: P-CSCF = {pcscf}")
-except Exception as e:
-    print(f"Error updating pjsip.conf: {e}", file=sys.stderr)
-PYTHON_EOF
-
+        if [ -S /var/run/asterisk/asterisk.ctl ]; then
             sleep 1
             rasterisk -x "module reload res_pjsip.so" >/dev/null 2>&1
             sleep 2
         else
-            echo "Warning: P-CSCF IP not found in strongswan.log — registering anyway"
-            rasterisk -x "module reload res_pjsip.so" >/dev/null 2>&1
-            sleep 2
+            echo "Warning: asterisk socket not available after ${WAIT}s - skipping reload"
         fi
 
         rasterisk -x "pjsip send register volte_ims"
