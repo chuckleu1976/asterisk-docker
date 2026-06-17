@@ -617,11 +617,30 @@ def stop_instance(instance):
     print(" OK" if r.returncode == 0 else f" Error: {r.stderr.strip()}")
 
 
+def _patch_instance(svc):
+    """Copy patched ami_usim.py and ims.updown into a running container.
+
+    docker compose up recreates containers from the image, discarding any
+    previously copied fixes.  Call this after every start_instance().
+    """
+    for src, dst in [
+        ("asterisk/ami_usim.py",    "/usr/local/bin/ami_usim.py"),
+        ("asterisk/ims.updown",     "/usr/local/etc/ims.updown"),
+    ]:
+        r = docker_compose("cp", src, f"{svc}:{dst}")
+        if r.returncode != 0:
+            print(f"    [warn] cp {src} -> {svc}:{dst}: {r.stderr.strip()}")
+
+
 def start_instance(instance):
     svc = "asterisk" if instance == 1 else f"asterisk{instance}"
     print(f"  Starting {svc}...", end="", flush=True)
     r = docker_compose("up", "-d", svc)
-    print(" OK" if r.returncode == 0 else f" Error: {r.stderr.strip()}")
+    if r.returncode == 0:
+        print(" OK")
+        _patch_instance(svc)
+    else:
+        print(f" Error: {r.stderr.strip()}")
 
 
 # ─── Reader enumeration ──────────────────────────────────────────────────────
