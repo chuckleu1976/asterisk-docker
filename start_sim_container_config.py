@@ -610,6 +610,13 @@ def restart_instance(instance):
     print(" OK" if r.returncode == 0 else f" Error: {r.stderr.strip()}")
 
 
+def stop_instance(instance):
+    svc = "asterisk" if instance == 1 else f"asterisk{instance}"
+    print(f"  Stopping {svc} (no SIM)...", end="", flush=True)
+    r = docker_compose("stop", svc)
+    print(" OK" if r.returncode == 0 else f" Error: {r.stderr.strip()}")
+
+
 # ─── Reader enumeration ──────────────────────────────────────────────────────
 
 def get_read_container():
@@ -814,6 +821,7 @@ def setup(do_watch=False, interval=5):
             print(f"    No SIM / read error: {e}")
             db_save_reader(idx, f"P{idx}", "empty",
                            hostname=dev['hostname'], imei=dev['imei'])
+            stop_instance(instance)
 
     print("\n" + "=" * 60)
     print("  SETUP COMPLETE")
