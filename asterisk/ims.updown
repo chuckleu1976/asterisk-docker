@@ -13,6 +13,14 @@ up-client-v6:)
             | tail -3 | head -1 \
             | sed -E 's/.*received P-CSCF server IP ([0-9a-f:]+).*/\1/')
 
+        # Wait up to 60s for asterisk socket to be available
+        WAIT=0
+        while [ ! -S /var/run/asterisk/asterisk.ctl ] && [ $WAIT -lt 60 ]; do
+            echo "Waiting for asterisk socket... (${WAIT}s)"
+            sleep 3
+            WAIT=$((WAIT + 3))
+        done
+
         if [ -n "$PCSCF_IP" ]; then
             echo "Found P-CSCF IP: $PCSCF_IP — updating pjsip.conf"
             python3 << PYTHON_EOF
