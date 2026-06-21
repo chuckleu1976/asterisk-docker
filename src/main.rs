@@ -93,12 +93,16 @@ async fn main() {
         webhook_manager.clone(),
     ));
 
-    // Build a map of com_port -> sms_storage for the recheck worker
+    // Build a map of com_port -> sms_storage for the recheck worker (legacy serial path only).
     let sms_storage_map: std::collections::HashMap<String, Option<crate::config::SmsStorage>> =
         config
             .devices
             .iter()
-            .map(|d| (d.com_port.clone(), d.sms_storage.or(config.settings.sms_storage)))
+            .filter_map(|d| {
+                d.com_port
+                    .clone()
+                    .map(|p| (p, d.sms_storage.or(config.settings.sms_storage)))
+            })
             .collect();
 
     tokio::spawn(recheck_fallback_worker(

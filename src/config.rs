@@ -38,8 +38,29 @@ pub struct Settings {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct Device {
-    pub com_port: String,
-    pub baud_rate: u32,
+    /// Asterisk container instance (1..=N) — used to default ami_port to 5037+instance.
+    pub instance: Option<u8>,
+    /// AMI host (defaults to "127.0.0.1").
+    pub ami_host: Option<String>,
+    /// AMI port (defaults to 5037 + instance, e.g. instance=2 -> 5039).
+    pub ami_port: Option<u16>,
+    /// AMI username (defaults to "jolly").
+    pub ami_user: Option<String>,
+    /// AMI secret (defaults to "geheim"). For security, prefer ami_secret_file.
+    pub ami_secret: Option<String>,
+    /// File containing the AMI secret (mode 600). Overrides ami_secret if set.
+    pub ami_secret_file: Option<String>,
+    /// ICCID of the SIM in this asterisk container (becomes the sim_id key).
+    /// If absent, a fallback id is used until the SIM is detected.
+    pub iccid: Option<String>,
+    /// IMSI for display (read from sim_inventory.db by the operator).
+    pub imsi: Option<String>,
+    /// MSISDN for display.
+    pub msisdn: Option<String>,
+
+    // ─── Legacy serial fields (deprecated; ignored when ami_* is set) ───
+    pub com_port: Option<String>,
+    pub baud_rate: Option<u32>,
     pub sms_storage: Option<SmsStorage>,
 }
 
@@ -198,11 +219,20 @@ fn test_config(app_config: &AppConfig) -> Result<()> {
         }
 
         for (index, device) in app_config.devices.iter().enumerate() {
-            if device.com_port.trim().is_empty() {
-                anyhow::bail!("Fatal: Device {} com_port is not set", index);
+            // AMI mode requires at least one identifier so we know which container.
+            let has_ami = device.instance.is_some()
+                || device.ami_port.is_some()
+                || device.ami_host.is_some();
+            let has_serial = device.com_port.is_some();
+            if !has_ami && !has_serial {
+                anyhow::bail!(
+                    "Fatal: Device {} has neither AMI (instance/ami_port/ami_host) \
+                     nor legacy (com_port) configuration",
+                    index
+                );
             }
-            if device.baud_rate == 0 {
-                anyhow::bail!("Fatal: Device {} baud_rate is not set", index);
+            if has_serial && device.com_port.as_deref().unwrap_or("").trim().is_empty() {
+                anyhow::bail!("Fatal: Device {} com_port is empty", index);
             }
         }
     }

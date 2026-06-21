@@ -32,7 +32,21 @@ sms_storage = "MT"
 # Device configurations
 # You can define multiple devices using different approaches:
 
-# Method 1: Multiple devices with explicit array syntax
+# ── AMI mode (new, recommended) ──────────────────────────────────────────────
+# One asterisk container per SIM; talks to AMI on 127.0.0.1:5037+instance.
+# Required: instance.  All other AMI fields default sensibly.
+# [[devices]]
+# instance      = 1                # Asterisk container number (1..8)
+# ami_host      = "127.0.0.1"     # Defaults to 127.0.0.1
+# ami_port      = 5038             # Defaults to 5037 + instance
+# ami_user      = "jolly"          # Defaults to "jolly"
+# ami_secret    = "geheim"         # Defaults to "geheim"; prefer ami_secret_file
+# # ami_secret_file = "/etc/sms-gateway/ami_secret_1"
+# iccid         = "8901240..."     # Optional; used as the sim_id key
+# imsi          = "310240..."      # Optional; for UI display
+# msisdn        = "+1555..."       # Optional; for UI display
+
+# ── Legacy serial mode (deprecated; will be removed) ─────────────────────────
 [[devices]]
 com_port = "/dev/ttyUSB0"        # Serial port for the first modem
 baud_rate = 115200               # Baud rate (common values: 9600, 19200, 38400, 115200)

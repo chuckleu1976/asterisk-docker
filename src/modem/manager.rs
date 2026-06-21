@@ -47,10 +47,15 @@ impl TranscribeConfig {
 
 pub struct ModemManager {
     modems: Arc<RwLock<HashMap<String, Arc<Modem>>>>,
+    /// AMI-mode transports keyed by sim_id (ICCID or fallback instance id).
+    transports: Arc<RwLock<HashMap<String, Arc<dyn super::Transport>>>>,
     sim_cards_cache: Arc<RwLock<HashMap<String, SimCard>>>,
     _initialization_semaphore: Arc<Semaphore>,
     /// COM ports that failed to open at startup (com_port, baud_rate)
     pub unavailable_ports: Vec<(String, u32)>,
+    /// Receiver end of the channel that AmiTransport instances push ModemEvents into.
+    /// Wrapped in Mutex<Option<...>> so `start_event_handlers` can take exclusive ownership.
+    event_rx: tokio::sync::Mutex<Option<tokio::sync::mpsc::Receiver<super::ModemEvent>>>,
 }
 
 impl ModemManager {
@@ -58,9 +63,105 @@ impl ModemManager {
         let initialization_semaphore = Arc::new(Semaphore::new(3));
         let mut initialization_futures = FuturesUnordered::new();
 
+        // ── AMI-mode transports ──────────────────────────────────────────────
+        // mpsc channel that all AmiTransports push ModemEvent into; the receiver
+        // is consumed by start_event_handlers().
+        let (event_tx, event_rx) = tokio::sync::mpsc::channel::<super::ModemEvent>(1024);
+        let mut transports: HashMap<String, Arc<dyn super::Transport>> = HashMap::new();
+
         for (index, device) in config.devices.iter().enumerate() {
-            let port = device.com_port.clone();
-            let baud_rate = device.baud_rate;
+            let has_ami = device.instance.is_some()
+                || device.ami_port.is_some()
+                || device.ami_host.is_some();
+            if !has_ami {
+                continue;
+            }
+            let instance = device.instance.unwrap_or((index + 1) as u8);
+            let ami_host = device
+                .ami_host
+                .clone()
+                .unwrap_or_else(|| "127.0.0.1".to_string());
+            let ami_port = device
+                .ami_port
+                .unwrap_or(5037u16 + instance as u16);
+            let ami_user = device
+                .ami_user
+                .clone()
+                .unwrap_or_else(|| "jolly".to_string());
+            let secret = match &device.ami_secret_file {
+                Some(path) => match std::fs::read_to_string(path) {
+                    Ok(s) => s.trim().to_string(),
+                    Err(e) => {
+                        log::error!(
+                            "Failed to read ami_secret_file {} for device {}: {}; skipping",
+                            path,
+                            index,
+                            e
+                        );
+                        continue;
+                    }
+                },
+                None => device
+                    .ami_secret
+                    .clone()
+                    .unwrap_or_else(|| "geheim".to_string()),
+            };
+
+            // Stable sim_id: prefer configured ICCID; otherwise instance-based fallback.
+            let sim_id = device
+                .iccid
+                .clone()
+                .unwrap_or_else(|| format!("instance_{}", instance));
+
+            let sim_info = super::SimInfo {
+                iccid: device.iccid.clone(),
+                imsi: device.imsi.clone(),
+                msisdn: device.msisdn.clone(),
+                mcc: None,
+                mnc: None,
+            };
+
+            let label = format!("asterisk{}@{}:{}", instance, ami_host, ami_port);
+            let transport = super::ami_transport::AmiTransport::spawn(
+                super::ami_transport::AmiTransportConfig {
+                    sim_id: sim_id.clone(),
+                    sim_info,
+                    ami: super::ami::AmiConfig {
+                        label,
+                        host: ami_host,
+                        port: ami_port,
+                        username: ami_user,
+                        secret,
+                    },
+                },
+                event_tx.clone(),
+            );
+            transports.insert(sim_id.clone(), Arc::new(transport));
+            info!("Registered AMI transport for device {} (sim_id={})", index, sim_id);
+        }
+        // Drop the spare event_tx so the receiver knows when all transports go away.
+        drop(event_tx);
+
+        // ── Legacy serial path ───────────────────────────────────────────────
+        for (index, device) in config.devices.iter().enumerate() {
+            // Legacy serial path: requires both com_port and baud_rate to be set.
+            // AMI-mode devices skip serial init entirely (handled by upcoming
+            // Transport refactor).
+            let Some(port) = device.com_port.clone() else {
+                log::info!(
+                    "Device {} has no com_port; skipping legacy serial init (AMI-mode)",
+                    index
+                );
+                continue;
+            };
+            let Some(baud_rate) = device.baud_rate else {
+                log::warn!(
+                    "Device {} ({}) has no baud_rate; skipping",
+                    index,
+                    port
+                );
+                continue;
+            };
             let sms_storage = device.sms_storage.or(config.settings.sms_storage);
             let temp_device_id = format!("device_{}", index);
             let semaphore = initialization_semaphore.clone();
@@ -92,21 +193,24 @@ impl ModemManager {
             }
         }
 
-        if modems.is_empty() {
-            return Err(anyhow::anyhow!("No modems were successfully initialized"));
+        if modems.is_empty() && transports.is_empty() {
+            return Err(anyhow::anyhow!("No modems or AMI transports were successfully initialized"));
         }
 
         info!(
-            "Successfully initialized {} modem(s), {} unavailable",
+            "Initialized: {} serial modem(s), {} AMI transport(s), {} unavailable serial port(s)",
             modems.len(),
+            transports.len(),
             unavailable_ports.len()
         );
 
         let manager = Self {
             modems: Arc::new(RwLock::new(modems)),
+            transports: Arc::new(RwLock::new(transports)),
             sim_cards_cache: Arc::new(RwLock::new(HashMap::new())),
             _initialization_semaphore: initialization_semaphore,
             unavailable_ports,
+            event_rx: tokio::sync::Mutex::new(Some(event_rx)),
         };
 
         manager.init_sim_cache().await?;
@@ -201,11 +305,28 @@ impl ModemManager {
     }
 
     pub async fn get_sim_ids(&self) -> Vec<String> {
-        self.modems.read().await.keys().cloned().collect()
+        let mut ids: Vec<String> = self.modems.read().await.keys().cloned().collect();
+        for k in self.transports.read().await.keys() {
+            if !ids.contains(k) {
+                ids.push(k.clone());
+            }
+        }
+        ids
     }
 
     pub async fn get_modem(&self, sim_id: &str) -> Option<Arc<Modem>> {
         self.modems.read().await.get(sim_id).cloned()
+    }
+
+    /// Returns the AMI/abstract transport for this sim, if any.
+    pub async fn get_transport(&self, sim_id: &str) -> Option<Arc<dyn super::Transport>> {
+        self.transports.read().await.get(sim_id).cloned()
+    }
+
+    /// Take ownership of the event receiver. Returns None if already taken.
+    /// The consumer should be the event handler spawned by `start_event_handlers`.
+    pub async fn take_event_rx(&self) -> Option<tokio::sync::mpsc::Receiver<super::ModemEvent>> {
+        self.event_rx.lock().await.take()
     }
 
     pub async fn send_sms(
@@ -747,6 +868,7 @@ impl ModemManager {
     /// initialization.  Each task owns the modem's `urc_rx` and processes
     /// RING / +CLIP: / NO CARRIER / VOICE CALL: END messages forever.
     pub async fn start_urc_handlers(&self, sse_manager: Arc<SseManager>, transcribe_cfg: Option<Arc<TranscribeConfig>>) {
+        // Legacy serial path: spawn one URC reader per AT modem.
         let modems = self.modems.read().await;
         for (sim_id, modem) in modems.iter() {
             if sim_id.starts_with("fallback_sim_") {
@@ -758,6 +880,20 @@ impl ModemManager {
             let cfg = transcribe_cfg.clone();
             tokio::spawn(async move {
                 Self::run_urc_handler(sim_id, modem, sse, cfg).await;
+            });
+        }
+        drop(modems);
+
+        // AMI path: spawn one consumer that drains the shared event channel.
+        // (Full DB/SSE wiring is Phase D; for now just log so the pump never
+        //  back-pressures on a stalled receiver.)
+        if let Some(mut rx) = self.take_event_rx().await {
+            tokio::spawn(async move {
+                info!("[ModemEvent] consumer started");
+                while let Some(ev) = rx.recv().await {
+                    log::debug!("[ModemEvent] {ev:?}");
+                }
+                info!("[ModemEvent] consumer stopped (channel closed)");
             });
         }
     }
