@@ -207,6 +207,10 @@ async fn translate_event(
 ) -> Option<ModemEvent> {
     let name = pkt.event_name()?;
     match name {
+        // Custom UserEvent emitted by the asterisk dialplan.
+        // UserEvent: SmsReceived | CallStarted | CallAnswered | CallEnded
+        // Fields differ by subtype (see asterisk-docker/.../extensions.conf).
+        "UserEvent" => translate_user_event(pkt, sim_id),
         "MessageReceived" => {
             let from = pkt.get("from").unwrap_or("").to_string();
             let body = pkt.get("body").unwrap_or("").to_string();
@@ -268,6 +272,61 @@ async fn translate_event(
                 sim_id: sim_id.to_string(),
                 call_id,
                 path,
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Translate a `UserEvent: <subtype>` packet emitted by the dialplan.
+/// Subtypes (set via dialplan `UserEvent(<subtype>,...)`):
+///   SmsReceived    fields: From, Body
+///   CallStarted    fields: Direction (inbound|outbound), Phone, CallId
+///   CallAnswered   fields: CallId
+///   CallEnded      fields: CallId, RecordingPath (optional)
+/// Field names are lower-cased by the AMI parser.
+fn translate_user_event(pkt: &AmiPacket, sim_id: &str) -> Option<ModemEvent> {
+    let subtype = pkt.get("userevent")?;
+    match subtype {
+        "SmsReceived" => {
+            let from = pkt.get("from").unwrap_or("").to_string();
+            let body = pkt.get("body").unwrap_or("").to_string();
+            if from.is_empty() && body.is_empty() {
+                return None;
+            }
+            Some(ModemEvent::SmsReceived {
+                sim_id: sim_id.to_string(),
+                from,
+                body,
+                timestamp: chrono::Utc::now(),
+            })
+        }
+        "CallStarted" => {
+            let call_id = pkt.get("callid")?.to_string();
+            let phone = pkt.get("phone").unwrap_or("").to_string();
+            Some(ModemEvent::CallRinging {
+                sim_id: sim_id.to_string(),
+                call_id,
+                phone,
+            })
+        }
+        "CallAnswered" => {
+            let call_id = pkt.get("callid")?.to_string();
+            Some(ModemEvent::CallAnswered {
+                sim_id: sim_id.to_string(),
+                call_id,
+            })
+        }
+        "CallEnded" => {
+            let call_id = pkt.get("callid")?.to_string();
+            let recording_path = pkt
+                .get("recordingpath")
+                .filter(|s| !s.is_empty())
+                .map(PathBuf::from);
+            Some(ModemEvent::CallEnded {
+                sim_id: sim_id.to_string(),
+                call_id,
+                recording_path,
             })
         }
         _ => None,

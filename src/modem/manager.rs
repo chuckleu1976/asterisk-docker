@@ -891,7 +891,7 @@ impl ModemManager {
             tokio::spawn(async move {
                 info!("[ModemEvent] consumer started");
                 while let Some(ev) = rx.recv().await {
-                    log::debug!("[ModemEvent] {ev:?}");
+                    log::info!("[ModemEvent] {ev:?}");
                 }
                 info!("[ModemEvent] consumer stopped (channel closed)");
             });
