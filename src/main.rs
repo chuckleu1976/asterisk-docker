@@ -1,12 +1,11 @@
 use std::{path::PathBuf, sync::Arc};
 
-use api::SseManager;
 use db::db_init;
 use flexi_logger::{
     colored_detailed_format, Age, Cleanup, Criterion, Duplicate, FileSpec, Logger, Naming,
 };
 use log::LevelFilter;
-use modem::{ModemManager, SmsType};
+use modem::ModemManager;
 use modem::manager::TranscribeConfig;
 use structopt::StructOpt;
 
@@ -93,33 +92,6 @@ async fn main() {
         )
         .await;
 
-    tokio::spawn(read_sms_worker(
-        modem_manager.clone(),
-        config.settings.read_sms_frequency,
-        sse_manager.clone(),
-        webhook_manager.clone(),
-    ));
-
-    // Build a map of com_port -> sms_storage for the recheck worker (legacy serial path only).
-    let sms_storage_map: std::collections::HashMap<String, Option<crate::config::SmsStorage>> =
-        config
-            .devices
-            .iter()
-            .filter_map(|d| {
-                d.com_port
-                    .clone()
-                    .map(|p| (p, d.sms_storage.or(config.settings.sms_storage)))
-            })
-            .collect();
-
-    tokio::spawn(recheck_fallback_worker(
-        modem_manager.clone(),
-        sms_storage_map,
-        sse_manager.clone(),
-        webhook_manager.clone(),
-        transcribe_cfg,
-    ));
-
     if let Ok(_) = api::run_api(
         modem_manager.clone(),
         &config.settings.server_host,
@@ -130,40 +102,6 @@ async fn main() {
     )
     .await
     {};
-}
-
-async fn read_sms_worker(
-    modem_manager: ModemManagerRef,
-    read_sms_frequency: u64,
-    sse_manager: Arc<SseManager>,
-    webhook_manager: Option<webhook::WebhookManager>,
-) {
-    loop {
-        modem_manager
-            .read_all_sms_async(
-                SmsType::RecUnread,
-                sse_manager.clone(),
-                webhook_manager.clone(),
-            )
-            .await;
-
-        tokio::time::sleep(tokio::time::Duration::from_secs(read_sms_frequency)).await;
-    }
-}
-
-async fn recheck_fallback_worker(
-    modem_manager: ModemManagerRef,
-    sms_storage_map: std::collections::HashMap<String, Option<crate::config::SmsStorage>>,
-    sse_manager: Arc<SseManager>,
-    webhook_manager: Option<webhook::WebhookManager>,
-    transcribe_cfg: Option<Arc<modem::manager::TranscribeConfig>>,
-) {
-    loop {
-        tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
-        modem_manager
-            .recheck_fallback_modems(&sms_storage_map, sse_manager.clone(), webhook_manager.clone(), transcribe_cfg.clone())
-            .await;
-    }
 }
 
 #[derive(Debug, StructOpt)]

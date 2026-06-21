@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::io;
 
 #[derive(Debug, Clone, Copy)]
 pub enum SmsType {
@@ -20,14 +19,6 @@ impl SmsType {
             SmsType::All => 4,
         }
     }
-}
-
-#[derive(Debug)]
-pub struct ATCommand {
-    pub command: String,
-    pub response_tx: tokio::sync::oneshot::Sender<Result<String, io::Error>>,
-    pub _priority: u8,
-    pub retries: u32,
 }
 
 #[derive(Debug, Clone)]

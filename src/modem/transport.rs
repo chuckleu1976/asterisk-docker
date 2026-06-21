@@ -1,12 +1,13 @@
 //! Abstract transport layer for a single SIM / IMS endpoint.
 //!
-//! Two implementations are planned:
+//! Current implementation:
 //!   * `ami` — talks to an asterisk container over the AMI socket; carrier
 //!     events (SMS, calls) arrive as native AMI events.
-//!   * `serial` — wraps the legacy AT-command pipeline in [`super::core::Modem`].
 //!
-//! The trait is intentionally a superset of what either backend supports.
-//! Diagnostic getters that one backend cannot answer return `Ok(None)`.
+//! The legacy serial / AT-command backend was removed in Phase B step 5; the
+//! trait is preserved as a slim abstraction so additional backends can be
+//! added without touching `ModemManager`. Diagnostic getters a backend cannot
+//! answer return `Ok(None)`.
 
 use std::path::PathBuf;
 
