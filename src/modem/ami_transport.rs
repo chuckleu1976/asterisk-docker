@@ -62,6 +62,11 @@ impl AmiTransport {
             loop {
                 match rx.recv().await {
                     Ok(pkt) => {
+                        log::trace!(
+                            "[ami {label}] event pkt: event={:?} fields={:?}",
+                            pkt.event_name(),
+                            pkt.fields
+                        );
                         if let Some(ev) =
                             translate_event(&pkt, &sim_id, &pending).await
                         {
