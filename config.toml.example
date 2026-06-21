@@ -10,8 +10,9 @@ server_port = 8080               # Port for the web server
 username = "admin"               # Web interface username
 password = "your_secure_password" # Web interface password
 
-# SMS reading frequency in seconds
-read_sms_frequency = 30          # How often to check for new SMS messages
+# SMS reading frequency in seconds (legacy; unused in AMI mode — inbound SMS
+# arrive as native AMI UserEvents from the dialplan).
+read_sms_frequency = 30
 
 # Speech-to-text via whisper.cpp (optional). Remove these lines to disable transcription.
 # Download multilingual model: https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin
@@ -32,35 +33,26 @@ sms_storage = "MT"
 # Device configurations
 # You can define multiple devices using different approaches:
 
-# ── AMI mode (new, recommended) ──────────────────────────────────────────────
+# ── AMI mode (only mode supported since 0.3.4) ───────────────────────────────
 # One asterisk container per SIM; talks to AMI on 127.0.0.1:5037+instance.
 # Required: instance.  All other AMI fields default sensibly.
-# [[devices]]
-# instance      = 1                # Asterisk container number (1..8)
-# ami_host      = "127.0.0.1"     # Defaults to 127.0.0.1
-# ami_port      = 5038             # Defaults to 5037 + instance
-# ami_user      = "jolly"          # Defaults to "jolly"
-# ami_secret    = "geheim"         # Defaults to "geheim"; prefer ami_secret_file
-# # ami_secret_file = "/etc/sms-gateway/ami_secret_1"
-# iccid         = "8901240..."     # Optional; used as the sim_id key
-# imsi          = "310240..."      # Optional; for UI display
-# msisdn        = "+1555..."       # Optional; for UI display
-
-# ── Legacy serial mode (deprecated; will be removed) ─────────────────────────
 [[devices]]
-com_port = "/dev/ttyUSB0"        # Serial port for the first modem
-baud_rate = 115200               # Baud rate (common values: 9600, 19200, 38400, 115200)
-sms_storage = "SIM"              # Optional: Override global SMS storage for this device
+instance        = 1                # Asterisk container number (1..8)
+ami_host        = "127.0.0.1"     # Defaults to 127.0.0.1
+ami_port        = 5038             # Defaults to 5037 + instance
+ami_user        = "jolly"          # Defaults to "jolly"
+ami_secret      = "geheim"         # Defaults to "geheim"; prefer ami_secret_file
+# ami_secret_file = "/etc/sms-gateway/ami_secret_1"
+iccid           = "8901240387150170144"   # Used as the sim_id key in the DB and API
+imsi            = "310240385017144"       # Optional; shown in the UI
+msisdn          = "+18165537405"          # Optional; shown in the UI
 
 [[devices]]
-com_port = "/dev/ttyUSB1"        # Serial port for the second modem  
-baud_rate = 115200
-# sms_storage inherits from global settings if not specified
-
-# Method 2: Named device configuration (legacy support)
-# [devices.modem1]
-# com_port = "/dev/ttyUSB0"
-# baud_rate = 115200
+instance        = 2
+ami_secret      = "geheim"
+iccid           = "8901240387150170530"
+imsi            = "310240385017053"
+msisdn          = "+18165537217"
 
 # Webhook configurations (optional)
 # Multiple webhooks can be configured to send SMS data to external services
@@ -150,13 +142,13 @@ regex = "(?i)(emergency|urgent|help|sos)"
 include_self_sent = false
 
 # Configuration Notes:
-# 
-# 1. Device Configuration:
-#    - Ensure your user has permission to access the serial ports (usually add to dialout group)
-#    - Common serial ports: /dev/ttyUSB*, /dev/ttyACM*, /dev/ttyS*
-#    - Test connectivity with: ls -la /dev/tty* | grep USB
 #
-# 2. SMS Storage Options:
+# 1. AMI Mode:
+#    - One [[devices]] block per asterisk container (= per SIM).
+#    - instance picks the container number; ami_port defaults to 5037+instance.
+#    - iccid is recommended; it becomes the primary sim_id key in the DB / API.
+#
+# 2. SMS Storage Options (unused in AMI mode; kept for legacy compatibility):
 #    - SIM: Store messages on the SIM card (limited capacity)
 #    - ME: Store messages in modem memory (varies by device)
 #    - MT: Use modem default setting (recommended)

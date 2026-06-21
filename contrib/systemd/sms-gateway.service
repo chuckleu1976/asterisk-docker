@@ -1,0 +1,26 @@
+[Unit]
+Description=SMS Gateway (AMI/Asterisk)
+Documentation=https://github.com/top-modem/sms-gateway
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ht
+Group=ht
+WorkingDirectory=/home/ht/sms-gateway
+ExecStart=/home/ht/sms-gateway/target/release/sms-gateway \
+    --config /home/ht/sms-gateway/config.toml \
+    --log /home/ht/sms-gateway/logs \
+    --log-level info
+Restart=on-failure
+RestartSec=5s
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/home/ht/sms-gateway/logs /home/ht/sms-gateway/data
+
+[Install]
+WantedBy=multi-user.target

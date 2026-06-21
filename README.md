@@ -4,22 +4,36 @@
 
 <div align="center">
   <img src="https://raw.githubusercontent.com/214zzl995/sms-gateway/main/frontend/public/logo.svg" alt="SMS Gateway Logo" width="200">
-  <h3>A modern SMS management and forwarding system</h3>
+  <h3>A modern SMS / Voice management front-end for IMS-over-LTE handsets exposed via Asterisk AMI</h3>
 </div>
 
 ## 📖 Overview
 
-SMS Gateway is a comprehensive solution for receiving, sending, and forwarding SMS messages through GSM modems. It provides a modern web-based interface for managing SMS conversations and offers powerful webhook functionality with extensive filtering capabilities.
+SMS Gateway is an AMI client that talks to one or more Asterisk containers and
+turns every container into a SIM/IMS endpoint. SMS messages, inbound calls,
+answered calls, hangups, and call recordings arrive as native AMI UserEvents;
+the gateway persists them to SQLite, broadcasts them over Server-Sent Events,
+forwards them through filtered webhooks, and (optionally) transcribes
+recordings with `whisper.cpp`.
+
+The legacy serial / AT-command backend was removed in `0.3.4`. SIMs are now
+exposed exclusively through `pjsip` + an AMI bridge driven by the
+[asterisk-docker](https://github.com/top-modem/asterisk-docker) compose stack.
 
 ### Key Features
 
-- **Multi-device Support**: Connect to multiple GSM modems simultaneously
-- **Real-time Messaging**: Send and receive SMS with live updates via SSE
-- **Modern Web Interface**: Intuitive conversation-based UI with SIM card management
-- **Powerful Webhooks**: Forward SMS to external services with advanced filtering
-- **SIM-centric Architecture**: Manage multiple SIM cards with individual settings
-- **Flexible Configuration**: TOML-based configuration with comprehensive options
-- **PDU Support**: Full PDU encoding/decoding with UCS2 character support
+- **Multi-SIM Support**: One AMI transport per `[[devices]]` entry; each
+  asterisk container in `asterisk-docker` shows up as a separate SIM.
+- **Real-time Messaging**: Send and receive SMS with live updates via SSE.
+- **Call Recording + Transcription**: AMI `CallEnded` UserEvents carry a
+  `RecordingPath`; the gateway resolves it to the host path under
+  `{recordings_base_dir}/{instance}/recordings/<file>`, stores the WAV in the
+  DB, and pipes it through ffmpeg + whisper.cpp for a transcript.
+- **Modern Web Interface**: Conversation-based UI with per-SIM management.
+- **Powerful Webhooks**: Forward SMS to external services with contact / SIM /
+  time / regex filtering.
+- **TOML Configuration**: A single `config.toml` describes every AMI endpoint
+  (host, port, credentials, ICCID/IMSI/MSISDN for display).
 
 ## 🛠️ Building From Source
 
@@ -98,38 +112,67 @@ server_host = "0.0.0.0"
 server_port = 8080
 username = "admin"
 password = "your_secure_password"
-read_sms_frequency = 30
 
-# Multiple device support
+# Host path that maps to /logs/ inside each asterisk container.
+# Inbound call recordings land in {recordings_base_dir}/{instance}/recordings/<file>.wav.
+recordings_base_dir = "/home/ht/docker/logs"
+
+# One [[devices]] block per asterisk container (= per SIM).
 [[devices]]
-com_port = "/dev/ttyUSB0"
-baud_rate = 115200
+instance   = 1                          # 1..8; AMI port defaults to 5037+instance (5038 here)
+ami_host   = "127.0.0.1"
+ami_user   = "jolly"
+ami_secret = "geheim"
+iccid      = "8901240387150170144"      # used as the sim_id key in the DB / API
+imsi       = "310240385017144"          # optional, for the UI
+msisdn     = "+18165537405"             # optional, for the UI
 
 [[devices]]
-com_port = "/dev/ttyUSB1"
-baud_rate = 115200
+instance   = 2
+ami_secret = "geheim"
+iccid      = "8901240387150170530"
+imsi       = "310240385017053"
+msisdn     = "+18165537217"
 ```
 
-### Webhook Configuration
+## 🔌 Architecture
 
-```toml
-[[settings.webhooks]]
-url = "https://your-endpoint.com/webhook"
-method = "POST"
-
-[settings.webhooks.headers]
-"Content-Type" = "application/json"
-
-body = '''
-{
-    "from": "@contact@",
-    "message": "@message@",
-    "timestamp": "@timestamp@"
-}
-'''
+```
+  IMS / VoLTE carrier
+          │
+     pjsip + dialplan         (asterisk-docker, one container per SIM)
+          │  UserEvent: SmsReceived / CallStarted / CallAnswered / CallEnded
+          ▼
+     AMI socket (5037 + instance)
+          │
+          ▼
+  sms-gateway (this repo)
+     ├ AmiTransport per SIM (login + event pump)
+     ├ ModemEvent channel
+     ├ DB writer (sqlite: contacts, sms, calls, sims)
+     ├ SSE broadcaster (web UI live updates)
+     ├ Webhook forwarder (filtered)
+     └ Recording pipeline
+          ├ read /home/ht/docker/logs/{instance}/recordings/<file>.wav
+          ├ Call::save_recording
+          └ ffmpeg | whisper-cli -> Call::save_transcript
 ```
 
-For detailed configuration options including filtering, see `config.toml.example`.
+## 🖥️ Running as a systemd service
+
+A reference unit file is provided in [`contrib/systemd/sms-gateway.service`](contrib/systemd/sms-gateway.service).
+Adjust `User=` and the paths to match your install, then:
+
+```bash
+sudo cp contrib/systemd/sms-gateway.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now sms-gateway.service
+sudo journalctl -u sms-gateway.service -f
+```
+
+The unit assumes the release binary lives at
+`/home/ht/sms-gateway/target/release/sms-gateway` and that `config.toml`,
+`logs/`, and `data/` are siblings underneath the working directory.
 
 ## 📝 License
 
