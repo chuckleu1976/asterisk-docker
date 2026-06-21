@@ -34,6 +34,12 @@ pub struct Settings {
     pub auto_answer_delay_secs: Option<u64>,
     /// Enable or disable auto-answering of incoming calls (default true = enabled).
     pub auto_answer_enabled: Option<bool>,
+    /// Host directory containing per-instance recording trees, e.g.
+    /// `/home/ht/docker/logs` — files referenced by RecordingPath inside the
+    /// asterisk container as `/logs/recordings/<file>.wav` are resolved as
+    /// `{recordings_base_dir}/{instance}/recordings/<file>.wav`.
+    /// Defaults to `/home/ht/docker/logs`.
+    pub recordings_base_dir: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

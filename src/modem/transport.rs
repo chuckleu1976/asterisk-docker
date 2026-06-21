@@ -41,11 +41,13 @@ pub enum ModemEvent {
         body: String,
         timestamp: chrono::DateTime<chrono::Utc>,
     },
-    /// Inbound call is ringing.
+    /// Call started (inbound ringing, or outbound originated from another SIP client).
     CallRinging {
         sim_id: String,
         call_id: String,
         phone: String,
+        /// "inbound" or "outbound"
+        direction: String,
     },
     /// Outbound or inbound call answered.
     CallAnswered {

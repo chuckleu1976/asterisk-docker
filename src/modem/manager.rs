@@ -49,6 +49,12 @@ pub struct ModemManager {
     modems: Arc<RwLock<HashMap<String, Arc<Modem>>>>,
     /// AMI-mode transports keyed by sim_id (ICCID or fallback instance id).
     transports: Arc<RwLock<HashMap<String, Arc<dyn super::Transport>>>>,
+    /// sim_id -> asterisk container instance number (1..=N). Used to map
+    /// container-relative RecordingPath (`/logs/recordings/foo.wav`) to a host
+    /// path under `{recordings_base_dir}/{instance}/recordings/foo.wav`.
+    instance_by_sim: Arc<RwLock<HashMap<String, u8>>>,
+    /// Host base dir for the per-instance `/logs/` volumes.
+    recordings_base_dir: std::path::PathBuf,
     sim_cards_cache: Arc<RwLock<HashMap<String, SimCard>>>,
     _initialization_semaphore: Arc<Semaphore>,
     /// COM ports that failed to open at startup (com_port, baud_rate)
@@ -68,6 +74,7 @@ impl ModemManager {
         // is consumed by start_event_handlers().
         let (event_tx, event_rx) = tokio::sync::mpsc::channel::<super::ModemEvent>(1024);
         let mut transports: HashMap<String, Arc<dyn super::Transport>> = HashMap::new();
+        let mut instance_by_sim: HashMap<String, u8> = HashMap::new();
 
         for (index, device) in config.devices.iter().enumerate() {
             let has_ami = device.instance.is_some()
@@ -137,6 +144,7 @@ impl ModemManager {
                 event_tx.clone(),
             );
             transports.insert(sim_id.clone(), Arc::new(transport));
+            instance_by_sim.insert(sim_id.clone(), instance);
             info!("Registered AMI transport for device {} (sim_id={})", index, sim_id);
         }
         // Drop the spare event_tx so the receiver knows when all transports go away.
@@ -207,6 +215,13 @@ impl ModemManager {
         let manager = Self {
             modems: Arc::new(RwLock::new(modems)),
             transports: Arc::new(RwLock::new(transports)),
+            instance_by_sim: Arc::new(RwLock::new(instance_by_sim)),
+            recordings_base_dir: config
+                .settings
+                .recordings_base_dir
+                .clone()
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| std::path::PathBuf::from("/home/ht/docker/logs")),
             sim_cards_cache: Arc::new(RwLock::new(HashMap::new())),
             _initialization_semaphore: initialization_semaphore,
             unavailable_ports,
@@ -867,7 +882,12 @@ impl ModemManager {
     /// Spawn one URC handler task per modem.  Must be called once after
     /// initialization.  Each task owns the modem's `urc_rx` and processes
     /// RING / +CLIP: / NO CARRIER / VOICE CALL: END messages forever.
-    pub async fn start_urc_handlers(&self, sse_manager: Arc<SseManager>, transcribe_cfg: Option<Arc<TranscribeConfig>>) {
+    pub async fn start_urc_handlers(
+        &self,
+        sse_manager: Arc<SseManager>,
+        webhook_manager: Option<webhook::WebhookManager>,
+        transcribe_cfg: Option<Arc<TranscribeConfig>>,
+    ) {
         // Legacy serial path: spawn one URC reader per AT modem.
         let modems = self.modems.read().await;
         for (sim_id, modem) in modems.iter() {
@@ -884,14 +904,27 @@ impl ModemManager {
         }
         drop(modems);
 
-        // AMI path: spawn one consumer that drains the shared event channel.
-        // (Full DB/SSE wiring is Phase D; for now just log so the pump never
-        //  back-pressures on a stalled receiver.)
+        // AMI path: drain the shared ModemEvent channel and fan each event out
+        // to the DB, SSE, webhooks, and (for recordings) the transcription
+        // pipeline. Mirrors the responsibilities of the serial URC handler.
         if let Some(mut rx) = self.take_event_rx().await {
+            let sse = sse_manager.clone();
+            let wh = webhook_manager.clone();
+            let cfg = transcribe_cfg.clone();
+            let instance_by_sim = self.instance_by_sim.clone();
+            let recordings_base = self.recordings_base_dir.clone();
             tokio::spawn(async move {
                 info!("[ModemEvent] consumer started");
                 while let Some(ev) = rx.recv().await {
-                    log::info!("[ModemEvent] {ev:?}");
+                    handle_modem_event(
+                        ev,
+                        &sse,
+                        wh.as_ref(),
+                        cfg.as_deref(),
+                        &instance_by_sim,
+                        &recordings_base,
+                    )
+                    .await;
                 }
                 info!("[ModemEvent] consumer stopped (channel closed)");
             });
@@ -1142,4 +1175,220 @@ impl ModemManager {
             log::trace!("[URC {}] unhandled: {:?}", sim_id, line);
         }
     }
+}
+
+// ─── AMI ModemEvent fan-out ─────────────────────────────────────────────────
+
+/// Extract a bare phone number from a SIP-ish "From" header.
+/// Accepts forms like `<sip:+1234@host>`, `sip:+1234@host`, `"Alice" <sip:+1234>`,
+/// or a bare `+1234`. Returns the input verbatim if no `sip:` URI was found.
+fn extract_phone(from: &str) -> String {
+    let s = from.trim();
+    if s.is_empty() {
+        return String::new();
+    }
+    let after_sip = match s.find("sip:") {
+        Some(i) => &s[i + 4..],
+        None => s.trim_matches(|c: char| c == '<' || c == '>' || c == '"' || c.is_whitespace()),
+    };
+    let end = after_sip
+        .find(|c: char| c == '@' || c == '>' || c == ';' || c == ' ')
+        .unwrap_or(after_sip.len());
+    after_sip[..end].to_string()
+}
+
+/// Map a container-relative recording path (`/logs/recordings/foo.wav`) to a
+/// host path under `{base}/{instance}/recordings/foo.wav`.
+fn resolve_recording_host_path(
+    container_path: &std::path::Path,
+    instance: u8,
+    base: &std::path::Path,
+) -> std::path::PathBuf {
+    let file_name = container_path
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "recording.wav".to_string());
+    base.join(instance.to_string())
+        .join("recordings")
+        .join(file_name)
+}
+
+async fn handle_modem_event(
+    ev: super::ModemEvent,
+    sse: &Arc<SseManager>,
+    webhook: Option<&webhook::WebhookManager>,
+    transcribe_cfg: Option<&TranscribeConfig>,
+    instance_by_sim: &Arc<RwLock<HashMap<String, u8>>>,
+    recordings_base: &std::path::Path,
+) {
+    use super::ModemEvent;
+    match ev {
+        ModemEvent::SmsReceived { sim_id, from, body, timestamp } => {
+            let contact = extract_phone(&from);
+            // Empty body and no parseable sender is carrier noise (e.g. RP-ACK);
+            // skip persistence but still leave a trace for debugging.
+            if body.is_empty() && contact.is_empty() {
+                log::debug!("[ami {}] SmsReceived dropped (empty from+body)", sim_id);
+                return;
+            }
+            let sms = ModemSMS {
+                contact: contact.clone(),
+                timestamp: timestamp.naive_utc(),
+                message: body,
+                send: false,
+                sim_id: sim_id.clone(),
+            };
+            if let Some(wh) = webhook {
+                if let Err(e) = wh.send(sms.clone()) {
+                    log::error!("[ami {}] webhook send failed: {}", sim_id, e);
+                }
+            }
+            match sms.insert().await {
+                Ok(_) => {
+                    info!("[ami {}] SMS from {} stored", sim_id, contact);
+                    if let Ok(Some(contact_id)) = crate::db::Contact::find_id_by_name(&contact).await {
+                        if let Ok(conversations) =
+                            crate::db::Conversation::query_by_contact_ids(&[contact_id]).await
+                        {
+                            sse.send(conversations);
+                        }
+                    }
+                }
+                Err(e) => log::error!("[ami {}] failed to insert SMS: {}", sim_id, e),
+            }
+        }
+
+        ModemEvent::CallRinging { sim_id, call_id, phone, direction } => {
+            let phone_opt = if phone.is_empty() { None } else { Some(phone.as_str()) };
+            if let Err(e) =
+                Call::insert_with_id(&call_id, &sim_id, phone_opt, &direction).await
+            {
+                log::error!("[ami {}] failed to insert call {}: {}", sim_id, call_id, e);
+                return;
+            }
+            let event_type = if direction == "outbound" {
+                "outbound_call"
+            } else {
+                "incoming_call"
+            }
+            .to_string();
+            sse.send_call_event(CallEvent {
+                event_type,
+                sim_id,
+                call_id,
+                phone: phone_opt.map(|s| s.to_string()),
+                direction,
+            });
+        }
+
+        ModemEvent::CallAnswered { sim_id, call_id } => {
+            if let Err(e) = Call::update_status(&call_id, "active").await {
+                log::error!("[ami {}] failed to mark call {} active: {}", sim_id, call_id, e);
+            }
+            sse.send_call_event(CallEvent {
+                event_type: "call_answered".into(),
+                sim_id,
+                call_id,
+                phone: None,
+                direction: "".into(),
+            });
+        }
+
+        ModemEvent::CallEnded { sim_id, call_id, recording_path } => {
+            if let Err(e) = Call::update_status(&call_id, "ended").await {
+                log::error!("[ami {}] failed to mark call {} ended: {}", sim_id, call_id, e);
+            }
+            sse.send_call_event(CallEvent {
+                event_type: "call_ended".into(),
+                sim_id: sim_id.clone(),
+                call_id: call_id.clone(),
+                phone: None,
+                direction: "".into(),
+            });
+            // Recording arrives as a container-relative path; resolve to host
+            // and spawn the same load → save_recording → transcribe pipeline as
+            // the serial URC handler.
+            if let Some(rp) = recording_path {
+                let instance = instance_by_sim.read().await.get(&sim_id).copied();
+                let Some(instance) = instance else {
+                    log::warn!(
+                        "[ami {}] CallEnded recording_path={:?} but no instance mapping; skipping",
+                        sim_id, rp
+                    );
+                    return;
+                };
+                let host_path = resolve_recording_host_path(&rp, instance, recordings_base);
+                let cfg_owned = transcribe_cfg.cloned();
+                tokio::spawn(async move {
+                    if let Err(e) =
+                        ingest_recording(sim_id, call_id, host_path, cfg_owned).await
+                    {
+                        log::error!("[ami] recording ingest failed: {}", e);
+                    }
+                });
+            }
+        }
+
+        ModemEvent::RecordingDone { sim_id, call_id, path } => {
+            // Serial-style backend that pushes the host path directly.
+            let cfg_owned = transcribe_cfg.cloned();
+            tokio::spawn(async move {
+                if let Err(e) = ingest_recording(sim_id, call_id, path, cfg_owned).await {
+                    log::error!("[ami] recording ingest failed: {}", e);
+                }
+            });
+        }
+    }
+}
+
+/// Wait for a recording file to settle, read it, save to DB, and (optionally)
+/// transcribe with whisper.cpp.
+async fn ingest_recording(
+    sim_id: String,
+    call_id: String,
+    host_path: std::path::PathBuf,
+    transcribe_cfg: Option<TranscribeConfig>,
+) -> anyhow::Result<()> {
+    // MixMonitor finalizes the file on Hangup; give it a moment to flush.
+    for _ in 0..20 {
+        if tokio::fs::try_exists(&host_path).await.unwrap_or(false) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    let data = tokio::fs::read(&host_path)
+        .await
+        .map_err(|e| anyhow::anyhow!("read {}: {}", host_path.display(), e))?;
+    info!(
+        "[ami {}] recording {} -> {} bytes",
+        sim_id,
+        host_path.display(),
+        data.len()
+    );
+    Call::save_recording(&call_id, &data).await?;
+
+    if let Some(cfg) = transcribe_cfg {
+        let t = std::time::Instant::now();
+        match crate::transcribe::transcribe(
+            &data,
+            &cfg.ffmpeg_exe,
+            &cfg.whisper_exe,
+            &cfg.whisper_model,
+            &cfg.whisper_language,
+        )
+        .await
+        {
+            Ok(text) => {
+                info!(
+                    "[ami {}] transcript ({:.1}s): {}",
+                    sim_id,
+                    t.elapsed().as_secs_f64(),
+                    text
+                );
+                Call::save_transcript(&call_id, &text).await?;
+            }
+            Err(e) => log::error!("[ami {}] transcribe failed: {}", sim_id, e),
+        }
+    }
+    Ok(())
 }

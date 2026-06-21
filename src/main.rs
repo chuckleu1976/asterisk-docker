@@ -76,7 +76,6 @@ async fn main() {
     let sse_manager = Arc::new(api::SseManager::new());
 
     let transcribe_cfg = TranscribeConfig::from_settings(&config.settings);
-    modem_manager.start_urc_handlers(sse_manager.clone(), transcribe_cfg.clone()).await;
 
     let webhook_manager = match config.settings.webhooks.clone() {
         Some(cfgs) => Some(webhook::start_webhook_worker_with_concurrency(
@@ -85,6 +84,14 @@ async fn main() {
         )),
         _ => None,
     };
+
+    modem_manager
+        .start_urc_handlers(
+            sse_manager.clone(),
+            webhook_manager.clone(),
+            transcribe_cfg.clone(),
+        )
+        .await;
 
     tokio::spawn(read_sms_worker(
         modem_manager.clone(),

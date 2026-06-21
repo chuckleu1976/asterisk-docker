@@ -145,6 +145,28 @@ impl Call {
         Ok(id)
     }
 
+    /// Insert a call with a caller-supplied id (used by AMI consumer to use
+    /// Asterisk's UNIQUEID as the primary key so subsequent UserEvents can
+    /// look the row up directly). Idempotent: duplicate ids are ignored.
+    pub async fn insert_with_id(
+        id: &str,
+        sim_id: &str,
+        phone: Option<&str>,
+        direction: &str,
+    ) -> Result<()> {
+        let pool = get_pool()?;
+        sqlx::query(
+            r#"INSERT OR IGNORE INTO calls (id, sim_id, phone, direction, status) VALUES (?, ?, ?, ?, 'ringing')"#,
+        )
+        .bind(id)
+        .bind(sim_id)
+        .bind(phone)
+        .bind(direction)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
     pub async fn update_status(id: &str, status: &str) -> Result<()> {
         let pool = get_pool()?;
         // Use CURRENT_TIMESTAMP (UTC) to match started_at which is also stored in UTC
@@ -528,6 +550,15 @@ impl Contact {
             .await?;
 
         Ok(contact)
+    }
+    /// Look up a contact id by name (the canonical phone number we store).
+    pub async fn find_id_by_name(name: &str) -> Result<Option<String>> {
+        let pool = get_pool()?;
+        let id = sqlx::query_scalar::<_, String>("SELECT id FROM contacts WHERE name = ?")
+            .bind(name)
+            .fetch_optional(pool)
+            .await?;
+        Ok(id)
     }
     pub async fn insert(&self) -> Result<()> {
         let pool = get_pool()?;

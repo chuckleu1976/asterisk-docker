@@ -236,6 +236,7 @@ async fn translate_event(
                 sim_id: sim_id.to_string(),
                 call_id: channel,
                 phone,
+                direction: "inbound".to_string(),
             })
         }
         // Call answered (state moved to Up)
@@ -304,10 +305,16 @@ fn translate_user_event(pkt: &AmiPacket, sim_id: &str) -> Option<ModemEvent> {
         "CallStarted" => {
             let call_id = pkt.get("callid")?.to_string();
             let phone = pkt.get("phone").unwrap_or("").to_string();
+            let direction = pkt
+                .get("direction")
+                .filter(|s| !s.is_empty())
+                .unwrap_or("inbound")
+                .to_string();
             Some(ModemEvent::CallRinging {
                 sim_id: sim_id.to_string(),
                 call_id,
                 phone,
+                direction,
             })
         }
         "CallAnswered" => {
