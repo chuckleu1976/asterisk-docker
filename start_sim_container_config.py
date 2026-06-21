@@ -612,6 +612,16 @@ def restart_instance(instance):
 
 def stop_instance(instance):
     svc = "asterisk" if instance == 1 else f"asterisk{instance}"
+    # Try to release the IMS registration first so the carrier frees the
+    # binding for this IMSI; otherwise a later container starting with the
+    # same IMSI will get its REGISTER silently dropped (408 timeout).
+    print(f"  Unregistering {svc} from IMS...", end="", flush=True)
+    r = docker_compose("exec", "-T", svc, "asterisk", "-rx",
+                       "pjsip send unregister volte_ims", timeout=10)
+    print(" OK" if r.returncode == 0 else " (skipped)")
+    # Give the carrier a moment to process the de-registration before SIGTERM
+    # tears down the IPsec tunnel.
+    time.sleep(3)
     print(f"  Stopping {svc} (no SIM)...", end="", flush=True)
     r = docker_compose("stop", svc)
     print(" OK" if r.returncode == 0 else f" Error: {r.stderr.strip()}")
@@ -647,7 +657,13 @@ def start_instance(instance):
 # ─── Reader enumeration ──────────────────────────────────────────────────────
 
 def get_read_container():
-    """Return the name of the first running asterisk container, or READ_CONTAINER."""
+    """Return the name of a running asterisk container for reader access.
+
+    If no asterisk container is running, lazily start asterisk (instance 1)
+    as a probe so reader enumeration and SIM reads continue to work even
+    after all SIM-using instances have been stopped (e.g. user moved the
+    last SIM card to a different reader slot).
+    """
     r = docker_compose("ps", "--format", "{{.Service}}\t{{.State}}", timeout=10)
     if r.returncode == 0:
         for line in r.stdout.splitlines():
@@ -656,6 +672,17 @@ def get_read_container():
                 svc, state = parts
                 if svc.startswith('asterisk') and state == 'running':
                     return svc
+    # No asterisk running — start asterisk (instance 1) as a probe so the
+    # watch loop can keep enumerating readers and detect SIMs in other slots.
+    print(f"  [probe] No asterisk container running, starting {READ_CONTAINER} as probe...",
+          flush=True)
+    up = docker_compose("up", "-d", READ_CONTAINER, timeout=60)
+    if up.returncode != 0:
+        print(f"  [probe] Failed to start {READ_CONTAINER}: {up.stderr.strip()}")
+        return READ_CONTAINER
+    # Give the container a few seconds to bring up pcsc-lite client + python
+    time.sleep(5)
+    print(f"  [probe] {READ_CONTAINER} started", flush=True)
     return READ_CONTAINER
 
 
@@ -978,9 +1005,33 @@ def watch_loop(interval, devices=None):
 
             if iccid != last_iccid[i]:
                 ts = datetime.now().strftime('%H:%M:%S')
-                action = "inserted" if last_iccid[i] is None else \
-                         f"changed {last_iccid[i]} ->"
-                print(f"[{ts}] P{i}: card {action} ICCID={iccid}  IMSI={sim['imsi']}")
+
+                # Detect SIM relocation: same ICCID was previously seen on a
+                # different reader.  Stop the old instance FIRST so the carrier
+                # releases the IMS registration before the new instance tries
+                # to re-register the same IMSI (otherwise the new REGISTER
+                # gets silently dropped with a 408 timeout).
+                moved_from = None
+                for j, prev in last_iccid.items():
+                    if j != i and prev == iccid:
+                        moved_from = j
+                        break
+
+                if moved_from is not None:
+                    print(f"[{ts}] P{i}: card moved from P{moved_from} "
+                          f"ICCID={iccid}  IMSI={sim['imsi']}")
+                    old_dev = dev_map.get(moved_from, {})
+                    stop_instance(moved_from + 1)
+                    last_iccid[moved_from]  = None
+                    read_failures[moved_from] = 0
+                    db_save_reader(moved_from, f"P{moved_from}", "empty",
+                                   hostname=old_dev.get('hostname', ''),
+                                   imei=old_dev.get('imei', ''))
+                else:
+                    action = "inserted" if last_iccid[i] is None else \
+                             f"changed {last_iccid[i]} ->"
+                    print(f"[{ts}] P{i}: card {action} ICCID={iccid}  IMSI={sim['imsi']}")
+
                 last_iccid[i] = iccid
                 db_save_sim(i, sim)
                 if update_instance(instance, sim):
