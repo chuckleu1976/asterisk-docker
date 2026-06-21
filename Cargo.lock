@@ -2516,6 +2516,7 @@ name = "sms-gateway"
 version = "0.3.4"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum",
  "base64 0.22.1",
  "chrono",
