@@ -35,6 +35,7 @@ services:
     ports:
       - 5060:5060/udp
       - 10000-10009:10000-10009/udp
+      - 127.0.0.1:5038:5038/tcp
     tmpfs:
       - /run
     volumes:
@@ -64,6 +65,7 @@ services:
     ports:
       - 5062:5060/udp
       - 10010-10019:10010-10019/udp
+      - 127.0.0.1:5039:5038/tcp
     tmpfs:
       - /run
     volumes:
@@ -93,6 +95,7 @@ services:
     ports:
       - 5064:5060/udp
       - 10020-10029:10020-10029/udp
+      - 127.0.0.1:5040:5038/tcp
     tmpfs:
       - /run
     volumes:
@@ -122,6 +125,7 @@ services:
     ports:
       - 5066:5060/udp
       - 10030-10039:10030-10039/udp
+      - 127.0.0.1:5041:5038/tcp
     tmpfs:
       - /run
     volumes:
@@ -151,6 +155,7 @@ services:
     ports:
       - 5068:5060/udp
       - 10040-10049:10040-10049/udp
+      - 127.0.0.1:5042:5038/tcp
     tmpfs:
       - /run
     volumes:
@@ -180,6 +185,7 @@ services:
     ports:
       - 5070:5060/udp
       - 10050-10059:10050-10059/udp
+      - 127.0.0.1:5043:5038/tcp
     tmpfs:
       - /run
     volumes:
@@ -209,6 +215,7 @@ services:
     ports:
       - 5072:5060/udp
       - 10060-10069:10060-10069/udp
+      - 127.0.0.1:5044:5038/tcp
     tmpfs:
       - /run
     volumes:
@@ -238,6 +245,7 @@ services:
     ports:
       - 5074:5060/udp
       - 10070-10079:10070-10079/udp
+      - 127.0.0.1:5045:5038/tcp
     tmpfs:
       - /run
     volumes:

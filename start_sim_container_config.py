@@ -531,6 +531,7 @@ def generate_compose(devices):
         sip_port = 5060 + (instance - 1) * 2
         rtp_s    = 10000 + (instance - 1) * 10
         rtp_e    = rtp_s + 9
+        ami_port = 5038 + (instance - 1)  # 5038..5045 on host loopback
 
         lines += [
             f"  {svc}:",
@@ -549,6 +550,7 @@ def generate_compose(devices):
             f"    ports:",
             f"      - {sip_port}:5060/udp",
             f"      - {rtp_s}-{rtp_e}:{rtp_s}-{rtp_e}/udp",
+            f"      - 127.0.0.1:{ami_port}:5038/tcp",
             f"    tmpfs:",
             f"      - /run",
             f"    volumes:",
