@@ -51,6 +51,26 @@ else
     echo "P-CSCF ready after ${WAIT}s: $PCSCF, starting asterisk"
 fi
 
+# Power-cycle every SIM via pcscd so ami_usim.py gets a clean card state.
+# Without this, a card left in the wrong AID/EF (e.g. by a host-side reader
+# script, or by a previous incarnation of this container) causes IMS-AKA to
+# fail and the carrier to reject REGISTER until the SIM is physically
+# re-inserted.
+echo "Resetting SIM card state before ami_usim.py..."
+python3 - <<'PYRESET' || true
+from smartcard.System import readers
+from smartcard.CardConnection import CardConnection
+for i, r in enumerate(readers()):
+    try:
+        c = r.createConnection()
+        c.connect()
+        c.reconnect(disposition=CardConnection.RESET)
+        c.disconnect()
+        print(f"  P{i}: reset OK ({r.name})")
+    except Exception as e:
+        print(f"  P{i}: reset skipped ({e})")
+PYRESET
+
 python3 /usr/local/bin/ami_usim.py /usr/local/etc/ami_usim.ini &
 asterisk -f
 

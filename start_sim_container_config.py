@@ -7,15 +7,21 @@ Workflow:
   2. Generate config/<N>/ directories from config/example/ with placeholder
      "000" values + real IMEI from devices.toml
   3. Generate compose.yaml with one asterisk service per reader
-  4. Start pcscd + all asterisk containers (docker compose up -d)
-  5. Read SIM cards from each reader via APDU inside the running container
-  6. Rewrite config files with real SIM data (IMSI, MSISDN, MCC/MNC)
-  7. Restart containers to pick up the new config
-  8. Optionally --watch for SIM hotswap
+  4. Start pcscd + asterisk-1 as a SIM probe (asterisk-1 has pyscard)
+  5. Read SIM cards from each reader via APDU
+  6. For each reader:
+       - SIM present -> write real config, start that instance (force-recreate
+         asterisk-1 if P0 has a card so it picks up the real config)
+       - SIM absent  -> ensure that instance is NOT running (skip startup or
+         stop it cleanly with IMS unregister)
+  7. Optionally --watch for SIM hotswap (auto start/stop on insert/remove)
+
+Containers without a SIM are never started, so the carrier is never asked to
+authenticate a placeholder IMSI (which would always be rejected).
 
 Usage:
-  ./start_sim --setup               # Steps 1-7: full bootstrap
-  ./start_sim --setup --watch       # Steps 1-7, then monitor for SIM changes
+  ./start_sim --setup               # Steps 1-6: full bootstrap
+  ./start_sim --setup --watch       # Steps 1-6, then monitor
   ./start_sim --list                # List readers & SIM info
   ./start_sim --watch               # Monitor only (containers already running)
 """
@@ -57,6 +63,7 @@ _READER_SCRIPT = r"""
 import json, sys
 from smartcard.System import readers
 from smartcard.util import toHexString, toBytes
+from smartcard.CardConnection import CardConnection
 
 reader_index = int(sys.argv[1]) if len(sys.argv) > 1 else 0
 
@@ -197,7 +204,23 @@ try:
                       'mcc': mcc, 'mnc': mnc}))
 except Exception as e:
     print(json.dumps({'error': str(e)}), file=sys.stderr)
+    try:
+        conn.reconnect(disposition=CardConnection.RESET)
+        conn.disconnect()
+    except Exception:
+        pass
     sys.exit(1)
+finally:
+    # Power-cycle the card via pcscd so the next consumer (ami_usim.py inside
+    # the container) gets a clean SIM state. Without this, the card is left
+    # with the last SELECT (EF.MSISDN under ADF.USIM) still active, which
+    # causes IMS-AKA in ami_usim.py to fail and the carrier to reject
+    # registration — only fixed by physically re-inserting the SIM.
+    try:
+        conn.reconnect(disposition=CardConnection.RESET)
+        conn.disconnect()
+    except Exception:
+        pass
 """
 
 
@@ -592,7 +615,7 @@ def docker_compose(*args, timeout=None):
 
 
 def start_containers():
-    """Start all services in background."""
+    """Start all services in background (used only when caller wants everything)."""
     print("Starting containers...")
     r = docker_compose("up", "-d")
     if r.returncode == 0:
@@ -605,6 +628,36 @@ def start_containers():
     print(" OK")
 
 
+def _is_service_running(svc):
+    r = docker_compose("ps", "--format", "{{.Service}}\t{{.State}}", timeout=10)
+    if r.returncode != 0:
+        return False
+    for line in r.stdout.splitlines():
+        parts = line.strip().split('\t')
+        if len(parts) == 2 and parts[0] == svc and parts[1] == 'running':
+            return True
+    return False
+
+
+def start_probe():
+    """Start pcscd + asterisk-1 as a SIM probe.  asterisk-1 has python3 +
+    pyscard and shares pcsc-sock with pcscd, so it can enumerate readers and
+    read APDUs.  We need this BEFORE we know which readers have SIMs.
+    """
+    print("Starting pcscd + asterisk-1 (SIM probe)...")
+    r = docker_compose("up", "-d", "pcscd", READ_CONTAINER)
+    if r.returncode != 0:
+        print(f"  Error: {r.stderr.strip()}", file=sys.stderr)
+    else:
+        print("  OK")
+    # pcscd needs time to enumerate USB readers and let cards settle into a
+    # readable state.  With 8 readers a short wait can race the first card
+    # read; wait long enough that subsequent APDU reads are reliable.
+    print("  Waiting for pcscd + readers to settle...", end="", flush=True)
+    time.sleep(12)
+    print(" OK")
+
+
 def restart_instance(instance):
     svc = "asterisk" if instance == 1 else f"asterisk{instance}"
     print(f"  Restarting {svc}...", end="", flush=True)
@@ -614,6 +667,10 @@ def restart_instance(instance):
 
 def stop_instance(instance):
     svc = "asterisk" if instance == 1 else f"asterisk{instance}"
+    if not _is_service_running(svc):
+        # Not running — nothing to do.  Avoid the unregister+sleep when the
+        # container was never started (common during --setup for empty readers).
+        return
     # Try to release the IMS registration first so the carrier frees the
     # binding for this IMSI; otherwise a later container starting with the
     # same IMSI will get its REGISTER silently dropped (408 timeout).
@@ -645,10 +702,15 @@ def _patch_instance(svc):
             print(f"    [warn] cp {src} -> {svc}:{dst}: {r.stderr.strip()}")
 
 
-def start_instance(instance):
+def start_instance(instance, force_recreate=False):
     svc = "asterisk" if instance == 1 else f"asterisk{instance}"
-    print(f"  Starting {svc}...", end="", flush=True)
-    r = docker_compose("up", "-d", svc)
+    args = ["up", "-d"]
+    if force_recreate:
+        args.append("--force-recreate")
+    args.append(svc)
+    print(f"  Starting {svc}{' (force-recreate)' if force_recreate else ''}...",
+          end="", flush=True)
+    r = docker_compose(*args)
     if r.returncode == 0:
         print(" OK")
         _patch_instance(svc)
@@ -707,30 +769,45 @@ def enumerate_readers_in_container():
 
 # ─── SIM reading ─────────────────────────────────────────────────────────────
 
-def read_sim(reader_index):
-    """Run APDU reader inside a running asterisk container; return dict."""
-    container = get_read_container()
-    try:
-        r = docker_compose("exec", "-T", container,
-                           "python3", "-c", _READER_SCRIPT, str(reader_index),
-                           timeout=30)
-    except subprocess.TimeoutExpired:
-        raise RuntimeError(f"Timed out reading reader P{reader_index}")
-    if r.returncode != 0:
-        # Error from the embedded script comes via stderr as JSON
-        err_text = r.stderr.strip()
+def read_sim(reader_index, retries=1):
+    """Run APDU reader inside a running asterisk container; return dict.
+
+    Retries once on transient failures \u2014 freshly-started pcscd can return
+    intermittent errors on the first APDU exchange to a given reader.
+    """
+    last_err = None
+    for attempt in range(retries + 1):
+        container = get_read_container()
         try:
-            err_data = json.loads(err_text)
-            raise RuntimeError(err_data.get('error', err_text))
-        except (json.JSONDecodeError, TypeError):
-            raise RuntimeError(err_text or f"Container exec failed (rc={r.returncode})")
-    try:
-        data = json.loads(r.stdout.strip())
-    except json.JSONDecodeError:
-        raise RuntimeError(f"Unexpected output from container:\n{r.stdout}")
-    if 'error' in data:
-        raise RuntimeError(data['error'])
-    return data
+            r = docker_compose("exec", "-T", container,
+                               "python3", "-c", _READER_SCRIPT, str(reader_index),
+                               timeout=30)
+        except subprocess.TimeoutExpired:
+            last_err = RuntimeError(f"Timed out reading reader P{reader_index}")
+            if attempt < retries:
+                time.sleep(2)
+                continue
+            raise last_err
+        if r.returncode != 0:
+            err_text = r.stderr.strip()
+            try:
+                err_data = json.loads(err_text)
+                last_err = RuntimeError(err_data.get('error', err_text))
+            except (json.JSONDecodeError, TypeError):
+                last_err = RuntimeError(err_text or f"Container exec failed (rc={r.returncode})")
+            # Only retry transient APDU failures, not "no card inserted".
+            if attempt < retries and "no smart card" not in str(last_err).lower():
+                time.sleep(2)
+                continue
+            raise last_err
+        try:
+            data = json.loads(r.stdout.strip())
+        except json.JSONDecodeError:
+            raise RuntimeError(f"Unexpected output from container:\n{r.stdout}")
+        if 'error' in data:
+            raise RuntimeError(data['error'])
+        return data
+    raise last_err  # unreachable
 
 
 # ─── Config file updaters ─────────────────────────────────────────────────────
@@ -851,18 +928,19 @@ def setup(do_watch=False, interval=5):
     print(f"\n[4/6] Generating compose.yaml...")
     generate_compose(devices)
 
-    # Step 5 — create log dirs and start containers
-    print(f"\n[5/6] Creating log directories and starting containers...")
+    # Step 5 — create log dirs and start pcscd + probe container
+    print(f"\n[5/6] Creating log directories and starting pcscd + probe...")
     for dev in devices:
         (SCRIPT_DIR.parent / "logs" / str(dev['reader'] + 1)).mkdir(
             parents=True, exist_ok=True)
-    start_containers()
+    start_probe()
 
-    # Step 6 — read SIM cards and reconfigure
-    print(f"\n[6/6] Reading SIM cards and reconfiguring...")
+    # Step 6 — probe each reader; only start instances whose SIM is present
+    print(f"\n[6/6] Probing SIMs and starting per-card containers...")
+    sims_present = []   # list of (dev, sim)
+    sims_absent  = []   # list of dev
     for dev in devices:
-        idx      = dev['reader']
-        instance = idx + 1
+        idx = dev['reader']
         print(f"\n  P{idx} ({dev['hostname']}):")
         try:
             sim = read_sim(idx)
@@ -871,16 +949,29 @@ def setup(do_watch=False, interval=5):
             db_save_sim(idx, sim)
             db_save_reader(idx, f"P{idx}", "available",
                            hostname=dev['hostname'], imei=dev['imei'])
-            if update_instance(instance, sim):
-                restart_instance(instance)
+            sims_present.append((dev, sim))
         except Exception as e:
             print(f"    No SIM / read error: {e}")
             db_save_reader(idx, f"P{idx}", "empty",
                            hostname=dev['hostname'], imei=dev['imei'])
-            stop_instance(instance)
+            sims_absent.append(dev)
+
+    # Empty readers: ensure their instance is NOT running.  This also stops
+    # the probe (asterisk-1) when P0 is empty, freeing carrier registration.
+    for dev in sims_absent:
+        stop_instance(dev['reader'] + 1)
+
+    # Readers with a card: write real config, then (re)create the instance.
+    # asterisk-1 was started as a probe with placeholder config; if P0 has a
+    # card we force-recreate it so the real IMEI/IMSI/MCC are applied.
+    for dev, sim in sims_present:
+        instance = dev['reader'] + 1
+        if update_instance(instance, sim):
+            start_instance(instance, force_recreate=(instance == 1))
 
     print("\n" + "=" * 60)
-    print("  SETUP COMPLETE")
+    print(f"  SETUP COMPLETE: {len(sims_present)} container(s) started, "
+          f"{len(sims_absent)} skipped (no SIM)")
     print("=" * 60)
 
     if do_watch:
