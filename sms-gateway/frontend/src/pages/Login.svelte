@@ -1,0 +1,265 @@
+<script>
+    import Icon from "@iconify/svelte";
+    import { onMount } from "svelte";
+    import { fade, fly } from 'svelte/transition'; 
+    import { quintOut } from 'svelte/easing';
+    import { updateStorageValue } from '../js/storage';
+    import { t, toggleLang, lang } from '../js/i18n.js';
+
+    let username = "";
+    let password = "";
+    let error = "";
+    let isLoading = false;
+    let showPassword = false;
+    let rememberMe = false;
+
+    onMount(() => {
+        const rememberedUsername = localStorage.getItem("auth_username");
+        if (rememberedUsername) {
+            username = rememberedUsername;
+            rememberMe = true;
+        }
+    });
+
+    const handleSubmit = (/** @type {{ preventDefault: () => void; }} */ e) => {
+        e.preventDefault();
+        handleLogin();
+    };
+
+    const handleLogin = async () => {
+        if (!username || !password) {
+            error = $t('login_err_required');
+            return;
+        }
+
+        try {
+            isLoading = true;
+            error = "";
+
+            const authToken = btoa(`${username}:${password}`);
+
+            const response = await fetch("/api/check", {
+                method: "GET",
+                headers: {
+                    Authorization: `Basic ${authToken}`,
+                    "Content-Type": "application/json",
+                },
+            });
+
+            switch (response.status) {
+                case 204:
+                    await updateStorageValue("auth", {
+                        username,
+                        token: authToken,
+                    });
+                    rememberMe
+                        ? localStorage.setItem("auth_username", username)
+                        : localStorage.removeItem("auth_username");
+                    window.location.reload();
+                    break;
+
+                case 401:
+                    error = $t('login_err_invalid');
+                    break;
+
+                default:
+                    error = $t('login_err_unexpected', { status: response.status });
+                    break;
+            }
+        } catch (err) {
+            error = err.message.includes("Failed to fetch")
+                ? $t('login_err_connect')
+                : $t('login_err_auth');
+        } finally {
+            isLoading = false;
+        }
+    };
+
+    function togglePassword() {
+        showPassword = !showPassword;
+    }
+</script>
+
+<!-- Logo and Brand -->
+<div class="fixed top-6 left-6 sm:top-8 sm:left-8 flex items-center gap-3 z-10">
+    <div class="w-10 h-10 bg-gray-900 dark:bg-gray-100 rounded-lg flex items-center justify-center">
+        <Icon icon="carbon:send-filled" class="w-5 h-5 text-gray-100 dark:text-gray-900" />
+    </div>
+    <div>
+        <h1 class="text-lg font-semibold text-gray-900 dark:text-gray-100">SMS Gateway</h1>
+        <p class="text-xs text-gray-500 dark:text-gray-400">{$t('app_tagline')}</p>
+    </div>
+</div>
+
+<!-- Language toggle -->
+<div class="fixed top-6 right-6 sm:top-8 sm:right-8 z-10">
+    <button
+        type="button"
+        onclick={toggleLang}
+        class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
+               border border-gray-200 dark:border-zinc-700
+               bg-white dark:bg-zinc-800
+               text-gray-600 dark:text-gray-300
+               hover:bg-gray-50 dark:hover:bg-zinc-700 transition"
+        title={$t('lang_tooltip')}
+    >
+        <Icon icon="carbon:language" class="w-4 h-4" />
+        {$lang === 'zh' ? 'English' : '中文'}
+    </button>
+</div>
+
+<!-- Main Container -->
+<div class="min-h-dvh w-screen flex items-center justify-center bg-gray-50 dark:bg-zinc-900 transition-colors duration-300 px-4 sm:px-6 lg:px-8 py-10 sm:py-12 lg:py-0">
+
+    <!-- Login Form -->
+    <form
+        class="relative w-full max-w-md mx-auto -translate-y-4 sm:translate-y-0"
+        onsubmit={handleSubmit}
+        autocomplete="off"
+        in:fly={{ y: 20, duration: 400, easing: quintOut }}
+    >
+        <!-- Card Container -->
+        <div class="bg-transparent sm:bg-white dark:bg-transparent sm:dark:bg-zinc-800 border-0 sm:border border-gray-200 dark:border-zinc-700 rounded-none sm:rounded-lg shadow-none sm:shadow-lg p-4 sm:p-10">
+            <!-- Header -->
+            <div class="text-center mb-8">
+                <div class="w-16 h-16 bg-gray-900 dark:bg-gray-100 rounded-lg flex items-center justify-center mx-auto mb-4">
+                    <Icon icon="carbon:user-avatar-filled" class="w-8 h-8 text-gray-100 dark:text-gray-900" />
+                </div>
+                <h2 class="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-gray-100">
+                    {$t('login_welcome')}
+                </h2>
+                <p class="text-sm text-gray-500 dark:text-gray-400 mt-2">
+                    {$t('login_subtitle')}
+                </p>
+            </div>
+
+            <!-- Error Message -->
+            {#if error}
+                <div
+                    class="mb-6 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800/50 rounded-xl"
+                    role="alert"
+                    in:fade={{ duration: 200 }}
+                >
+                    <div class="flex items-center gap-3">
+                        <Icon icon="carbon:warning-filled" class="w-5 h-5 text-red-600 dark:text-red-400 flex-shrink-0" />
+                        <p class="text-sm font-medium text-red-700 dark:text-red-300">{error}</p>
+                    </div>
+                </div>
+            {/if}
+
+            <!-- Form Fields -->
+            <div class="space-y-5">
+                <!-- Username Field -->
+                <div>
+                    <label for="username" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        {$t('login_username')}
+                    </label>
+                    <div class="relative">
+                        <div class="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                            <Icon icon="carbon:user" class="w-5 h-5 text-gray-400 dark:text-gray-500" />
+                        </div>
+                        <input
+                            id="username"
+                            name="login-username"
+                            type="text"
+                            bind:value={username}
+                            placeholder={$t('login_username_ph')}
+                            autocomplete="off"
+                            autocapitalize="none"
+                            spellcheck="false"
+                            inputmode="text"
+                            aria-autocomplete="none"
+                            class="w-full pl-11 pr-4 py-3 bg-white dark:bg-zinc-900
+                                   border border-gray-300 dark:border-zinc-600 rounded-lg
+                                   text-sm text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500
+                                   transition-all duration-200
+                                   focus:outline-none focus:border-gray-500 dark:focus:border-zinc-500
+                                   hover:border-gray-400 dark:hover:border-zinc-500
+                                   disabled:opacity-50 disabled:cursor-not-allowed"
+                            disabled={isLoading}
+                            required
+                        />
+                    </div>
+                </div>
+
+                <!-- Password Field -->
+                <div>
+                    <label for="password" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        {$t('login_password')}
+                    </label>
+                    <div class="relative">
+                        <div class="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                            <Icon icon="carbon:locked" class="w-5 h-5 text-gray-400 dark:text-gray-500" />
+                        </div>
+                        <input
+                            id="password"
+                            name="login-password"
+                            type={showPassword ? "text" : "password"}
+                            bind:value={password}
+                            placeholder={$t('login_password_ph')}
+                            autocomplete="new-password"
+                            autocapitalize="none"
+                            spellcheck="false"
+                            class="w-full pl-11 pr-12 py-3 bg-white dark:bg-zinc-900
+                                   border border-gray-300 dark:border-zinc-600 rounded-lg
+                                   text-sm text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500
+                                   transition-all duration-200
+                                   focus:outline-none focus:border-gray-500 dark:focus:border-zinc-500
+                                   hover:border-gray-400 dark:hover:border-zinc-500
+                                   disabled:opacity-50 disabled:cursor-not-allowed"
+                            disabled={isLoading}
+                            required
+                        />
+                        <button
+                            type="button"
+                            onclick={togglePassword}
+                            class="absolute inset-y-0 right-0 pr-4 flex items-center bg-transparent hover:bg-transparent focus:outline-none"
+                            tabindex="-1"
+                        >
+                            <Icon 
+                                icon={showPassword ? "carbon:view-off" : "carbon:view"} 
+                                class="w-5 h-5 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-400 transition-colors" 
+                            />
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Remember me -->
+                <div class="flex items-center justify-between pt-2">
+                    <label class="flex items-center gap-2 cursor-pointer select-none">
+                        <input 
+                            type="checkbox" 
+                            bind:checked={rememberMe}
+                            class="w-4 h-4 rounded border-gray-300 dark:border-zinc-600 
+                                   text-gray-600 focus:ring-gray-500 dark:focus:ring-gray-400
+                                   bg-white dark:bg-zinc-900"
+                        />
+                        <span class="text-sm text-gray-600 dark:text-gray-400">{$t('login_remember')}</span>
+                    </label>
+                </div>
+            </div>
+
+            <!-- Submit Button -->
+            <button
+                type="submit"
+                class="mt-8 w-full flex items-center justify-center gap-2 px-5 py-3
+                       bg-gray-900 dark:bg-gray-100
+                       text-gray-100 dark:text-gray-900 font-semibold text-sm rounded-lg
+                       transition-all duration-200
+                       {isLoading || !username || !password
+                         ? 'opacity-40 cursor-not-allowed'
+                         : 'hover:bg-gray-800 dark:hover:bg-gray-200 active:scale-[0.98]'}"
+                disabled={isLoading || !username || !password}
+            >
+                {#if isLoading}
+                    <Icon icon="carbon:circle-dash" class="w-5 h-5 animate-spin" />
+                    <span>{$t('login_signing_in')}</span>
+                {:else}
+                    <Icon icon="carbon:login" class="w-5 h-5" />
+                    <span>{$t('login_sign_in')}</span>
+                {/if}
+            </button>
+        </div>
+
+    </form>
+</div>
