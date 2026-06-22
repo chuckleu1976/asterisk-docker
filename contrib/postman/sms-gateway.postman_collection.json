@@ -1,0 +1,289 @@
+{
+  "info": {
+    "name": "sms-gateway API",
+    "description": "Postman collection for the sms-gateway HTTP API (AMI-only build, all routes nested under /api, HTTP Basic auth).\n\nImport this file and adjust the `base_url`, `username`, `password`, `sim_id`, and `call_id` collection variables to match your environment.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_postman_id": "f8a0b9c0-0001-0001-0001-sms-gateway"
+  },
+  "variable": [
+    { "key": "base_url",  "value": "http://127.0.0.1:8080", "type": "string" },
+    { "key": "username",  "value": "admin",                  "type": "string" },
+    { "key": "password",  "value": "admin",                  "type": "string" },
+    { "key": "sim_id",    "value": "8901240387150170144",    "type": "string", "description": "ICCID of the target SIM. Listed by GET /api/sims/info." },
+    { "key": "phone",     "value": "+18165537405",           "type": "string", "description": "Destination MSISDN for outbound SMS / calls." },
+    { "key": "call_id",   "value": "",                       "type": "string", "description": "An entry from GET /api/calls (== Asterisk UNIQUEID)." }
+  ],
+  "auth": {
+    "type": "basic",
+    "basic": [
+      { "key": "username", "value": "{{username}}", "type": "string" },
+      { "key": "password", "value": "{{password}}", "type": "string" }
+    ]
+  },
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "GET /api/check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base_url}}/api/check", "host": ["{{base_url}}"], "path": ["api", "check"] },
+            "description": "Liveness probe. Always returns 204 No Content."
+          }
+        }
+      ]
+    },
+    {
+      "name": "SIM info",
+      "item": [
+        {
+          "name": "GET /api/sims/info",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/sims/info", "host": ["{{base_url}}"], "path": ["api", "sims", "info"] },
+            "description": "Per-SIM summary array. AMI transports report com_port = \"ami:<host>:<port>\", baud_rate = 0."
+          }
+        },
+        {
+          "name": "GET /api/sims/{sim_id}/info",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/sims/{{sim_id}}/info", "host": ["{{base_url}}"], "path": ["api", "sims", "{{sim_id}}", "info"] },
+            "description": "Enhanced single-SIM info (signal, registration, operator, etc.). Most fields are null for AMI transports."
+          }
+        },
+        {
+          "name": "GET /api/sim-cards",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/sim-cards", "host": ["{{base_url}}"], "path": ["api", "sim-cards"] },
+            "description": "Raw rows from the sim_cards table (alias, phone_number, imsi, ...)."
+          }
+        },
+        {
+          "name": "GET /api/sims/stats",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/sims/stats", "host": ["{{base_url}}"], "path": ["api", "sims", "stats"] },
+            "description": "Per-SIM SMS counters (total / unread / outbound)."
+          }
+        },
+        {
+          "name": "PUT /api/sim-cards/{sim_id}/alias",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"alias\": \"primary\"\n}" },
+            "url": { "raw": "{{base_url}}/api/sim-cards/{{sim_id}}/alias", "host": ["{{base_url}}"], "path": ["api", "sim-cards", "{{sim_id}}", "alias"] },
+            "description": "Set / clear the display alias. Pass {\"alias\": null} to clear."
+          }
+        },
+        {
+          "name": "PUT /api/sim-cards/{sim_id}/phone",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"phone_number\": \"{{phone}}\"\n}" },
+            "url": { "raw": "{{base_url}}/api/sim-cards/{{sim_id}}/phone", "host": ["{{base_url}}"], "path": ["api", "sim-cards", "{{sim_id}}", "phone"] },
+            "description": "Set / clear the SIM's MSISDN. Pass {\"phone_number\": null} to clear."
+          }
+        },
+        {
+          "name": "GET /api/sims/{sim_id}/storage",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/sims/{{sim_id}}/storage", "host": ["{{base_url}}"], "path": ["api", "sims", "{{sim_id}}", "storage"] },
+            "description": "SMS storage selector. Returns {\"status\": \"Unknown\"} for AMI transports."
+          }
+        },
+        {
+          "name": "PUT /api/sims/{sim_id}/storage",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"storage\": \"MT\"\n}" },
+            "url": { "raw": "{{base_url}}/api/sims/{{sim_id}}/storage", "host": ["{{base_url}}"], "path": ["api", "sims", "{{sim_id}}", "storage"] },
+            "description": "Legacy serial knob. Accepts \"SIM\" | \"ME\" | \"MT\". No-op on AMI transports; returns 200."
+          }
+        },
+        {
+          "name": "GET /api/sims/{sim_id}/refresh",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/sims/{{sim_id}}/refresh", "host": ["{{base_url}}"], "path": ["api", "sims", "{{sim_id}}", "refresh"] },
+            "description": "Force a sync read of stored SMS. No-op on AMI mode (returns 200); kept for UI parity."
+          }
+        }
+      ]
+    },
+    {
+      "name": "SMS",
+      "item": [
+        {
+          "name": "GET /api/sms (paginated)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/sms?page=1&page_size=20",
+              "host": ["{{base_url}}"],
+              "path": ["api", "sms"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "page_size", "value": "20" }
+              ]
+            },
+            "description": "Paginated SMS list (most recent first)."
+          }
+        },
+        {
+          "name": "POST /api/sms (send)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"sim_id\": \"{{sim_id}}\",\n  \"phone_number\": null,\n  \"contact\": {\n    \"id\": \"\",\n    \"name\": \"{{phone}}\"\n  },\n  \"message\": \"api smoke test from postman\",\n  \"new\": true\n}"
+            },
+            "url": { "raw": "{{base_url}}/api/sms", "host": ["{{base_url}}"], "path": ["api", "sms"] },
+            "description": "Send an SMS. Either sim_id (ICCID) OR phone_number (own MSISDN) must be set. contact.id may be empty when new=true."
+          }
+        },
+        {
+          "name": "GET /api/sms/sse (live stream)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "text/event-stream" }],
+            "url": { "raw": "{{base_url}}/api/sms/sse", "host": ["{{base_url}}"], "path": ["api", "sms", "sse"] },
+            "description": "Long-lived Server-Sent Events stream of conversation refreshes. Postman shows the chunks live; use Send Stream in v10+."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Contacts & conversations",
+      "item": [
+        {
+          "name": "GET /api/contacts",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/contacts", "host": ["{{base_url}}"], "path": ["api", "contacts"] }
+          }
+        },
+        {
+          "name": "POST /api/contacts",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"id\": \"\",\n  \"name\": \"{{phone}}\"\n}" },
+            "url": { "raw": "{{base_url}}/api/contacts", "host": ["{{base_url}}"], "path": ["api", "contacts"] },
+            "description": "Create a contact. id may be empty; the server assigns a UUID."
+          }
+        },
+        {
+          "name": "DELETE /api/contacts/{id}",
+          "request": {
+            "method": "DELETE",
+            "url": { "raw": "{{base_url}}/api/contacts/REPLACE_ID", "host": ["{{base_url}}"], "path": ["api", "contacts", "REPLACE_ID"] },
+            "description": "Hard-delete a contact (cascades into the SMS rows owned by it)."
+          }
+        },
+        {
+          "name": "GET /api/conversation",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/conversation", "host": ["{{base_url}}"], "path": ["api", "conversation"] },
+            "description": "Conversation index (one row per contact, with last-message preview)."
+          }
+        },
+        {
+          "name": "POST /api/conversations/{id}/unread",
+          "request": {
+            "method": "POST",
+            "url": { "raw": "{{base_url}}/api/conversations/REPLACE_ID/unread", "host": ["{{base_url}}"], "path": ["api", "conversations", "REPLACE_ID", "unread"] },
+            "description": "Mark a conversation as unread."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Calls",
+      "item": [
+        {
+          "name": "GET /api/calls",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/calls?sim_id={{sim_id}}&limit=50&offset=0",
+              "host": ["{{base_url}}"],
+              "path": ["api", "calls"],
+              "query": [
+                { "key": "sim_id", "value": "{{sim_id}}" },
+                { "key": "limit",  "value": "50" },
+                { "key": "offset", "value": "0" }
+              ]
+            },
+            "description": "List call rows. sim_id is optional; limit defaults to a server-side value."
+          }
+        },
+        {
+          "name": "POST /api/calls/make",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"sim_id\": \"{{sim_id}}\",\n  \"phone\": \"{{phone}}\"\n}" },
+            "url": { "raw": "{{base_url}}/api/calls/make", "host": ["{{base_url}}"], "path": ["api", "calls", "make"] },
+            "description": "Originate an outbound call via AMI Originate. Response body contains the new call_id (= UNIQUEID)."
+          }
+        },
+        {
+          "name": "POST /api/calls/answer",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"sim_id\": \"{{sim_id}}\"\n}" },
+            "url": { "raw": "{{base_url}}/api/calls/answer", "host": ["{{base_url}}"], "path": ["api", "calls", "answer"] },
+            "description": "Answer the ringing inbound call on this SIM."
+          }
+        },
+        {
+          "name": "POST /api/calls/hangup",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"sim_id\": \"{{sim_id}}\"\n}" },
+            "url": { "raw": "{{base_url}}/api/calls/hangup", "host": ["{{base_url}}"], "path": ["api", "calls", "hangup"] },
+            "description": "Hang up the active call on this SIM. The CallEnded UserEvent finalizes the row + recording."
+          }
+        },
+        {
+          "name": "GET /api/calls/{id}/recording",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "audio/wav" }],
+            "url": { "raw": "{{base_url}}/api/calls/{{call_id}}/recording", "host": ["{{base_url}}"], "path": ["api", "calls", "{{call_id}}", "recording"] },
+            "description": "Raw WAV blob saved by the recording pipeline. Use \"Save Response > Save to file\" in Postman."
+          }
+        },
+        {
+          "name": "GET /api/calls/{id}/transcript",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/calls/{{call_id}}/transcript", "host": ["{{base_url}}"], "path": ["api", "calls", "{{call_id}}", "transcript"] },
+            "description": "Whisper.cpp transcript text (empty unless whisper_exe + whisper_model are configured)."
+          }
+        },
+        {
+          "name": "GET /api/calls/sse (live stream)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "text/event-stream" }],
+            "url": { "raw": "{{base_url}}/api/calls/sse", "host": ["{{base_url}}"], "path": ["api", "calls", "sse"] },
+            "description": "Long-lived SSE stream of call lifecycle events (incoming_call / outbound_call / call_answered / call_ended)."
+          }
+        }
+      ]
+    }
+  ]
+}
