@@ -8,6 +8,7 @@ use sqlx::Row;
 use sqlx::{migrate, Sqlite, Transaction};
 use sqlx::{FromRow, QueryBuilder};
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::OnceLock;
 use uuid::Uuid;
 
@@ -1064,28 +1065,21 @@ impl ModemSMS {
 
 /// Initializes SQLite database
 pub async fn db_init() -> Result<()> {
-    #[cfg(debug_assertions)]
-    let db_path = "sqlite://./data/data.db";
-    #[cfg(not(debug_assertions))]
-    let db_path = "sqlite:///var/lib/sms-gateway/data.db";
-
-    // Ensure directory exists before creating database
-    #[cfg(debug_assertions)]
-    {
-        std::fs::create_dir_all("./data")?;
-    }
-    #[cfg(not(debug_assertions))]
-    {
-        std::fs::create_dir_all("/var/lib/sms-gateway")?;
+    let mut db_dir = PathBuf::from("/var/lib/sms-gateway");
+    if std::fs::create_dir_all(&db_dir).is_err() {
+        db_dir = PathBuf::from("./data");
+        std::fs::create_dir_all(&db_dir)?;
     }
 
-    if !sqlx::Sqlite::database_exists(db_path).await? {
-        sqlx::Sqlite::create_database(db_path).await?;
+    let db_path = format!("sqlite://{}/data.db", db_dir.display());
+
+    if !sqlx::Sqlite::database_exists(&db_path).await? {
+        sqlx::Sqlite::create_database(&db_path).await?;
     };
 
     let pool = SqlitePoolOptions::new()
         .max_connections(5)
-        .connect(db_path)
+        .connect(&db_path)
         .await?;
 
     migrate!("./migrations").run(&pool).await?;
