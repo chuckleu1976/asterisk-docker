@@ -1,0 +1,117 @@
+# Plan: Fix empty SIM dashboard fields
+
+## Root cause
+The SIM Dashboard (`frontend/src/pages/SimDashboard.svelte`) calls `/api/sims/info`
+(`get_all_sim_info` in `src/api/mod.rs`). That handler calls per-transport
+diagnostic getters (`get_signal_quality`, `check_network_registration`,
+`check_operator`, `get_imei`, `get_sim_status`). The current backend is
+AMI-only (`src/modem/ami_transport.rs`) and does NOT override any of these on
+the `Transport` trait, so they all fall back to the default
+`async fn ... -> Ok(None)` in `src/modem/transport.rs`. Result: dashboard
+shows blank for Network status, Operator, IMEI.
+
+Additionally:
+- The JSON response from `/api/sims/info` has no `imsi` or `iccid` field, so
+  the frontend's IMSI column and the IMSI→Country lookup are always empty.
+- `phone_number` is only read from the DB `sim_cards` row; if that row was
+  not seeded for the configured ICCID, it stays blank, even though
+  `config.toml` already supplies `msisdn` per device.
+
+`AmiTransport` already owns a `SimInfo { iccid, imsi, msisdn, mcc, mnc }`
+populated from `config.toml [[devices]]` (see `manager.rs` initialize loop)
+and an `AmiClient` whose login state plus `PJSIPShowRegistrationsOutbound`
+event provides a usable network-registration signal.
+
+## Fix approach (recommended)
+Expose the data we already have, then synthesize the registration/operator
+from what AMI can tell us:
+
+1. Extend `Device` in `src/config.rs` with optional `imei`, `operator_name`,
+   `mcc`, `mnc` so users can put per-SIM static identity into `config.toml`.
+2. Extend `SimInfo` (and the manager's per-device init) with `imei` and
+   `operator_name`.
+3. Implement these `Transport` methods on `AmiTransport`:
+   - `imei()` → return `sim_info.imei` clone.
+   - `sim_status()` → return `Some("READY")` when AMI is connected.
+   - `operator_info()` → build `OperatorInfo` from `sim_info.mcc/mnc/operator_name`.
+   - `registration_status()` → issue `PJSIPShowRegistrationsOutbound`,
+     map `Status: Registered` → status code 1 (home), `Rejected/Unregistered`
+     → 3, anything else → 2 (searching); when AMI is not connected, 0.
+4. Patch `get_all_sim_info` in `src/api/mod.rs` so the per-SIM JSON includes
+   `imsi`, `iccid`, `mcc`, `mnc`, and so `phone_number` falls back to
+   `sim_info.msisdn` when the DB has none.
+5. Frontend already derives Country from IMSI via `getMccCountry`; no
+   frontend change needed once IMSI is returned.
+
+## Steps
+1. Edit `src/config.rs`: add optional fields `imei`, `operator_name`, `mcc`,
+   `mnc` to `Device`.
+2. Edit `src/modem/transport.rs`: add `imei: Option<String>` and
+   `operator_name: Option<String>` to `SimInfo`.
+3. Edit `src/modem/manager.rs` `initialize()`: populate the new `SimInfo`
+   fields from each `Device`.
+4. Edit `src/modem/ami_transport.rs`: implement `imei()`, `sim_status()`,
+   `operator_info()`, `registration_status()` on the `Transport` impl. Use
+   `AmiClient::action(vec![("Action","PJSIPShowRegistrationsOutbound")])` and
+   inspect the response for the registration status. Reuse
+   `AmiClient::is_connected()`/`login_state` if it exists; otherwise add a
+   light helper.
+5. Edit `src/api/mod.rs` `get_all_sim_info`:
+   - Call `transport.sim_info().await` once per SIM (alongside the existing
+     join set).
+   - Add `"imsi"`, `"iccid"`, `"mcc"`, `"mnc"` to the per-SIM `json!` map.
+   - Replace the phone_number line with
+     `sim_data.phone_number.or(sim_info.msisdn)`.
+6. Update `config.toml.example` to document the new optional fields and
+   show `imei = "..."` per device.
+7. Rebuild: `cargo build --release` in `/home/ht/sms-gateway`, restart
+   `./target/release/sms-gateway -c ./config.toml -l ./logs --log-level info`.
+
+## Relevant files
+- `/home/ht/sms-gateway/src/api/mod.rs` — `get_all_sim_info` (around the
+  `json!({...})` block) and `EnhancedModemInfo`.
+- `/home/ht/sms-gateway/src/modem/transport.rs` — `SimInfo` and the
+  default diagnostic methods.
+- `/home/ht/sms-gateway/src/modem/ami_transport.rs` — `impl Transport for
+  AmiTransport`, the only place where AMI-side overrides go.
+- `/home/ht/sms-gateway/src/modem/manager.rs` — `initialize()`'s
+  `SimInfo` construction.
+- `/home/ht/sms-gateway/src/config.rs` — `Device` struct.
+- `/home/ht/sms-gateway/frontend/src/pages/SimDashboard.svelte` — confirms
+  the field names the UI expects (no edits needed).
+- `/home/ht/sms-gateway/config.toml` and `config.toml.example` — add new
+  optional keys.
+
+## Verification
+1. `cargo build --release` in `/home/ht/sms-gateway`, no new warnings/errors.
+2. Restart the gateway, then
+   `curl -s http://127.0.0.1:8080/api/sims/info | jq '.[0] | {com_port,
+   imsi, iccid, mcc, mnc, imei, phone_number, network_registration,
+   operator_info}'` and confirm all fields are non-null for the active SIM.
+3. Open http://127.0.0.1:8080 → Dashboard → each row now shows
+   Network status (Home / colored), Phone Number (msisdn), Operator
+   (operator_name or `MCC/MNC`), Country (from IMSI MCC), IMSI, ICCID,
+   IMEI populated.
+4. Pull the SIM (or stop the matching asterisk container); within ~5 s the
+   row's Network status drops to `Not Registered`.
+
+## Decisions / assumptions
+- AMI does not currently expose modem IMEI or live PLMN data — those have
+  to come from static `config.toml` per device, with the option to fill
+  them automatically later from `sim_inventory.db` in `asterisk-docker/`.
+- Network status is derived from AMI connectivity + SIP registration only;
+  there is no notion of RSSI/CSQ in AMI, so `signal_quality` stays null
+  and the dashboard's signal-bars column will keep showing `—`.
+- Country is purely a frontend derivation from IMSI MCC, so no backend
+  country field is added.
+
+## Further considerations
+1. Should IMEI/IMSI/MSISDN be auto-imported from `asterisk-docker/sim_inventory.db`?
+   - Option A: pure config.toml (this plan) — simplest, explicit.
+   - Option B: also read `sim_inventory.db` at startup and prefer those
+     values when present — auto-detect, no manual edit needed.
+   - Recommendation: do A now; add B as a follow-up if maintaining the
+     config.toml gets tedious.
+2. Should `signal_quality` be faked (e.g., always 4 bars when registered)
+   so the UI looks complete? Recommendation: no — leave honest `—` so it's
+   obvious the value is unmeasured.

@@ -1,0 +1,250 @@
+<script>
+  import Icon from "@iconify/svelte";
+  import SimSelector from "./SimSelector.svelte";
+  import Modal from "../common/Modal.svelte";
+  import { t } from "../../js/i18n.js";
+
+  let {
+    sendMessageContent = $bindable(""),
+    showNewMessage = false,
+    concatInputText = "",
+    onSend = () => {},
+    initialSimId = null,
+  } = $props();
+
+  let isComposing = $state(false);
+  let selectedSim = $state(null);
+  let showConfirmDialog = $state(false);
+  let messageInputRef = $state(null);
+
+  // UCS2 encoding limits: 70 chars for single SMS, 67 per segment for multipart
+  const UCS2_SINGLE_MAX = 70;
+  const UCS2_MULTI_SEG = 67;
+
+  let charCount = $derived(sendMessageContent.length);
+  let segments = $derived(
+    charCount === 0 ? 0
+    : charCount <= UCS2_SINGLE_MAX ? 1
+    : Math.ceil(charCount / UCS2_MULTI_SEG)
+  );
+  let overLimit = $derived(charCount > UCS2_SINGLE_MAX);
+  let charCountColor = $derived(
+    charCount > 59 ? 'text-amber-500 dark:text-amber-400'
+    : 'text-gray-400 dark:text-gray-500'
+  );
+
+  export function focusInput() {
+    if (!messageInputRef || messageInputRef.disabled) return;
+
+    messageInputRef.focus();
+    messageInputRef.setSelectionRange?.(
+      messageInputRef.value.length,
+      messageInputRef.value.length
+    );
+  }
+
+  function handleSendClick() {
+    if (showNewMessage && !concatInputText.trim()) {
+      return;
+    }
+
+    if (!sendMessageContent.trim()) {
+      return;
+    }
+
+    if (!selectedSim) {
+      alert($t('select_sim_first'));
+      return;
+    }
+
+    showConfirmDialog = true;
+  }
+
+  function confirmSend() {
+    if (selectedSim) {
+      onSend(selectedSim.id);
+      showConfirmDialog = false;
+      sendMessageContent = ""; // 清空输入框
+    }
+  }
+
+  function cancelSend() {
+    showConfirmDialog = false;
+  }
+
+  function handleKeyDown(e) {
+    if (e.key === "Enter" && !isComposing) {
+      handleSendClick();
+    }
+  }
+</script>
+
+<div
+  class="absolute bottom-0 left-0 right-0 bg-gray-50/95 dark:bg-zinc-900/95 backdrop-blur-xl border-t border-gray-200 dark:border-zinc-700 z-10"
+>
+  <div class="flex flex-col sm:flex-row sm:items-center gap-3 px-4 py-3 sm:py-2 max-w-6xl mx-auto">
+    <div class="flex-1 flex items-center gap-3 relative w-full">
+      <div
+        class="flex-1 transition-all duration-300 ease-out relative"
+        class:opacity-50={showNewMessage && !concatInputText.trim()}
+        class:pointer-events-none={showNewMessage && !concatInputText.trim()}
+      >
+        <div class="relative">
+          <Icon
+            icon="carbon:chat"
+            class="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-500 dark:text-gray-400 pointer-events-none"
+          />
+          <input
+            type="text"
+            bind:value={sendMessageContent}
+            bind:this={messageInputRef}
+            oncompositionstart={() => (isComposing = true)}
+            oncompositionend={() => (isComposing = false)}
+            onkeydown={handleKeyDown}
+            disabled={showNewMessage && !concatInputText.trim()}
+            placeholder={showNewMessage && !concatInputText.trim()
+              ? $t('enter_contact_first')
+              : $t('type_message')}
+            class="w-full h-12 pl-11 pr-16 bg-white dark:bg-zinc-800 border {overLimit ? 'border-red-400 dark:border-red-500' : 'border-gray-300 dark:border-zinc-600'} rounded-lg text-sm text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 transition-all duration-200 outline-none focus:border-gray-500 dark:focus:border-zinc-500 hover:border-gray-400 dark:hover:border-zinc-600"
+          />
+          {#if charCount > 0}
+            <span class="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-mono {charCountColor} pointer-events-none select-none leading-none">
+              {charCount}/{UCS2_SINGLE_MAX}
+            </span>
+          {/if}
+        </div>
+      </div>
+    </div>
+
+    <div class="flex flex-row items-stretch sm:items-center gap-3 w-full sm:w-auto">
+      <div class="w-full flex-1 sm:flex-none sm:w-auto sm:min-w-[200px] sm:max-w-[320px]">
+        <SimSelector bind:selectedSim {initialSimId} />
+      </div>
+      
+      <button
+        onclick={handleSendClick}
+        disabled={(showNewMessage && !concatInputText.trim()) || !sendMessageContent.trim()}
+        class="flex items-center justify-center gap-2 px-4 sm:px-5 h-12 rounded-lg font-medium text-sm transition-all duration-200 w-auto sm:w-auto min-w-[110px] {(showNewMessage && !concatInputText.trim()) || !sendMessageContent.trim()
+          ? 'bg-gray-200 dark:bg-zinc-700 text-gray-600 dark:text-gray-500 cursor-not-allowed opacity-50'
+          : 'bg-gray-800 dark:bg-gray-100 text-gray-100 dark:text-gray-900 hover:bg-gray-700 dark:hover:bg-gray-200 active:scale-[0.98] cursor-pointer'}"
+      >
+        <Icon
+          icon="carbon:send-filled"
+          class="w-5 h-5"
+        />
+        <span>Send</span>
+      </button>
+    </div>
+  </div>
+</div>
+
+<Modal 
+  isOpen={showConfirmDialog} 
+  onClose={cancelSend}
+  maxWidth="max-w-md"
+>
+  {#snippet children()}
+    <div class="p-8">
+      <!-- 标题区域 -->
+      <div class="mb-8 text-center">
+        <div class="inline-flex items-center justify-center w-12 h-12 bg-gray-900 dark:bg-gray-100 rounded-lg mb-4">
+          <Icon icon="carbon:send-alt" class="w-6 h-6 text-gray-100 dark:text-gray-900" />
+        </div>
+        <h3 class="text-xl font-semibold text-gray-900 dark:text-gray-100 mb-2">
+          {$t('confirm_message')}
+        </h3>
+        <p class="text-sm text-gray-500 dark:text-gray-400">
+          {$t('confirm_subtitle')}
+        </p>
+      </div>
+
+      <!-- SIM 卡信息 -->
+      <div class="mb-6">
+        <p class="text-xs text-gray-500 dark:text-gray-400 uppercase tracking-widest mb-3">
+          {$t('sending_from')}
+        </p>
+        <div class="bg-gray-50 dark:bg-zinc-800/50 rounded-lg p-4 border border-gray-200 dark:border-zinc-700">
+          <div class="flex items-center gap-3">
+            <div class="w-10 h-10 bg-gray-800 dark:bg-gray-200 rounded-lg flex items-center justify-center flex-shrink-0">
+              <Icon icon="carbon:sim-card" class="w-5 h-5 text-gray-200 dark:text-gray-800" />
+            </div>
+            <div class="flex-1">
+              <p class="text-sm font-medium text-gray-900 dark:text-gray-100">
+                {selectedSim ? selectedSim.alias : $t('not_selected')}
+              </p>
+              <p class="text-xs text-gray-500 dark:text-gray-400 font-mono mt-0.5">
+                {selectedSim ? selectedSim.phone_number : '—'}
+              </p>
+            </div>
+            <div class="flex items-center gap-1.5">
+              <div class="w-1.5 h-1.5 bg-green-500 rounded-full"></div>
+              <span class="text-xs text-gray-500 dark:text-gray-400">{$t('active_label')}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 消息内容 -->
+      {#if sendMessageContent}
+        <div class="mb-6">
+          <div class="flex items-center justify-between mb-3">
+            <p class="text-xs text-gray-500 dark:text-gray-400 uppercase tracking-widest">
+              {$t('message_content')}
+            </p>
+            <span class="text-xs font-mono {charCountColor}">
+              {charCount}/{UCS2_SINGLE_MAX}{segments > 1 ? ` · ${$t('sms_segments', { n: segments })}` : ''}
+            </span>
+          </div>
+          <div class="bg-white dark:bg-zinc-900 rounded-lg p-4 border border-gray-200 dark:border-zinc-700 max-h-32 overflow-y-auto">
+            <p class="text-sm text-gray-700 dark:text-gray-300 leading-relaxed whitespace-pre-wrap">
+              {sendMessageContent}
+            </p>
+          </div>
+        </div>
+      {/if}
+
+      <!-- 费用提醒 -->
+      {#if segments > 1}
+        <div class="mb-4 p-3 bg-amber-50 dark:bg-amber-900/20 rounded-lg border border-amber-200 dark:border-amber-700">
+          <div class="flex items-center gap-2">
+            <Icon icon="carbon:warning" class="w-4 h-4 text-amber-500 dark:text-amber-400 flex-shrink-0" />
+            <p class="text-xs text-amber-700 dark:text-amber-300 leading-relaxed">
+              {$t('message_too_long', { n: segments })}
+            </p>
+          </div>
+        </div>
+      {/if}
+      <div class="mb-8 p-3 bg-gray-100 dark:bg-zinc-800 rounded-lg border border-gray-200 dark:border-zinc-700">
+        <div class="flex items-center gap-2">
+          <Icon icon="carbon:information" class="w-4 h-4 text-gray-500 dark:text-gray-400 flex-shrink-0" />
+          <p class="text-xs text-gray-600 dark:text-gray-400 leading-relaxed">
+            {$t('sms_disclaimer')}
+          </p>
+        </div>
+      </div>
+
+      <!-- 操作按钮 -->
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <button
+          onclick={cancelSend}
+          class="px-5 py-3 bg-white dark:bg-zinc-800 text-gray-700 dark:text-gray-300 font-medium text-sm rounded-lg border border-gray-300 dark:border-zinc-600 transition-all duration-200 hover:bg-gray-50 dark:hover:bg-zinc-700 hover:border-gray-400 dark:hover:border-zinc-500"
+        >
+          {$t('cancel')}
+        </button>
+        <button
+          onclick={confirmSend}
+          class="px-5 py-3 bg-gray-800 dark:bg-gray-100 text-gray-100 dark:text-gray-900 font-medium text-sm rounded-lg transition-all duration-200 hover:bg-gray-700 dark:hover:bg-gray-200 active:scale-[0.98] flex items-center justify-center gap-2"
+        >
+          <Icon icon="carbon:send-filled" class="w-4 h-4" />
+          <span>{$t('send')}</span>
+        </button>
+      </div>
+    </div>
+  {/snippet}
+</Modal>
+
+<style lang="postcss">
+  .whitespace-pre-wrap {
+    white-space: pre-wrap;
+  }
+</style>

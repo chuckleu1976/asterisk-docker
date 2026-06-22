@@ -1,0 +1,55 @@
+<script>
+  import { currentContact, conversationLoading } from "../../stores/conversation";
+  import { t } from "../../js/i18n.js";
+
+  let {
+    showNewMessage = false,
+    concatInputText = $bindable(""),
+    onConcatInputTextChange = () => {},
+    onAddContact = () => {}
+  } = $props();
+
+  let concatInput = $state(null);
+
+  $effect(() => {
+    if (showNewMessage && concatInput) {
+      concatInput.focus();
+    }
+  });
+
+  function handleKeyDown(event) {
+    if (event.key === "Enter") {
+      onAddContact();
+    }
+  }
+
+  function handleInput(event) {
+    concatInputText = event.target.value;
+    onConcatInputTextChange(concatInputText);
+  }
+</script>
+
+<header
+  class="bg-white/90 dark:bg-zinc-900/90 p-2 h-12 flex items-center
+   text-sm transition-colors duration-300 sticky top-0 z-10 border-b border-gray-200/60 dark:border-zinc-800/60"
+  class:text-gray-600={showNewMessage}
+  class:text-gray-400={!showNewMessage}
+  class:dark:text-gray-200={showNewMessage}
+  class:dark:text-gray-400={!showNewMessage}
+>
+  {$t('to_label')}
+  {#if !$conversationLoading}
+    {#if showNewMessage}
+      <input
+        type="text"
+        class="rounded-md p-2 bg-transparent focus:outline-none focus:ring-0"
+        bind:value={concatInputText}
+        bind:this={concatInput}
+        onkeydown={handleKeyDown}
+        oninput={handleInput}
+      />
+    {:else if $currentContact}
+      {$currentContact.name}
+    {/if}
+  {/if}
+</header>
