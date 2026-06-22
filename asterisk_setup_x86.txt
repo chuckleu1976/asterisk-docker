@@ -1,0 +1,370 @@
+================================================================================
+  asterisk-docker Ubuntu 24 x86 setup guide
+================================================================================
+
+This file is a clean-machine installation guide for the asterisk-docker SMS
+and VoLTE/VoWiFi gateway stack on Ubuntu 24.04 x86_64.
+
+It assumes you want to run the stack with USB SIM readers and local SIM cards.
+If you use a remote SIM server instead, adjust the SIM_MODE and reader setup
+sections accordingly.
+
+================================================================================
+  1) Prerequisites
+================================================================================
+
+- Ubuntu 24.04 LTS x86_64
+- A machine with USB ports and one or more USB SIM card readers
+- At least one SIM card with VoLTE/VoWiFi support
+- Internet access for Docker images and package installation
+- A Telegram bot token and chat ID if you want SMS notifications
+- Optional but recommended: a static LAN IP address for the host
+
+================================================================================
+  2) Install base packages
+================================================================================
+
+Run these commands as root or with sudo:
+
+  sudo apt update
+  sudo apt install -y ca-certificates curl gnupg lsb-release git \
+      python3 python3-pip python3-venv python3-dev pcscd libpcsclite1 \
+      libccid pcsc-tools openssl uidmap
+
+Verify the PC/SC stack:
+
+  pcsc_scan
+
+You should see the reader(s) detected. If not, reconnect the reader and check
+that pcscd is running.
+
+================================================================================
+  3) Install Docker Engine and Docker Compose plugin
+================================================================================
+
+Install Docker from the official repository:
+
+  sudo install -m 0755 -d /etc/apt/keyrings
+  curl -fsSL https://download.docker.com/linux/ubuntu/gpg | \
+      sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+
+  echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
+      https://download.docker.com/linux/ubuntu \
+      $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+      sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+  sudo apt update
+  sudo apt install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+
+Start and enable Docker:
+
+  sudo systemctl enable --now docker
+
+Allow your user to run Docker without sudo:
+
+  sudo usermod -aG docker "$USER"
+
+Log out and back in, then verify:
+
+  docker --version
+  docker compose version
+
+================================================================================
+  4) Clone the project
+================================================================================
+
+Choose a directory and clone the repository:
+
+  cd ~
+  git clone https://github.com/chuckleu1976/asterisk-docker.git
+  cd asterisk-docker
+
+The project files are now in:
+
+  ~/asterisk-docker
+
+================================================================================
+  5) Install Python dependencies for the host-side automation script
+================================================================================
+
+The host side uses Python to probe SIMs and manage container startup.
+Install the required Python package:
+
+  sudo apt install -y python3-pyscard
+
+If you are on Python 3.10 or older, also install:
+
+  python3 -m pip install --user tomli
+
+Verify the import:
+
+  python3 -c "from smartcard.System import readers; print('pyscard OK', len(readers()))"
+
+================================================================================
+  6) PC/SC and SIM reader setup (customized for your hardware)
+================================================================================
+
+This project is designed around a PC/SC stack plus a SIM reader. The Docker
+compose setup uses a containerized pcscd service and mounts the reader
+configuration directories from this repository.
+
+Choose one of these modes:
+
+- Local USB reader mode (recommended for this guide):
+  - The SIM is inserted into a USB smart-card reader attached to the host.
+  - Use SIM_MODE=local.
+  - The host must expose the USB reader to Docker and pcscd must see it with
+    pcsc_scan.
+
+- Remote SIM-server mode:
+  - The SIM is served by a remote osmo-remsim bankd server.
+  - Use SIM_MODE=remote (default).
+  - Edit the remsim reader configuration so the PC/SC stack points at your
+    bankd host and port.
+
+A. Verify the host-side PC/SC stack
+
+Run these commands on the host before starting the containers:
+
+  sudo systemctl enable --now pcscd
+  sudo systemctl restart pcscd
+  pcsc_scan
+
+If the reader is not detected, check:
+
+  lsusb
+  dmesg | grep -i -E 'ccid|smart|usb'
+
+If your reader is not auto-detected, install the correct driver package and
+reload udev rules:
+
+  sudo udevadm control --reload-rules
+  sudo udevadm trigger
+
+B. Custom reader configuration for this repository
+
+The project already contains reader configuration under:
+
+  remsim/reader.conf.d/
+  remsim/serial/
+
+For local USB readers, no extra reader.conf is usually required; the compose
+stack starts pcscd with an empty reader-conf directory so pcscd can auto-detect
+USB readers.
+
+For a custom remote reader or a specialized driver, edit:
+
+  nano remsim/reader.conf.d/osmo-remsim-client
+
+Example contents:
+
+  FRIENDLYNAME "osmo-remsim-client"
+  DEVICENAME   1:0:192.168.31.68:9998
+  LIBPATH      /usr/lib64/pcsc/drivers/serial/libifd_remsim_client.so
+
+Replace the IP/port and library path with the values required by your setup.
+
+C. USB permissions and udev rules
+
+If your reader needs explicit permissions, create a udev rule such as:
+
+  echo 'SUBSYSTEM=="usb", ATTR{idVendor}=="XXXX", ATTR{idProduct}=="YYYY", MODE="0666"' | \
+      sudo tee /etc/udev/rules.d/80-ccid.rules > /dev/null
+
+Then reload udev rules:
+
+  sudo udevadm control --reload-rules
+  sudo udevadm trigger
+
+D. Make the project use the local reader mode
+
+For the local USB-reader workflow, export or prefix the startup command with:
+
+  export SIM_MODE=local
+
+The compose stack and the bootstrap script will then use the local PC/SC reader
+setup instead of the remote osmo-remsim path.
+
+================================================================================
+  7) Prepare the working directories and example config
+================================================================================
+
+Create the logs directory that the stack expects:
+
+  mkdir -p ../logs/1
+
+Copy the example config to a working instance directory:
+
+  cp -r config/example config/1
+
+If you want to run more than one instance, copy the example config again:
+
+  cp -r config/example config/2
+  cp -r config/example config/3
+
+You will now edit the files in config/1 (and optional config/2, config/3, ...).
+
+================================================================================
+  7) Configure your SIM readers and IMEIs
+================================================================================
+
+Edit the file:
+
+  nano devices.toml
+
+The file maps each reader slot to an Asterisk instance and IMEI.
+Example format:
+
+  [[readers]]
+  P0= "asterisk1"
+  IMEI=359801043400751
+
+  [[readers]]
+  P1= "asterisk2"
+  IMEI=353295065048026
+
+Replace the values with the actual readers and IMEIs you want to use.
+Important:
+- P0, P1, P2, ... are reader indexes as seen by PC/SC.
+- The IMEI should match the device/modem or the value expected by your carrier
+  profile.
+- Each reader should have a corresponding instance name such as asterisk1,
+  asterisk2, and so on.
+
+================================================================================
+  8) Fill in the account and carrier values
+================================================================================
+
+Edit the following files and replace the placeholders with your real values:
+
+- config/1/epdg.conf
+- config/1/asterisk/pjsip.conf
+- config/1/asterisk/extensions.conf
+- config/1/ami_usim.ini
+- config/1/telegram_token
+
+At minimum you should set:
+
+- your IMSI
+- your ICCID
+- your MSISDN (phone number)
+- your MCC/MNC values
+- your carrier domain values
+- your SMSC number
+- your SIP password
+- your Telegram token and chat ID
+- the TLS certificate/key for your Asterisk instance
+
+For a self-signed test certificate, generate one like this:
+
+  mkdir -p config/1/asterisk
+  openssl req -x509 -newkey rsa:4096 \
+      -keyout config/1/asterisk/certificate.key \
+      -out config/1/asterisk/certificate.crt \
+      -days 3650 -nodes \
+      -subj "/CN=asterisk"
+
+If you need a SAN for a specific LAN IP, add it with -addext.
+
+================================================================================
+  9) Set your Telegram token
+================================================================================
+
+Create the token file:
+
+  echo "YOUR_BOT_TOKEN_HERE" > config/1/telegram_token
+
+If you want notifications, also set the correct chat ID in the dialplan.
+
+================================================================================
+  10) Start the stack
+================================================================================
+
+The recommended startup method is the automation script that probes the SIM
+readers first and starts only the instances that actually have a SIM card.
+For a local USB reader setup, use:
+
+  export SIM_MODE=local
+  python3 start_sim_container_config.py --setup --watch
+
+If you are using the simpler Docker Compose path, also enable local mode:
+
+  export SIM_MODE=local
+  docker compose up -d --build
+
+This will:
+- inspect your configured readers
+- read SIM data from the cards
+- generate configs for the matching instances
+- start only the containers that have a present SIM
+- keep watching for hotplug and SIM changes
+
+If you prefer the simpler Docker Compose path for a manual setup, use:
+
+  docker compose up -d --build
+
+================================================================================
+  11) Verify the installation
+================================================================================
+
+Check container status:
+
+  docker compose ps
+
+Watch the logs:
+
+  docker compose logs -f pcscd asterisk
+
+You should see the stack start, the PC/SC socket become available, and the
+Asterisk container begin the IMS/SIP registration flow.
+
+If you used the automation script, look for messages that indicate the SIMs were
+successfully detected and the matching instances were started.
+
+================================================================================
+  12) Troubleshooting
+================================================================================
+
+If no SIMs are detected:
+- confirm the reader is visible with pcsc_scan
+- ensure pcscd is running
+- reconnect the reader and try again
+- check that the USB device permissions allow access
+
+If the container does not start correctly:
+- check Docker logs with docker compose logs
+- verify your config files are not missing required values
+- ensure your carrier/domain values match your SIM and network profile
+
+If registration fails:
+- verify the IMSI, MSISDN, MCC/MNC, and SMSC values
+- verify the IMEI in devices.toml and pjsip.conf
+- make sure the SIM is inserted before startup
+- review the Asterisk logs for authentication and IMS errors
+
+================================================================================
+  13) Useful commands
+================================================================================
+
+Stop everything:
+
+  docker compose down
+
+Restart the stack:
+
+  docker compose up -d --build
+
+Re-run the SIM-driven bootstrap:
+
+  python3 start_sim_container_config.py --setup --watch
+
+View the current reader list:
+
+  python3 start_sim_container_config.py --list
+
+================================================================================
+  Notes
+================================================================================
+
+This stack is intended for test and evaluation use. It is not a production
+phone system and may require carrier-specific tuning for your SIM and network.
