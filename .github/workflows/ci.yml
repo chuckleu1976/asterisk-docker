@@ -1,0 +1,31 @@
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install ruff + mypy
+        run: pip install ruff mypy tomli
+
+      - name: Lint with ruff
+        run: ruff check scripts/ start_sim_container_config.py
+
+      - name: Type-check with mypy
+        run: mypy scripts/ start_sim_container_config.py --ignore-missing-imports
+        continue-on-error: true
+
+      - name: Verify compose.yaml is valid YAML
+        run: python3 -c "import yaml; yaml.safe_load(open('compose.yaml')); print('compose.yaml: valid YAML')"
+        continue-on-error: true
+
+      - name: Check Python imports
+        run: python3 -c "from scripts.sim_docker import *; print('Imports OK')"

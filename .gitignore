@@ -22,3 +22,12 @@ remsim/serial/
 # Build artifacts
 *.pyc
 __pycache__/
+
+# Generated compose file
+compose.yaml
+
+# Generated config
+config/[1-9]/
+
+# Log directories
+../logs/
