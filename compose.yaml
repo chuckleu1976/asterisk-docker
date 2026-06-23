@@ -1,8 +1,8 @@
 services:
   pcscd:
     build:
-      context: ${PCSC_SRC_DIR:-/home/ht/Downloads/osmo_remsim_pcsc}
-      dockerfile: ${PWD}/pcscd/Dockerfile
+      context: ./pcscd
+      dockerfile: Dockerfile
     image: ghcr.io/chuckleu1976/pcscd-sysmocom:latest
     restart: always
     privileged: true
@@ -38,7 +38,10 @@ services:
       - 127.0.0.1:5038:5038/tcp
     tmpfs:
       - /run
+    environment:
+      - LD_LIBRARY_PATH=/opt/pcsc-libs
     volumes:
+      - ./pcsc-libs:/opt/pcsc-libs:ro
       - ./config/1/epdg.conf:/usr/local/etc/swanctl/conf.d/epdg.conf:Z,ro
       - ./config/1/asterisk:/etc/asterisk:Z
       - ./config/1/ami_usim.ini:/usr/local/etc/ami_usim.ini:Z,ro
@@ -68,7 +71,10 @@ services:
       - 127.0.0.1:5039:5038/tcp
     tmpfs:
       - /run
+    environment:
+      - LD_LIBRARY_PATH=/opt/pcsc-libs
     volumes:
+      - ./pcsc-libs:/opt/pcsc-libs:ro
       - ./config/2/epdg.conf:/usr/local/etc/swanctl/conf.d/epdg.conf:Z,ro
       - ./config/2/asterisk:/etc/asterisk:Z
       - ./config/2/ami_usim.ini:/usr/local/etc/ami_usim.ini:Z,ro
@@ -98,7 +104,10 @@ services:
       - 127.0.0.1:5040:5038/tcp
     tmpfs:
       - /run
+    environment:
+      - LD_LIBRARY_PATH=/opt/pcsc-libs
     volumes:
+      - ./pcsc-libs:/opt/pcsc-libs:ro
       - ./config/3/epdg.conf:/usr/local/etc/swanctl/conf.d/epdg.conf:Z,ro
       - ./config/3/asterisk:/etc/asterisk:Z
       - ./config/3/ami_usim.ini:/usr/local/etc/ami_usim.ini:Z,ro
@@ -128,7 +137,10 @@ services:
       - 127.0.0.1:5041:5038/tcp
     tmpfs:
       - /run
+    environment:
+      - LD_LIBRARY_PATH=/opt/pcsc-libs
     volumes:
+      - ./pcsc-libs:/opt/pcsc-libs:ro
       - ./config/4/epdg.conf:/usr/local/etc/swanctl/conf.d/epdg.conf:Z,ro
       - ./config/4/asterisk:/etc/asterisk:Z
       - ./config/4/ami_usim.ini:/usr/local/etc/ami_usim.ini:Z,ro
@@ -158,7 +170,10 @@ services:
       - 127.0.0.1:5042:5038/tcp
     tmpfs:
       - /run
+    environment:
+      - LD_LIBRARY_PATH=/opt/pcsc-libs
     volumes:
+      - ./pcsc-libs:/opt/pcsc-libs:ro
       - ./config/5/epdg.conf:/usr/local/etc/swanctl/conf.d/epdg.conf:Z,ro
       - ./config/5/asterisk:/etc/asterisk:Z
       - ./config/5/ami_usim.ini:/usr/local/etc/ami_usim.ini:Z,ro
@@ -188,7 +203,10 @@ services:
       - 127.0.0.1:5043:5038/tcp
     tmpfs:
       - /run
+    environment:
+      - LD_LIBRARY_PATH=/opt/pcsc-libs
     volumes:
+      - ./pcsc-libs:/opt/pcsc-libs:ro
       - ./config/6/epdg.conf:/usr/local/etc/swanctl/conf.d/epdg.conf:Z,ro
       - ./config/6/asterisk:/etc/asterisk:Z
       - ./config/6/ami_usim.ini:/usr/local/etc/ami_usim.ini:Z,ro
@@ -218,7 +236,10 @@ services:
       - 127.0.0.1:5044:5038/tcp
     tmpfs:
       - /run
+    environment:
+      - LD_LIBRARY_PATH=/opt/pcsc-libs
     volumes:
+      - ./pcsc-libs:/opt/pcsc-libs:ro
       - ./config/7/epdg.conf:/usr/local/etc/swanctl/conf.d/epdg.conf:Z,ro
       - ./config/7/asterisk:/etc/asterisk:Z
       - ./config/7/ami_usim.ini:/usr/local/etc/ami_usim.ini:Z,ro
@@ -248,7 +269,10 @@ services:
       - 127.0.0.1:5045:5038/tcp
     tmpfs:
       - /run
+    environment:
+      - LD_LIBRARY_PATH=/opt/pcsc-libs
     volumes:
+      - ./pcsc-libs:/opt/pcsc-libs:ro
       - ./config/8/epdg.conf:/usr/local/etc/swanctl/conf.d/epdg.conf:Z,ro
       - ./config/8/asterisk:/etc/asterisk:Z
       - ./config/8/ami_usim.ini:/usr/local/etc/ami_usim.ini:Z,ro

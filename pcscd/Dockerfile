@@ -1,46 +1,5 @@
-# ---- Stage 1: Builder ----
-FROM fedora:latest AS builder
+FROM ghcr.io/chuckleu1976/pcscd-sysmocom:latest
 
-RUN dnf -y install gcc make autoconf automake libtool pkg-config \
-    libusb1-devel systemd-devel flex gettext
-
-# Build pcsc-lite 1.9.9-sysmocom (256 readers)
-COPY pcsc-lite/ /build/pcsc-lite/
-WORKDIR /build/pcsc-lite
-RUN chmod +x configure && \
-    make distclean || true && \
-    ./configure --prefix=/usr --sysconfdir=/etc --localstatedir=/var \
-      --disable-documentation --disable-polkit && \
-    make -j$(nproc) && \
-    make install DESTDIR=/install && \
-    make install
-
-# Build ccid 1.5.0-sysmocom (USB CCID driver)
-COPY ccid/ /build/ccid/
-WORKDIR /build/ccid
-RUN chmod +x configure && \
-    find . -name "*.pl" -exec chmod +x {} + && \
-    make distclean || true && \
-    ./configure --prefix=/usr --sysconfdir=/etc && \
-    make -j$(nproc) && \
-    make install DESTDIR=/install
-
-# Build pcsc-tools 1.7.3 (linked against our libpcsclite)
-COPY pcsc-tools-1.7.3/ /build/pcsc-tools/
-WORKDIR /build/pcsc-tools
-RUN chmod +x configure && \
-    make distclean || true && \
-    ./configure --prefix=/usr && \
-    make -j$(nproc) && \
-    make install DESTDIR=/install
-
-# ---- Stage 2: Runtime ----
-FROM fedora:latest
-
-RUN dnf -y install dbus-daemon libusb1 systemd-libs polkit && \
-    rm -f /usr/sbin && mkdir -p /usr/sbin
-
-COPY --from=builder /install/ /
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
