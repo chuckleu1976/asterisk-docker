@@ -57,8 +57,9 @@ def parse_devices_toml():
         data = tomllib.load(f)
     devices = []
     for entry in data.get('readers', []):
+        module_val = entry.get('MODULE', 'SAMSUNG')
         for key, hostname in entry.items():
-            if key == 'IMEI':
+            if key in ('IMEI', 'MODULE'):
                 continue
             if key.startswith('P'):
                 reader_idx = int(key[1:])
@@ -66,6 +67,7 @@ def parse_devices_toml():
                     'reader': reader_idx,
                     'hostname': hostname,
                     'imei': str(entry.get('IMEI', '')),
+                    'module': module_val,
                 })
     devices.sort(key=lambda d: d['reader'])
     return devices
@@ -86,7 +88,8 @@ def setup(do_watch=False, interval=5):
     db_init()
     for dev in devices:
         db_save_reader(dev['reader'], f"P{dev['reader']}", "available",
-                       hostname=dev['hostname'], imei=dev['imei'])
+                       hostname=dev['hostname'], imei=dev['imei'],
+                       module=dev.get('module', 'SAMSUNG'))
     print(f"  {len(devices)} reader(s) saved")
 
     print(f"\n[3/6] Generating config directories...")
@@ -114,12 +117,14 @@ def setup(do_watch=False, interval=5):
                   f"MSISDN={sim['msisdn'] or '(none)'}  MCC/MNC={sim['mcc']}/{sim['mnc']}")
             db_save_sim(idx, sim)
             db_save_reader(idx, f"P{idx}", "available",
-                           hostname=dev['hostname'], imei=dev['imei'])
+                           hostname=dev['hostname'], imei=dev['imei'],
+                           module=dev.get('module', 'SAMSUNG'))
             sims_present.append((dev, sim))
         except Exception as e:
             print(f"    No SIM / read error: {e}")
             db_save_reader(idx, f"P{idx}", "empty",
-                           hostname=dev['hostname'], imei=dev['imei'])
+                           hostname=dev['hostname'], imei=dev['imei'],
+                           module=dev.get('module', 'SAMSUNG'))
             sims_absent.append(dev)
 
     for dev in sims_absent:
@@ -160,6 +165,7 @@ def list_readers():
         dev = dev_map.get(idx, {})
         hostname = dev.get('hostname', '?')
         imei = dev.get('imei', '?')
+        module = dev.get('module', 'SAMSUNG')
         print(f"  P{idx} ({hostname}, IMEI={imei}):", end=" ")
         try:
             sim = read_sim(idx)
@@ -169,12 +175,12 @@ def list_readers():
             print(f"      MSISDN:  {sim['msisdn'] or '(not stored on card)'}")
             print(f"      MCC/MNC: {sim['mcc']}/{sim['mnc']}")
             db_save_reader(idx, f"P{idx}", "available",
-                           hostname=hostname, imei=imei)
+                           hostname=hostname, imei=imei, module=module)
             db_save_sim(idx, sim)
         except Exception as e:
             print(f"empty/error: {e}")
             db_save_reader(idx, f"P{idx}", "empty",
-                           hostname=hostname, imei=imei)
+                           hostname=hostname, imei=imei, module=module)
 
 
 def watch_loop(interval, devices=None):
@@ -211,7 +217,8 @@ def watch_loop(interval, devices=None):
                     dev = dev_map.get(idx, {})
                     db_save_reader(idx, f"P{idx}", "available",
                                    hostname=dev.get('hostname', ''),
-                                   imei=dev.get('imei', ''))
+                                   imei=dev.get('imei', ''),
+                                   module=dev.get('module', 'SAMSUNG'))
                     last_iccid.setdefault(idx, None)
             if removed:
                 print(f"[{ts}] Readers removed: {sorted(removed)}")
@@ -219,7 +226,8 @@ def watch_loop(interval, devices=None):
                     dev = dev_map.get(idx, {})
                     db_save_reader(idx, f"P{idx}", "error",
                                    hostname=dev.get('hostname', ''),
-                                   imei=dev.get('imei', ''))
+                                   imei=dev.get('imei', ''),
+                                   module=dev.get('module', 'SAMSUNG'))
                     last_iccid.pop(idx, None)
             last_reader_indices = reader_indices
 
@@ -234,7 +242,8 @@ def watch_loop(interval, devices=None):
                 read_failures[i] = 0
                 db_save_reader(i, f"P{i}", "available",
                                hostname=dev.get('hostname', ''),
-                               imei=dev.get('imei', ''))
+                               imei=dev.get('imei', ''),
+                               module=dev.get('module', 'SAMSUNG'))
             except Exception:
                 read_failures[i] = read_failures.get(i, 0) + 1
                 if last_iccid[i] is not None and read_failures[i] >= REMOVE_THRESHOLD:
@@ -242,7 +251,8 @@ def watch_loop(interval, devices=None):
                     print(f"[{ts}] P{i}: card removed")
                     db_save_reader(i, f"P{i}", "empty",
                                    hostname=dev.get('hostname', ''),
-                                   imei=dev.get('imei', ''))
+                                   imei=dev.get('imei', ''),
+                                   module=dev.get('module', 'SAMSUNG'))
                     last_iccid[i] = None
                     stop_instance(instance)
                 continue
@@ -265,7 +275,8 @@ def watch_loop(interval, devices=None):
                     read_failures[moved_from] = 0
                     db_save_reader(moved_from, f"P{moved_from}", "empty",
                                    hostname=old_dev.get('hostname', ''),
-                                   imei=old_dev.get('imei', ''))
+                                   imei=old_dev.get('imei', ''),
+                                   module=old_dev.get('module', 'SAMSUNG'))
                 else:
                     action = "inserted" if last_iccid[i] is None else \
                              f"changed {last_iccid[i]} ->"

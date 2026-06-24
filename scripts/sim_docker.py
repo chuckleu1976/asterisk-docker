@@ -125,6 +125,46 @@ def read_msisdn(conn, aid=None):
         return '+' + number
     return number
 
+def read_sms_center(conn):
+    # EF.SMSP (6F42) under DF_GSM (7F20), try via full MF path
+    data, sw1, sw2 = _apdu(conn, '00A40804063F007F206F42')
+    fcp = None
+    if sw1 == 0x61:
+        fcp, sw1, sw2 = _apdu(conn, f'00C00000{sw2:02X}')
+    if sw1 != 0x90:
+        return None
+    # Determine file size (transparent EF)
+    file_size = 255
+    if fcp:
+        i = 0
+        while i < len(fcp) - 1:
+            tag, tlen = fcp[i], fcp[i + 1]
+            if tag == 0x80 and tlen >= 2:
+                file_size = fcp[i+2] << 8 | fcp[i+3] if tlen >= 3 else fcp[i+2]
+                break
+            i += 2 + tlen
+    data, sw1, sw2 = _apdu(conn, f'00B00000{file_size:02X}')
+    if sw1 != 0x90:
+        return None
+    # Parse TLV for SMSC address (tag 0x01)
+    raw = bytes(data)
+    i = 0
+    while i < len(raw) - 1:
+        tag = raw[i]
+        tlen = raw[i + 1]
+        if i + 2 + tlen > len(raw):
+            break
+        if tag == 0x01 and tlen >= 2:
+            ton = raw[i + 2]
+            addr_len = tlen - 1
+            digits_hex = toHexString(raw[i + 3:i + 3 + addr_len]).replace(' ', '')
+            number = _swap(digits_hex).rstrip('fF')
+            if (ton & 0x70) == 0x10:
+                return '+' + number
+            return number
+        i += 2 + tlen
+    return None
+
 try:
     conn    = connect(reader_index)
     aid     = select_aid(conn)
@@ -138,6 +178,7 @@ try:
     imsi    = read_imsi(conn)
     mnc_len = read_mnc_length(conn)
     msisdn  = read_msisdn(conn, aid)
+    sms_center = read_sms_center(conn)
 
     if not imsi:
         raise RuntimeError("Failed to read IMSI from card")
@@ -150,7 +191,7 @@ try:
         msisdn = '+' + msisdn
 
     print(json.dumps({'iccid': iccid, 'imsi': imsi, 'msisdn': msisdn,
-                      'mcc': mcc, 'mnc': mnc}))
+                      'mcc': mcc, 'mnc': mnc, 'sms_center': sms_center}))
 except Exception as e:
     print(json.dumps({'error': str(e)}), file=sys.stderr)
     try:

@@ -10,7 +10,7 @@ use crate::config::{AppConfig, SmsStorage};
 use crate::db::{Contact, SimCard, Sms, SmsStatus};
 use crate::webhook;
 
-use super::types::{ModemInfo, NetworkRegistrationStatus, OperatorInfo, SignalQuality, SmsType};
+use super::types::{ModemInfo, NetworkRegistrationStatus, OperatorInfo, SmsType};
 
 pub struct MockModem {
     pub com_port: String,
@@ -243,10 +243,6 @@ impl ModemManager {
                 sse_manager.send(conversations);
             }
         }
-    }
-
-    pub async fn get_signal_quality(&self, _sim_id: &str) -> anyhow::Result<Option<SignalQuality>> {
-        Ok(SignalQuality::from_response("+CSQ: 20,0"))
     }
 
     pub async fn check_network_registration(

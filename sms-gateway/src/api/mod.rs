@@ -20,7 +20,8 @@ pub use sse_manager::{CallEvent, SseManager};
 use crate::{
     config::SmsStorage,
     db::{Call, Contact, Conversation, SimCard, Sms},
-    modem::{ModemInfo as ModemModel, NetworkRegistrationStatus, OperatorInfo, SignalQuality, SmsType},
+    modem::{ModemInfo as ModemModel, NetworkRegistrationStatus, OperatorInfo, SmsType},
+    readers_db,
     ModemManagerRef,
 };
 
@@ -145,6 +146,19 @@ pub async fn run_api(
         .route(
             "/sims/{sim_id}/storage",
             put(set_sms_storage).with_state(modem_manager.clone()),
+        )
+        // ── Reader (sim_inventory) routes ─────────────────────────────────
+        .route(
+            "/readers",
+            get(get_readers),
+        )
+        .route(
+            "/readers/{reader}/imei",
+            put(update_reader_imei),
+        )
+        .route(
+            "/readers/{reader}/module",
+            put(update_reader_module),
         )
         // ── Voice call routes ─────────────────────────────────────────────
         .route(
@@ -330,11 +344,6 @@ async fn get_all_sim_info(State(modem_manager): State<ModemManagerRef>) -> Respo
             async move {
                 log::debug!("Getting SIM details for: {}", sim_id);
 
-                // 并发执行所有AT命令，每个都有超时保护
-                let signal_future = timeout(
-                    Duration::from_secs(5),
-                    modem_manager.get_signal_quality(&sim_id),
-                );
                 let network_future = timeout(
                     Duration::from_secs(5),
                     modem_manager.check_network_registration(&sim_id),
@@ -365,7 +374,6 @@ async fn get_all_sim_info(State(modem_manager): State<ModemManagerRef>) -> Respo
                 );
 
                 let (
-                    signal_result,
                     network_result,
                     operator_result,
                     model_result,
@@ -374,7 +382,6 @@ async fn get_all_sim_info(State(modem_manager): State<ModemManagerRef>) -> Respo
                     memory_status_result,
                     imei_result,
                 ) = tokio::join!(
-                    signal_future,
                     network_future,
                     operator_future,
                     model_future,
@@ -384,10 +391,6 @@ async fn get_all_sim_info(State(modem_manager): State<ModemManagerRef>) -> Respo
                     imei_future
                 );
 
-                let (signal_data, signal_error) = to_data_error(
-                    signal_result
-                        .unwrap_or_else(|_| Err(anyhow::anyhow!("Signal quality timeout"))),
-                );
                 let (network_data, network_error) = to_data_error(
                     network_result
                         .unwrap_or_else(|_| Err(anyhow::anyhow!("Network registration timeout"))),
@@ -417,12 +420,15 @@ async fn get_all_sim_info(State(modem_manager): State<ModemManagerRef>) -> Respo
 
                 let sim_data = modem_manager.get_sim_card_cached(&sim_id).await;
 
+                let sim_info = match modem_manager.get_transport(&sim_id).await {
+                    Some(t) => t.sim_info().await.ok(),
+                    None => None,
+                };
+
                 log::debug!("All AT commands completed for {}", sim_id);
 
                 (
                     sim_id,
-                    signal_data,
-                    signal_error,
                     network_data,
                     network_error,
                     operator_data,
@@ -430,6 +436,7 @@ async fn get_all_sim_info(State(modem_manager): State<ModemManagerRef>) -> Respo
                     model_data,
                     model_error,
                     sim_data,
+                    sim_info,
                     sms_center_data,
                     sms_center_error,
                     sim_status_data,
@@ -448,8 +455,6 @@ async fn get_all_sim_info(State(modem_manager): State<ModemManagerRef>) -> Respo
     let mut details = Vec::new();
     for (
         sim_id,
-        signal_data,
-        _signal_error,
         network_data,
         _network_error,
         operator_data,
@@ -457,6 +462,7 @@ async fn get_all_sim_info(State(modem_manager): State<ModemManagerRef>) -> Respo
         model_data,
         _model_error,
         sim_data,
+        sim_info,
         sms_center_data,
         _sms_center_error,
         sim_status_data,
@@ -485,7 +491,15 @@ async fn get_all_sim_info(State(modem_manager): State<ModemManagerRef>) -> Respo
             _ => ("N/A".to_string(), 0),
         };
 
-        let phone_number = sim_data.as_ref().and_then(|s| s.phone_number.clone());
+        let phone_number = sim_data
+            .as_ref()
+            .and_then(|s| s.phone_number.clone())
+            .or_else(|| sim_info.as_ref().and_then(|i| i.msisdn.clone()));
+
+        let imsi = sim_data
+            .as_ref()
+            .and_then(|s| s.imsi.clone())
+            .or_else(|| sim_info.as_ref().and_then(|i| i.imsi.clone()));
 
         details.push(json!({
             "available": true,
@@ -494,11 +508,11 @@ async fn get_all_sim_info(State(modem_manager): State<ModemManagerRef>) -> Respo
             "name": sim_id.clone(),
             "com_port": com_port,
             "baud_rate": baud_rate,
-            "signal_quality": if has_sim { signal_data } else { None },
             "network_registration": if has_sim { network_data } else { None },
             "operator_info": if has_sim { operator_data } else { None },
             "model_info": model_data,
             "imei": imei_data,
+            "imsi": imsi,
             "sms_center": if has_sim { sms_center_data.as_ref().and_then(|s| s.as_ref()).map(|s| decode_sms_center(s)) } else { None },
             "sim_status": if has_sim { sim_status_data } else { None },
             "memory_status": if has_sim { memory_status_data.as_ref().and_then(|s| s.as_ref()).map(|s| format_memory_status(s)) } else { None },
@@ -515,7 +529,6 @@ async fn get_all_sim_info(State(modem_manager): State<ModemManagerRef>) -> Respo
             "name": null,
             "com_port": com_port,
             "baud_rate": baud_rate,
-            "signal_quality": null,
             "network_registration": null,
             "operator_info": null,
             "model_info": null,
@@ -795,7 +808,6 @@ pub struct EnhancedModemInfo {
     pub name: String,
     pub com_port: String,
     pub baud_rate: u32,
-    pub signal_quality: Option<SignalQuality>,
     pub network_registration: Option<NetworkRegistrationStatus>,
     pub operator_info: Option<OperatorInfo>,
     pub model_info: Option<ModemModel>,
@@ -853,11 +865,6 @@ async fn get_enhanced_sim_info(
                 name: sim_id.clone(),
                 com_port: modem.com_port.clone(),
                 baud_rate: modem.baud_rate,
-                signal_quality: modem_manager
-                    .get_signal_quality(&sim_id)
-                    .await
-                    .ok()
-                    .flatten(),
                 network_registration: modem_manager
                     .check_network_registration(&sim_id)
                     .await
@@ -993,6 +1000,108 @@ async fn set_sms_storage(
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"error": format!("Failed to set SMS storage: {}", e)})),
+        )
+            .into_response(),
+    }
+}
+
+// ── Reader (sim_inventory.db) handlers ───────────────────────────────────────
+
+async fn get_readers() -> Response {
+    match readers_db::query_all_readers().await {
+        Ok(readers) => (StatusCode::OK, Json(json!(readers))).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": format!("Failed to query readers: {}", e)})),
+        )
+            .into_response(),
+    }
+}
+
+fn format_imei(raw: &str) -> String {
+    let cleaned: String = raw.chars().filter(|c| c.is_ascii_digit()).collect();
+    if cleaned.len() >= 15 {
+        format!(
+            "{}-{}-{}",
+            &cleaned[..8],
+            &cleaned[8..14],
+            &cleaned[14..15]
+        )
+    } else {
+        raw.to_string()
+    }
+}
+
+async fn update_reader_imei(
+    Path(reader): Path<i32>,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    let imei = match body.get("imei").and_then(|v| v.as_str()) {
+        Some(s) => s.to_string(),
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "Missing 'imei' field"})),
+            )
+                .into_response()
+        }
+    };
+
+    if let Err(e) = readers_db::update_reader_imei(reader, imei.clone()).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": format!("Failed to update IMEI: {}", e)})),
+        )
+            .into_response();
+    }
+
+    // Update pjsip.conf in config/<instance>/ and reload asterisk
+    let instance = reader + 1;
+    let pjsip_path = std::path::PathBuf::from(format!(
+        "../config/{}/asterisk/pjsip.conf",
+        instance
+    ));
+    let imei_fmt = format_imei(&imei);
+    if pjsip_path.exists() {
+        if let Ok(content) = std::fs::read_to_string(&pjsip_path) {
+            let re = fancy_regex::Regex::new(r"(?m)^imei=.*$").unwrap();
+            let updated = re.replace(&content, format!("imei={}", imei_fmt));
+            if let Err(e) = std::fs::write(&pjsip_path, updated.as_ref()) {
+                log::warn!("Failed to write pjsip.conf: {}", e);
+            } else {
+                // Reload chan_pjsip in the container
+                let svc = if instance == 1 { "asterisk" } else { &format!("asterisk{}", instance) };
+                let _ = std::process::Command::new("docker")
+                    .args(["compose", "exec", "-T", svc, "asterisk", "-rx",
+                           "module reload chan_pjsip.so"])
+                    .output();
+            }
+        }
+    }
+
+    (StatusCode::OK, Json(json!({"imei": imei}))).into_response()
+}
+
+async fn update_reader_module(
+    Path(reader): Path<i32>,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    let module = match body.get("module").and_then(|v| v.as_str()) {
+        Some(s) => s.to_string(),
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "Missing 'module' field"})),
+            )
+                .into_response()
+        }
+    };
+
+    match readers_db::update_reader_module(reader, module.clone()).await {
+        Ok(()) => (StatusCode::OK, Json(json!({"module": module}))).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": format!("Failed to update module: {}", e)})),
         )
             .into_response(),
     }

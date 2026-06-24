@@ -11,7 +11,6 @@
             simInfo.sim_status || 
             simInfo.memory_status || 
             simInfo.com_port || 
-            simInfo.signal_quality || 
             simInfo.operator_info?.operator_id
         )
     );
@@ -50,14 +49,6 @@
                 <Icon icon="mage:link" class="w-4 h-4 mr-2 text-gray-500" />
                 <span class="text-gray-500 dark:text-gray-400">{$t('port_label')}</span>
                 <span class="font-medium dark:text-gray-300 ml-2">{simInfo.com_port} @ {simInfo.baud_rate}</span>
-            </div>
-        {/if}
-        
-        {#if simInfo.signal_quality}
-            <div class="flex items-center text-sm">
-                <Icon icon="mage:chart-up-b" class="w-4 h-4 mr-2 text-gray-500" />
-                <span class="text-gray-500 dark:text-gray-400">{$t('signal_detail_label')}</span>
-                <span class="font-medium dark:text-gray-300 ml-2">RSSI: {simInfo.signal_quality.rssi}, BER: {simInfo.signal_quality.ber}</span>
             </div>
         {/if}
         

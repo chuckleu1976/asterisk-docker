@@ -55,13 +55,8 @@ async def fetch_sims():
             data.sort(key=lambda s: int(''.join(filter(str.isdigit, s.get('com_port', 'COM0'))) or '0'))
             for i, s in enumerate(data, 1):
                 net  = s.get('network_registration') or {}
-                sig  = s.get('signal_quality') or {}
                 op   = s.get('operator_info') or {}
-                rssi = sig.get('rssi', 99)
-                ber  = sig.get('ber',  99)
-                r_d  = 0 if rssi == 99 else rssi
-                b_d  = 0 if ber  == 99 else ber
-                sig_str    = f"{b_d}/{r_d}/4G"
+                sig_str    = "N/A"
                 sim_status = s.get('sim_status') or ''
                 connected  = sim_status == 'READY'
                 net_code   = str(net.get('status', ''))

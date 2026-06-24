@@ -28,37 +28,10 @@ pub enum ConnectionState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SignalQuality {
-    rssi: i32,
-    ber: i32,
-}
-
-impl SignalQuality {
-    pub fn from_response(response: &str) -> Option<Self> {
-        response
-            .lines()
-            .find(|line| line.trim().starts_with("+CSQ:"))
-            .and_then(|line| {
-                let data = line.split(':').nth(1)?;
-                let parts: Vec<&str> = data.split(',').collect();
-
-                if parts.len() >= 2 {
-                    Some(SignalQuality {
-                        rssi: parts[0].trim().parse().ok()?,
-                        ber: parts[1].trim().parse().ok()?,
-                    })
-                } else {
-                    None
-                }
-            })
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetworkRegistrationStatus {
-    status: String,
-    location_area_code: Option<String>,
-    cell_id: Option<String>,
+    pub status: String,
+    pub location_area_code: Option<String>,
+    pub cell_id: Option<String>,
 }
 
 impl NetworkRegistrationStatus {
@@ -104,9 +77,9 @@ impl NetworkRegistrationStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OperatorInfo {
-    operator_name: String,
-    operator_id: String,
-    registration_status: String,
+    pub operator_name: String,
+    pub operator_id: String,
+    pub registration_status: String,
 }
 
 impl OperatorInfo {

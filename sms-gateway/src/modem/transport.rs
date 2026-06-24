@@ -18,7 +18,7 @@ use crate::config::SmsStorage;
 use crate::db::ModemSMS;
 
 use super::types::{
-    ModemInfo, NetworkRegistrationStatus, OperatorInfo, SignalQuality, SmsType,
+    ModemInfo, NetworkRegistrationStatus, OperatorInfo, SmsType,
 };
 
 /// Identity data we can read for the SIM attached to a transport.
@@ -29,6 +29,7 @@ pub struct SimInfo {
     pub msisdn: Option<String>,
     pub mcc: Option<String>,
     pub mnc: Option<String>,
+    pub sms_center: Option<String>,
 }
 
 /// Events emitted by a transport. The owner (ModemManager) fans these out
@@ -110,7 +111,6 @@ pub trait Transport: Send + Sync {
 
     // ─── Diagnostics (Ok(None) when not applicable) ───────────────────────
 
-    async fn signal_quality(&self) -> anyhow::Result<Option<SignalQuality>> { Ok(None) }
     async fn registration_status(&self) -> anyhow::Result<Option<NetworkRegistrationStatus>> { Ok(None) }
     async fn operator_info(&self) -> anyhow::Result<Option<OperatorInfo>> { Ok(None) }
     async fn modem_model(&self) -> anyhow::Result<Option<ModemInfo>> { Ok(None) }

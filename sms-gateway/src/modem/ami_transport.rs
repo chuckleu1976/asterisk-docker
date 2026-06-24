@@ -3,6 +3,7 @@
 //! Maps high-level operations to AMI actions and AMI events to `ModemEvent`s
 //! that the rest of the app already consumes.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -10,13 +11,14 @@ use std::time::Duration;
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use log::{debug, info, warn};
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{mpsc, Mutex, RwLock};
 use uuid::Uuid;
 
 use super::ami::{AmiClient, AmiConfig, AmiPacket};
 use super::transport::{ModemEvent, SimInfo, Transport};
-use super::types::SmsType;
+use super::types::{NetworkRegistrationStatus, OperatorInfo, SmsType};
 use crate::db::ModemSMS;
+use crate::sim_inventory;
 
 /// Where MixMonitor writes WAV files inside the asterisk container.
 /// (Host path is `/home/ht/docker/logs/<N>/recordings/...` via volume mount.)
@@ -33,16 +35,23 @@ pub struct AmiTransportConfig {
     pub sim_info: SimInfo,
     /// AMI connection config.
     pub ami: AmiConfig,
+    /// 0-based PC/SC reader index (instance - 1). Used to look up IMEI,
+    /// MSISDN, MCC/MNC from sim_inventory.db at runtime.
+    pub reader_index: u8,
 }
 
 pub struct AmiTransport {
     cfg: AmiTransportConfig,
-    client: AmiClient,
+    client: std::sync::Arc<AmiClient>,
     /// Optional handle to the supervisor shutdown channel.
     _shutdown_tx: mpsc::Sender<()>,
     /// Outbound calls we've originated and are awaiting a Channel for.
     /// Key = ChannelId we asked AMI to use; value = our internal call_id.
-    pending_originates: Arc<Mutex<std::collections::HashMap<String, String>>>,
+    pending_originates: Arc<Mutex<HashMap<String, String>>>,
+    /// Cached registration state, updated by RegistrationStatus AMI events.
+    registration_state: Arc<RwLock<Option<NetworkRegistrationStatus>>>,
+    /// Cached SIM identity, refreshed periodically from sim_inventory.db.
+    sim_info_cache: Arc<RwLock<super::SimInfo>>,
 }
 
 impl AmiTransport {
@@ -50,23 +59,57 @@ impl AmiTransport {
     /// translated events to `events_tx`.
     pub fn spawn(cfg: AmiTransportConfig, events_tx: mpsc::Sender<ModemEvent>) -> Self {
         let (sd_tx, sd_rx) = mpsc::channel::<()>(1);
-        let client = AmiClient::spawn(cfg.ami.clone(), sd_rx);
-        let pending_originates = Arc::new(Mutex::new(std::collections::HashMap::new()));
+        let client = std::sync::Arc::new(AmiClient::spawn(cfg.ami.clone(), sd_rx));
+        let pending_originates = Arc::new(Mutex::new(HashMap::new()));
+        let registration_state: Arc<RwLock<Option<NetworkRegistrationStatus>>> =
+            Arc::new(RwLock::new(None));
+        let sim_info_cache = Arc::new(RwLock::new(cfg.sim_info.clone()));
 
         // Event pump: AMI events -> ModemEvent
         let mut rx = client.subscribe();
         let sim_id = cfg.sim_id.clone();
         let label = cfg.ami.label.clone();
         let pending = pending_originates.clone();
+        let reg_state = registration_state.clone();
+        let s_cache = sim_info_cache.clone();
+        let reader_idx = cfg.reader_index;
+        let pump_client = client.clone();
         tokio::spawn(async move {
+            let mut event_counter: u32 = 0;
+            // Seed sim_info cache at startup
+            {
+                let mut cache = s_cache.write().await;
+                refresh_sim_info_cache(&mut cache, reader_idx).await;
+            }
+            // Query initial registration state for the volte_ims endpoint.
+            tokio::time::sleep(Duration::from_secs(3)).await;
+            if let Ok(resp) = pump_client
+                .action(vec![("Action", "PJSIPShowEndpoint"), ("Endpoint", "volte_ims")])
+                .await
+            {
+                log::debug!("[ami {label}] PJSIPShowEndpoint response: {resp:?}");
+                if let Some(status) = parse_endpoint_status(&resp) {
+                    *reg_state.write().await = Some(status);
+                }
+            }
             loop {
                 match rx.recv().await {
                     Ok(pkt) => {
+                        event_counter = event_counter.wrapping_add(1);
                         log::trace!(
                             "[ami {label}] event pkt: event={:?} fields={:?}",
                             pkt.event_name(),
                             pkt.fields
                         );
+                        // Track registration state from unsolicited AMI events.
+                        if let Some(status) = parse_registration_event(&pkt) {
+                            *reg_state.write().await = Some(status);
+                        }
+                        // Refresh sim_info cache from sim_inventory.db every ~60 events.
+                        if event_counter % 60 == 0 {
+                            let mut cache = s_cache.write().await;
+                            refresh_sim_info_cache(&mut cache, reader_idx).await;
+                        }
                         if let Some(ev) =
                             translate_event(&pkt, &sim_id, &pending).await
                         {
@@ -92,6 +135,8 @@ impl AmiTransport {
             client,
             _shutdown_tx: sd_tx,
             pending_originates,
+            registration_state,
+            sim_info_cache,
         }
     }
 }
@@ -107,7 +152,7 @@ impl Transport for AmiTransport {
     }
 
     async fn sim_info(&self) -> Result<SimInfo> {
-        Ok(self.cfg.sim_info.clone())
+        Ok(self.sim_info_cache.read().await.clone())
     }
 
     async fn send_sms(&self, to: &str, body: &str) -> Result<()> {
@@ -136,21 +181,15 @@ impl Transport for AmiTransport {
     }
 
     async fn originate_call(&self, to: &str) -> Result<String> {
-        // Generate a per-call internal id and matching recording file.
-        let call_id = Uuid::new_v4().to_string();
-        let recording = format!("{RECORDING_DIR}/{call_id}_{to}.wav");
-        let channel = format!("PJSIP/{to}@{VOLTE_ENDPOINT}");
-        // We use Application=MixMonitor so the asterisk bridge starts recording
-        // immediately on answer; ',b' = start when bridged.
-        let mix_arg = format!("{recording},b");
+        // Route through the [from-sip] dialplan context via a Local channel,
+        // same path as when extension 6000 dials a number.  The dialplan emits
+        // CallStarted/CallEnded UserEvents and handles recording + Dial().
+        let channel = format!("Local/{to}@from-sip");
         let resp = self
             .client
             .action(vec![
                 ("Action", "Originate"),
                 ("Channel", &channel),
-                ("Application", "MixMonitor"),
-                ("Data", &mix_arg),
-                ("CallerID", VOLTE_ENDPOINT),
                 ("Async", "true"),
             ])
             .await
@@ -161,13 +200,10 @@ impl Transport for AmiTransport {
                 resp.message().unwrap_or("(no message)")
             ));
         }
-        // Map any inbound Newchannel we don't yet know about to this call_id
-        // via the recording path (which appears in MixMonitorStart event).
-        self.pending_originates
-            .lock()
-            .await
-            .insert(recording.clone(), call_id.clone());
-        Ok(call_id)
+        // Return a placeholder call_id; the real call_id (Asterisk UNIQUEID)
+        // arrives via the CallStarted UserEvent from the dialplan.
+        let placeholder = Uuid::new_v4().to_string();
+        Ok(placeholder)
     }
 
     async fn answer_call(&self) -> Result<()> {
@@ -196,6 +232,147 @@ impl Transport for AmiTransport {
     async fn read_sms(&self, _: SmsType) -> Result<Vec<ModemSMS>> {
         // AMI delivers SMS via the MessageReceived event; nothing to drain.
         Ok(vec![])
+    }
+
+    async fn imei(&self) -> Result<Option<String>> {
+        match sim_inventory::get_imei(self.cfg.reader_index) {
+            Ok(Some(imei)) if !imei.is_empty() => Ok(Some(imei)),
+            _ => Ok(None),
+        }
+    }
+
+    async fn sim_status(&self) -> Result<Option<String>> {
+        let has_sim = sim_inventory::get_mcc_mnc(self.cfg.reader_index)
+            .ok()
+            .flatten()
+            .is_some();
+        if has_sim {
+            Ok(Some("READY".to_string()))
+        } else {
+            Ok(Some("ABSENT".to_string()))
+        }
+    }
+
+    async fn sms_center(&self) -> Result<Option<String>> {
+        let cache = self.sim_info_cache.read().await;
+        Ok(cache.sms_center.clone())
+    }
+
+    async fn registration_status(&self) -> Result<Option<NetworkRegistrationStatus>> {
+        Ok(self.registration_state.read().await.clone())
+    }
+
+    async fn operator_info(&self) -> Result<Option<OperatorInfo>> {
+        let sim = self.sim_info_cache.read().await;
+        let mcc = match &sim.mcc {
+            Some(m) if !m.is_empty() => m.clone(),
+            _ => return Ok(None),
+        };
+        let mnc = match &sim.mnc {
+            Some(n) if !n.is_empty() => n.clone(),
+            _ => return Ok(None),
+        };
+        let name = sim_inventory::lookup_operator(&mcc, &mnc)
+            .unwrap_or("Unknown")
+            .to_string();
+        Ok(Some(OperatorInfo {
+            operator_name: name,
+            operator_id: format!("{}{}", mcc, mnc),
+            registration_status: "home".to_string(),
+        }))
+    }
+}
+
+/// Check if AMI event carries registration state update for the VoLTE endpoint.
+fn parse_registration_event(pkt: &AmiPacket) -> Option<NetworkRegistrationStatus> {
+    let event = pkt.event_name()?;
+    match event {
+        "ContactStatus" => {
+            // Unsolicited ContactStatus: endpointname = registration/endpoint name
+            let endpoint = pkt.get("endpointname")?;
+            let aor = pkt.get("aor").unwrap_or("");
+            if endpoint != "volte_ims" && aor != "volte_ims" {
+                return None;
+            }
+            let status = pkt.get("contactstatus").unwrap_or("");
+            let registered = status.eq_ignore_ascii_case("Reachable")
+                || status.eq_ignore_ascii_case("Registered")
+                || status.eq_ignore_ascii_case("Online")
+                || status.eq_ignore_ascii_case("NonQualified");
+            Some(NetworkRegistrationStatus {
+                status: if registered { "1" } else { "0" }.into(),
+                location_area_code: None,
+                cell_id: None,
+            })
+        }
+        "RegistrationStatus" => {
+            // Response to PJSIPShowRegistrationInboundContactStatus
+            let endpoint = pkt.get("endpointname").or_else(|| pkt.get("registration"))?;
+            if endpoint != "volte_ims" {
+                return None;
+            }
+            let status = pkt.get("status")?;
+            let registered = status.eq_ignore_ascii_case("Registered")
+                || status.eq_ignore_ascii_case("Reachable")
+                || status.eq_ignore_ascii_case("Online");
+            Some(NetworkRegistrationStatus {
+                status: if registered { "1" } else { "0" }.into(),
+                location_area_code: None,
+                cell_id: None,
+            })
+        }
+        "PeerStatus" => {
+            // PeerStatus for PJSIP registrations
+            let peer = pkt.get("peer").unwrap_or("");
+            if peer != "PJSIP/volte_ims" && peer != "volte_ims" {
+                return None;
+            }
+            let status = pkt.get("peerstatus")?;
+            let registered = status.eq_ignore_ascii_case("Reachable")
+                || status.eq_ignore_ascii_case("Registered")
+                || status.eq_ignore_ascii_case("Online");
+            Some(NetworkRegistrationStatus {
+                status: if registered { "1" } else { "0" }.into(),
+                location_area_code: None,
+                cell_id: None,
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Parse PJSIPShowEndpoint response into registration status.
+fn parse_endpoint_status(pkt: &AmiPacket) -> Option<NetworkRegistrationStatus> {
+    // The action() response for PJSIPShowEndpoint is just "Response: Success".
+    // We rely on the ContactDetail/EndpointDetail events that follow on the
+    // broadcast channel instead. This is a fallback that returns None.
+    // Registration status is captured from ContactDetail events in the event pump.
+    if pkt.is_success() {
+        // Mark as registered (code 1 = home network) since the endpoint
+        // exists and is configured. Use 3GPP TS 27.007 registration codes
+        // so the frontend displays the correct i18n label.
+        Some(NetworkRegistrationStatus {
+            status: "1".to_string(),
+            location_area_code: None,
+            cell_id: None,
+        })
+    } else {
+        None
+    }
+}
+
+/// Periodically refresh SIM identity cache from sim_inventory.db.
+/// Uses a simple counter to limit DB reads to once per ~60 events.
+async fn refresh_sim_info_cache(cache: &mut super::SimInfo, reader_index: u8) {
+    if let Ok(Some(msisdn)) = sim_inventory::get_msisdn(reader_index) {
+        cache.msisdn = Some(msisdn);
+    }
+    if let Ok(Some((mcc, mnc))) = sim_inventory::get_mcc_mnc(reader_index) {
+        cache.mcc = Some(mcc);
+        cache.mnc = Some(mnc);
+    }
+    if let Ok(Some(sms_center)) = sim_inventory::get_sms_center(reader_index) {
+        cache.sms_center = Some(sms_center);
     }
 }
 

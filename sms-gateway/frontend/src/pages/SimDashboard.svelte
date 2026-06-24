@@ -144,22 +144,6 @@
   }
 
   // RSSI → dBm helper
-  function rssiToDbm(rssi) {
-    if (rssi == null) return '—';
-    if (rssi === 99) return 'N/A';
-    return `${-113 + rssi * 2} dBm`;
-  }
-
-  // Signal bar count (0-4)
-  function signalBars(rssi) {
-    if (rssi == null || rssi === 99) return 0;
-    if (rssi >= 20) return 4;
-    if (rssi >= 15) return 3;
-    if (rssi >= 10) return 2;
-    if (rssi >= 5)  return 1;
-    return 0;
-  }
-
   // COM port sort key: "COM12" → 12
   function comPortNum(port) {
     const m = (port ?? '').match(/(\d+)$/);
@@ -322,7 +306,7 @@
                 <span class="text-gray-400 font-semibold">#</span>
               {/if}
             </th>
-            {#each [$t('col_com_port'),$t('col_module'),$t('col_signal'),$t('col_network_status'),$t('col_phone_number'),$t('col_operator'),$t('col_country'),$t('col_sms'),'IMSI','ICCID','IMEI'] as col}
+            {#each [$t('col_com_port'),$t('col_module'),$t('col_network_status'),$t('col_phone_number'),$t('col_operator'),$t('col_country'),$t('col_sms'),'IMSI','ICCID','IMEI'] as col}
               <th class="px-3 py-2.5 text-left font-semibold text-gray-600 dark:text-gray-300
                          border-b border-gray-200 dark:border-zinc-700 whitespace-nowrap">
                 {col}
@@ -340,7 +324,7 @@
                 <td class="px-3 py-2.5 text-center">
                   <div class="w-5 h-5 bg-gray-200 dark:bg-zinc-700 rounded mx-auto"></div>
                 </td>
-                {#each Array(11) as _}
+                {#each Array(10) as _}
                   <td class="px-3 py-2.5">
                     <div class="h-3 bg-gray-200 dark:bg-zinc-700 rounded w-3/4"></div>
                   </td>
@@ -349,7 +333,7 @@
             {/each}
           {:else if rows.length === 0}
             <tr>
-              <td colspan="12" class="px-6 py-12 text-center text-gray-400">
+              <td colspan="11" class="px-6 py-12 text-center text-gray-400">
                 <Icon icon="carbon:sim-card" class="w-8 h-8 mx-auto mb-2 opacity-40" />
                 <p>{$t('no_sim_cards')}</p>
               </td>
@@ -358,7 +342,6 @@
             {#each rows as { info, card, stats }, i}
               {@const isSelected = selected.has(info.sim_id)}
               {@const net = getNetStatus(info.network_registration)}
-              {@const bars = signalBars(info.signal_quality?.rssi)}
               {@const hasSim = info.has_sim !== false}
               <tr
                 class="border-b border-gray-100 dark:border-zinc-800 cursor-pointer
@@ -402,30 +385,7 @@
                   {/if}
                 </td>
 
-                <!-- Signal -->
-                <td class="px-3 py-2.5 whitespace-nowrap">
-                  {#if hasSim}
-                  <div class="flex items-center gap-1.5">
-                    <!-- Signal bars -->
-                    <div class="flex items-end gap-px h-4">
-                      {#each [1,2,3,4] as b}
-                        <div
-                          class="w-1 rounded-sm transition-all {b <= bars
-                            ? bars >= 3 ? 'bg-green-500' : bars === 2 ? 'bg-yellow-400' : 'bg-red-400'
-                            : 'bg-gray-200 dark:bg-zinc-600'}"
-                          style="height: {b * 25}%"
-                        ></div>
-                      {/each}
-                    </div>
-                    <span class="text-gray-600 dark:text-gray-300 text-xs">
-                      {rssiToDbm(info.signal_quality?.rssi)}
-                    </span>
-                  </div>
-                  {:else}
-                    <span class="text-gray-400">—</span>
-                  {/if}
-                </td>
-
+                
                 <!-- Network Status -->
                 <td class="px-3 py-2.5 whitespace-nowrap font-medium">
                   {#if hasSim}
@@ -447,7 +407,7 @@
 
                 <!-- Country -->
                 <td class="px-3 py-2.5 text-gray-700 dark:text-gray-200 whitespace-nowrap">
-                  {getMccCountry(card.imsi, $lang)}
+                  {getMccCountry(card.imsi ?? info.imsi, $lang)}
                 </td>
 
                 <!-- SMS recv / sent -->
@@ -457,7 +417,7 @@
 
                 <!-- IMSI -->
                 <td class="px-3 py-2.5 font-mono text-gray-500 dark:text-gray-400 whitespace-nowrap">
-                  {card.imsi ?? '—'}
+                  {card.imsi ?? info.imsi ?? '—'}
                 </td>
 
                 <!-- ICCID (= sim_id / card.id) -->

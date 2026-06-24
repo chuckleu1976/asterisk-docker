@@ -51,6 +51,12 @@ services:
       - pcsc-sock:/run/pcscd
     pid: service:pcscd
     depends_on: [pcscd]
+    healthcheck:
+      test: ["CMD-SHELL", "swanctl --list-sas 2>/dev/null | grep -q ESTABLISHED || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 6
+      start_period: 120s
     restart: always
   asterisk2:
     image: ghcr.io/chuckleu1976/asterisk-vowifi-patched:latest
@@ -84,6 +90,12 @@ services:
       - pcsc-sock:/run/pcscd
     pid: service:pcscd
     depends_on: [pcscd]
+    healthcheck:
+      test: ["CMD-SHELL", "swanctl --list-sas 2>/dev/null | grep -q ESTABLISHED || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 6
+      start_period: 120s
     restart: always
   asterisk3:
     image: ghcr.io/chuckleu1976/asterisk-vowifi-patched:latest
@@ -117,6 +129,12 @@ services:
       - pcsc-sock:/run/pcscd
     pid: service:pcscd
     depends_on: [pcscd]
+    healthcheck:
+      test: ["CMD-SHELL", "swanctl --list-sas 2>/dev/null | grep -q ESTABLISHED || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 6
+      start_period: 120s
     restart: always
   asterisk4:
     image: ghcr.io/chuckleu1976/asterisk-vowifi-patched:latest
@@ -150,6 +168,12 @@ services:
       - pcsc-sock:/run/pcscd
     pid: service:pcscd
     depends_on: [pcscd]
+    healthcheck:
+      test: ["CMD-SHELL", "swanctl --list-sas 2>/dev/null | grep -q ESTABLISHED || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 6
+      start_period: 120s
     restart: always
   asterisk5:
     image: ghcr.io/chuckleu1976/asterisk-vowifi-patched:latest
@@ -183,6 +207,12 @@ services:
       - pcsc-sock:/run/pcscd
     pid: service:pcscd
     depends_on: [pcscd]
+    healthcheck:
+      test: ["CMD-SHELL", "swanctl --list-sas 2>/dev/null | grep -q ESTABLISHED || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 6
+      start_period: 120s
     restart: always
   asterisk6:
     image: ghcr.io/chuckleu1976/asterisk-vowifi-patched:latest
@@ -216,6 +246,12 @@ services:
       - pcsc-sock:/run/pcscd
     pid: service:pcscd
     depends_on: [pcscd]
+    healthcheck:
+      test: ["CMD-SHELL", "swanctl --list-sas 2>/dev/null | grep -q ESTABLISHED || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 6
+      start_period: 120s
     restart: always
   asterisk7:
     image: ghcr.io/chuckleu1976/asterisk-vowifi-patched:latest
@@ -249,6 +285,12 @@ services:
       - pcsc-sock:/run/pcscd
     pid: service:pcscd
     depends_on: [pcscd]
+    healthcheck:
+      test: ["CMD-SHELL", "swanctl --list-sas 2>/dev/null | grep -q ESTABLISHED || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 6
+      start_period: 120s
     restart: always
   asterisk8:
     image: ghcr.io/chuckleu1976/asterisk-vowifi-patched:latest
@@ -282,6 +324,12 @@ services:
       - pcsc-sock:/run/pcscd
     pid: service:pcscd
     depends_on: [pcscd]
+    healthcheck:
+      test: ["CMD-SHELL", "swanctl --list-sas 2>/dev/null | grep -q ESTABLISHED || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 6
+      start_period: 120s
     restart: always
 
 volumes:

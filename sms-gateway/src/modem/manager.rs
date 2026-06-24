@@ -23,7 +23,7 @@ use crate::db::{Call, Contact, ModemSMS, SimCard};
 use crate::webhook;
 
 use super::types::{
-    ModemInfo, NetworkRegistrationStatus, OperatorInfo, SignalQuality, SmsType,
+    ModemInfo, NetworkRegistrationStatus, OperatorInfo, SmsType,
 };
 
 /// Configuration for local whisper.cpp speech-to-text transcription.
@@ -135,6 +135,7 @@ impl ModemManager {
                 msisdn: device.msisdn.clone(),
                 mcc: None,
                 mnc: None,
+                sms_center: None,
             };
 
             let label = format!("asterisk{}@{}:{}", instance, ami_host, ami_port);
@@ -149,6 +150,7 @@ impl ModemManager {
                         username: ami_user,
                         secret,
                     },
+                    reader_index: instance - 1,
                 },
                 event_tx.clone(),
             );
@@ -311,14 +313,8 @@ impl ModemManager {
     ) -> anyhow::Result<String> {
         let t = self.transport_for(sim_id).await?;
         let call_id = t.originate_call(phone).await?;
-        Call::insert_with_id(&call_id, sim_id, Some(phone), "outbound").await?;
-        sse.send_call_event(CallEvent {
-            event_type: "outbound_call".into(),
-            sim_id: sim_id.to_string(),
-            call_id: call_id.clone(),
-            phone: Some(phone.to_string()),
-            direction: "outbound".into(),
-        });
+        // DB insert and SSE event are handled by the dialplan's CallStarted
+        // UserEvent → ModemEvent::CallRinging consumer.
         info!("[{}] outbound call {} to {} originated", sim_id, call_id, phone);
         Ok(call_id)
     }
@@ -342,13 +338,6 @@ impl ModemManager {
     }
 
     // ─── Diagnostics (delegate to Transport; AMI returns None for most) ──────
-
-    pub async fn get_signal_quality(
-        &self,
-        sim_id: &str,
-    ) -> anyhow::Result<Option<SignalQuality>> {
-        self.transport_for(sim_id).await?.signal_quality().await
-    }
 
     pub async fn check_network_registration(
         &self,

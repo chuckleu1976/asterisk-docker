@@ -38,6 +38,7 @@ fancy-regex = "*"
 urlencoding = "2.1.3"
 futures = "0.3"
 async-trait = "0.1"
+rusqlite = { version = "0.31", features = ["bundled"] }
 
 [target.x86_64-unknown-linux-musl.dependencies]
 openssl-sys = { version = "0.9", features = ["vendored"] }
