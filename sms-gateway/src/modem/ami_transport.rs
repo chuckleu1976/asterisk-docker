@@ -229,11 +229,13 @@ impl Transport for AmiTransport {
             p.clone()
         };
         let Some(phone) = phone else {
-            return Err(anyhow!("No active outbound call to hangup"));
+            info!("[ami {}] hangup_call: no pending outbound call, returning success",
+                  self.cfg.ami.label);
+            return Ok(());
         };
 
-        // Find active PJSIP/volte_ims channel with calleridnum matching phone.
-        let resp = self
+        // Find active Local channel in from-sip context for this phone.
+        let resp = match self
             .client
             .action_with_timeout(
                 vec![
@@ -243,7 +245,14 @@ impl Transport for AmiTransport {
                 Duration::from_secs(5),
             )
             .await
-            .context("CoreShowChannels command")?;
+        {
+            Ok(r) => r,
+            Err(e) => {
+                warn!("[ami {}] hangup_call: core show channels failed: {e}",
+                      self.cfg.ami.label);
+                return Ok(());
+            }
+        };
         let output = resp.get("output").unwrap_or("");
 
         // Parse concise format: Channel!Context!Extension!Priority!State!...
@@ -280,7 +289,9 @@ impl Transport for AmiTransport {
                 return Ok(());
             }
         }
-        Err(anyhow!("No active channel found for phone {phone}"))
+        info!("[ami {}] hangup_call: no active channel for phone {phone}, call already ended",
+              self.cfg.ami.label);
+        Ok(())
     }
 
     async fn read_sms(&self, _: SmsType) -> Result<Vec<ModemSMS>> {
