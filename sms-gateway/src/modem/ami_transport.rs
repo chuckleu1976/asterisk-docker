@@ -52,6 +52,8 @@ pub struct AmiTransport {
     registration_state: Arc<RwLock<Option<NetworkRegistrationStatus>>>,
     /// Cached SIM identity, refreshed periodically from sim_inventory.db.
     sim_info_cache: Arc<RwLock<super::SimInfo>>,
+    /// Phone number last originated via this transport (for hangup lookup).
+    pending_phone: Arc<Mutex<Option<String>>>,
 }
 
 impl AmiTransport {
@@ -64,6 +66,7 @@ impl AmiTransport {
         let registration_state: Arc<RwLock<Option<NetworkRegistrationStatus>>> =
             Arc::new(RwLock::new(None));
         let sim_info_cache = Arc::new(RwLock::new(cfg.sim_info.clone()));
+        let pending_phone = Arc::new(Mutex::new(None));
 
         // Event pump: AMI events -> ModemEvent
         let mut rx = client.subscribe();
@@ -132,11 +135,12 @@ impl AmiTransport {
 
         Self {
             cfg,
-            client,
+            client: client.clone(),
             _shutdown_tx: sd_tx,
             pending_originates,
             registration_state,
             sim_info_cache,
+            pending_phone,
         }
     }
 }
@@ -200,6 +204,11 @@ impl Transport for AmiTransport {
                 resp.message().unwrap_or("(no message)")
             ));
         }
+        // Remember the phone number so hangup_call can find the active channel.
+        {
+            let mut p = self.pending_phone.lock().await;
+            *p = Some(to.to_string());
+        }
         // Return a placeholder call_id; the real call_id (Asterisk UNIQUEID)
         // arrives via the CallStarted UserEvent from the dialplan.
         let placeholder = Uuid::new_v4().to_string();
@@ -213,20 +222,65 @@ impl Transport for AmiTransport {
         Ok(())
     }
 
-    async fn hangup_call(&self, call_id: Option<&str>) -> Result<()> {
-        let Some(channel) = call_id else {
-            return Err(anyhow!("hangup_call requires a channel id for AMI transport"));
+    async fn hangup_call(&self, _call_id: Option<&str>) -> Result<()> {
+        // Retrieve the phone number from the last originate_call.
+        let phone = {
+            let p = self.pending_phone.lock().await;
+            p.clone()
         };
-        let _ = tokio::time::timeout(
-            Duration::from_secs(5),
-            self.client.action(vec![
-                ("Action", "Hangup"),
-                ("Channel", channel),
-            ]),
-        )
-        .await
-        .map_err(|_| anyhow!("Hangup timed out"))??;
-        Ok(())
+        let Some(phone) = phone else {
+            return Err(anyhow!("No active outbound call to hangup"));
+        };
+
+        // Find active PJSIP/volte_ims channel with calleridnum matching phone.
+        let resp = self
+            .client
+            .action_with_timeout(
+                vec![
+                    ("Action", "Command"),
+                    ("Command", &format!("core show channels concise")),
+                ],
+                Duration::from_secs(5),
+            )
+            .await
+            .context("CoreShowChannels command")?;
+        let output = resp.get("output").unwrap_or("");
+
+        // Parse concise format: Channel!Context!Extension!Priority!State!...
+        for line in output.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with("Asterisk ") {
+                continue;
+            }
+            let fields: Vec<&str> = trimmed.split('!').collect();
+            if fields.len() < 3 {
+                continue;
+            }
+            let chan_name = fields[0];
+            let context = fields[1];
+            let exten = fields[2];
+            // Match a Local channel in from-sip context for this phone.
+            // Hanging up the Local channel terminates bridged PJSIP channels too.
+            if exten == phone && context == "from-sip" && chan_name.starts_with("Local/") {
+                let _ = tokio::time::timeout(
+                    Duration::from_secs(5),
+                    self.client.action(vec![
+                        ("Action", "Hangup"),
+                        ("Channel", chan_name),
+                    ]),
+                )
+                .await
+                .map_err(|_| anyhow!("Hangup timed out"))??;
+                info!("[ami {}] hung up channel {}", self.cfg.ami.label, chan_name);
+                // Clear pending phone so we don't double-hangup
+                {
+                    let mut p = self.pending_phone.lock().await;
+                    *p = None;
+                }
+                return Ok(());
+            }
+        }
+        Err(anyhow!("No active channel found for phone {phone}"))
     }
 
     async fn read_sms(&self, _: SmsType) -> Result<Vec<ModemSMS>> {
