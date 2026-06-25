@@ -159,7 +159,7 @@ impl ModemManager {
             summaries.insert(
                 sim_id.clone(),
                 ModemSummary {
-                    com_port: format!("ami:{}:{}", ami_host_for_summary, ami_port),
+                    com_port: format!("asterisk{}", instance),
                     baud_rate: 0,
                 },
             );

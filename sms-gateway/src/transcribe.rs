@@ -91,6 +91,8 @@ pub async fn transcribe(
     }
     let whisper_child = Command::new(whisper_exe)
         .args(&whisper_args)
+        .env("LD_LIBRARY_PATH", "/home/ht/.local/lib")
+        .env("GGML_BACKEND_PATH", "/home/ht/.local/lib/libggml-cpu-haswell.so")
         .kill_on_drop(true)
         .spawn()
         .context("failed to launch whisper-cli (is it installed?)")?;
