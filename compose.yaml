@@ -20,7 +20,7 @@ services:
     devices:
       - /dev/bus/usb:/dev/bus/usb
   asterisk:
-    image: ghcr.io/chuckleu1976/asterisk-vowifi-patched:latest
+    image: phcodercat/asterisk-vowifi:latest
     hostname: asterisk1
     build:
       context: ./asterisk
@@ -59,7 +59,7 @@ services:
       start_period: 120s
     restart: always
   asterisk2:
-    image: ghcr.io/chuckleu1976/asterisk-vowifi-patched:latest
+    image: phcodercat/asterisk-vowifi:latest
     hostname: asterisk2
     build:
       context: ./asterisk
@@ -98,7 +98,7 @@ services:
       start_period: 120s
     restart: always
   asterisk3:
-    image: ghcr.io/chuckleu1976/asterisk-vowifi-patched:latest
+    image: phcodercat/asterisk-vowifi:latest
     hostname: asterisk3
     build:
       context: ./asterisk
@@ -137,7 +137,7 @@ services:
       start_period: 120s
     restart: always
   asterisk4:
-    image: ghcr.io/chuckleu1976/asterisk-vowifi-patched:latest
+    image: phcodercat/asterisk-vowifi:latest
     hostname: asterisk4
     build:
       context: ./asterisk
@@ -176,7 +176,7 @@ services:
       start_period: 120s
     restart: always
   asterisk5:
-    image: ghcr.io/chuckleu1976/asterisk-vowifi-patched:latest
+    image: phcodercat/asterisk-vowifi:latest
     hostname: asterisk5
     build:
       context: ./asterisk
@@ -215,7 +215,7 @@ services:
       start_period: 120s
     restart: always
   asterisk6:
-    image: ghcr.io/chuckleu1976/asterisk-vowifi-patched:latest
+    image: phcodercat/asterisk-vowifi:latest
     hostname: asterisk6
     build:
       context: ./asterisk
@@ -254,7 +254,7 @@ services:
       start_period: 120s
     restart: always
   asterisk7:
-    image: ghcr.io/chuckleu1976/asterisk-vowifi-patched:latest
+    image: phcodercat/asterisk-vowifi:latest
     hostname: asterisk7
     build:
       context: ./asterisk
@@ -293,7 +293,7 @@ services:
       start_period: 120s
     restart: always
   asterisk8:
-    image: ghcr.io/chuckleu1976/asterisk-vowifi-patched:latest
+    image: phcodercat/asterisk-vowifi:latest
     hostname: asterisk8
     build:
       context: ./asterisk

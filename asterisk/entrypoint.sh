@@ -73,5 +73,21 @@ else
 fi
 
 python3 /usr/local/bin/ami_usim.py /usr/local/etc/ami_usim.ini &
+
+# Rebuild res_pjsip_messaging.so from the already-patched source. The image
+# contains the rpack_fix.py patch in the source tree, but the pre-compiled
+# module in /usr/lib/asterisk/modules is unpatched. Rebuilding here ensures
+# every container start loads the patched module so RP-ACK/DELIVERY-REPORT
+# responses reuse the established VoLTE TCP connection instead of failing
+# with EADDRINUSE.
+if [ -f /home/asterisk-build/asterisk/res/res_pjsip_messaging.c ]; then
+    echo "Rebuilding patched res_pjsip_messaging.so..."
+    cd /home/asterisk-build/asterisk
+    touch res/res_pjsip_messaging.c
+    make res -j$(nproc) 2>&1 | tail -5
+    cp -f res/res_pjsip_messaging.so /usr/lib/asterisk/modules/
+    echo "Patched res_pjsip_messaging.so installed."
+fi
+
 asterisk -f
 

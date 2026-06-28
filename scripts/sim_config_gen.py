@@ -238,7 +238,7 @@ def generate_compose(devices):
 
         lines += [
             f"  {svc}:",
-            f"    image: ghcr.io/chuckleu1976/asterisk-vowifi-patched:latest",
+            f"    image: phcodercat/asterisk-vowifi:latest",
             f"    hostname: {hostname}",
             f"    build:",
             f"      context: ./asterisk",

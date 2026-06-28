@@ -1,0 +1,21 @@
+# Local patch build: uses the pre-built ghcr image as base (no network needed)
+# and rebuilds res_pjsip_messaging.so from the already-patched source tree.
+# This produces a fully-patched phcodercat/asterisk-vowifi image when the full
+# source build (asterisk/Dockerfile) cannot run, e.g. because fedora:latest is
+# not available offline.
+FROM ghcr.io/chuckleu1976/asterisk-vowifi-patched:latest
+
+# The ghcr image has rpack_fix.py changes in the source tree but the compiled
+# /usr/lib/asterisk/modules/res_pjsip_messaging.so was built before the patch.
+# Force a rebuild of the messaging module so RP-ACK / delivery-report responses
+# reuse the established VoLTE TCP connection.
+RUN cd /home/asterisk-build/asterisk && \
+    touch res/res_pjsip_messaging.c && \
+    make res -j$(nproc) && \
+    cp -f res/res_pjsip_messaging.so /usr/lib/asterisk/modules/
+
+# Apply runtime fixes (no rebuild of asterisk required)
+COPY ami_usim.py /usr/local/bin/ami_usim.py
+COPY ims.updown /usr/local/etc/ims.updown
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh

@@ -1,5 +1,5 @@
 # Stage 0: custom pcsc-lite 1.9.9-sysmocom (protocol 4:4, matching pcscd server)
-FROM pcscd-sysmocom AS pcsc
+FROM phcodercat/pcscd AS pcsc
 
 # Stage 1: use the existing image as source for pjproject and asterisk
 # (gitea.sysmocom.de is protected by Anubis bot-protection and blocks git clone)

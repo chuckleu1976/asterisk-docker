@@ -1,7 +1,7 @@
 # Thin layer on top of the base image: applies the RP-ACK / volte_send_rp_data
 # transport-selector fix so Asterisk reuses the established VoLTE TCP connection
 # instead of trying to bind a new socket (which fails with EADDRINUSE).
-FROM pcscd-sysmocom AS pcsc
+FROM phcodercat/pcscd AS pcsc
 
 FROM phcodercat/asterisk-vowifi
 
