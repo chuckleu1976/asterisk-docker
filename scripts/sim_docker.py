@@ -50,7 +50,10 @@ def select_aid(conn):
     return toHexString(data[4:4 + al]).replace(' ', '')
 
 def reselect_aid(conn, aid):
-    _apdu(conn, f'00A40404{len(aid)//2:02X}{aid}')
+    _apdu(conn, f'00A40400{len(aid)//2:02X}{aid}')
+
+def select_mf(conn):
+    _apdu(conn, '00A40004023F00')
 
 def read_iccid(conn):
     data, sw1, sw2 = _apdu(conn, '00A40804043F002FE2')
@@ -89,9 +92,7 @@ def read_mnc_length(conn):
     mnc_len = data[3] & 0x0F
     return 3 if mnc_len == 3 else 2
 
-def read_msisdn(conn, aid=None):
-    if aid:
-        reselect_aid(conn, aid)
+def read_msisdn(conn):
     data, sw1, sw2 = _apdu(conn, '00A40004026F40')
     fcp = None
     if sw1 == 0x61:
@@ -125,87 +126,107 @@ def read_msisdn(conn, aid=None):
         return '+' + number
     return number
 
-def read_sms_center(conn):
-    # EF.SMSP (6F42) under DF_GSM (7F20), try via full MF path
-    data, sw1, sw2 = _apdu(conn, '00A40804063F007F206F42')
-    fcp = None
-    if sw1 == 0x61:
-        fcp, sw1, sw2 = _apdu(conn, f'00C00000{sw2:02X}')
-    if sw1 != 0x90:
-        return None
-    # Determine file size (transparent EF)
-    file_size = 255
-    if fcp:
-        i = 0
-        while i < len(fcp) - 1:
-            tag, tlen = fcp[i], fcp[i + 1]
-            if tag == 0x80 and tlen >= 2:
-                file_size = fcp[i+2] << 8 | fcp[i+3] if tlen >= 3 else fcp[i+2]
-                break
-            i += 2 + tlen
-    data, sw1, sw2 = _apdu(conn, f'00B00000{file_size:02X}')
-    if sw1 != 0x90:
-        return None
-    # Parse TLV for SMSC address (tag 0x01)
-    raw = bytes(data)
+def _extract_smsc_from_record(data):
     i = 0
-    while i < len(raw) - 1:
-        tag = raw[i]
-        tlen = raw[i + 1]
-        if i + 2 + tlen > len(raw):
-            break
-        if tag == 0x01 and tlen >= 2:
-            ton = raw[i + 2]
-            addr_len = tlen - 1
-            digits_hex = toHexString(raw[i + 3:i + 3 + addr_len]).replace(' ', '')
-            number = _swap(digits_hex).rstrip('fF')
-            if (ton & 0x70) == 0x10:
-                return '+' + number
-            return number
-        i += 2 + tlen
+    while i < len(data) - 2:
+        al = data[i]
+        if 1 <= al <= 20 and i + 1 + al <= len(data):
+            ton = data[i + 1]
+            num_digits = al - 1
+            if num_digits >= 2 and i + 2 + num_digits <= len(data):
+                dh = toHexString(data[i+2:i+2+num_digits]).replace(' ', '')
+                number = _swap(dh).rstrip('fF')
+                if len(number) >= 5:
+                    if (ton & 0x70) == 0x10:
+                        return '+' + number
+                    return number
+        i += 1
     return None
 
+def _select_path(conn, *fids):
+    for fid in fids:
+        data, sw1, sw2 = _apdu(conn, f'00A4000402{fid:04X}')
+        if sw1 == 0x61:
+            data, sw1, sw2 = _apdu(conn, f'00C00000{sw2:02X}')
+        if sw1 != 0x90:
+            return False
+    return True
+
+def _try_read_smsc(conn, df):
+    if not _select_path(conn, 0x3F00, df, 0x6F42):
+        return None
+    for rec in (2, 1):
+        data, sw1, sw2 = _apdu(conn, f'00B201{rec:02X}28')
+        if sw1 == 0x6C:
+            data, sw1, sw2 = _apdu(conn, f'00B201{rec:02X}{sw2:02X}')
+        if sw1 == 0x90 and data:
+            result = _extract_smsc_from_record(data)
+            if result:
+                return result
+    data, sw1, sw2 = _apdu(conn, '00B0000028')
+    if sw1 == 0x6C:
+        data, sw1, sw2 = _apdu(conn, f'00B00000{sw2:02X}')
+    if sw1 == 0x90 and data:
+        return _extract_smsc_from_record(data)
+    return None
+
+def read_sms_center(conn):
+    result = _try_read_smsc(conn, 0x7F10)
+    if result:
+        return result
+    return _try_read_smsc(conn, 0x7F20)
+
 try:
-    conn    = connect(reader_index)
-    aid     = select_aid(conn)
+    conn = connect(reader_index)
+    aid = select_aid(conn)
+
+    # Set initial context: prefer USIM if available
     if aid:
         reselect_aid(conn, aid)
 
-    iccid   = read_iccid(conn)
+    iccid = read_iccid(conn)
+    if iccid is None:
+        select_mf(conn)
+        iccid = read_iccid(conn)
+
+    # If we have a USIM AID and are currently in MF, re-select USIM
     if aid:
         reselect_aid(conn, aid)
 
-    imsi    = read_imsi(conn)
+    imsi = read_imsi(conn)
+    if imsi is None:
+        select_mf(conn)
+        imsi = read_imsi(conn)
+        if imsi and aid:
+            reselect_aid(conn, aid)
+
     mnc_len = read_mnc_length(conn)
-    msisdn  = read_msisdn(conn, aid)
-    sms_center = read_sms_center(conn)
+    msisdn = read_msisdn(conn)
+    smsc = read_sms_center(conn)
+    if smsc is None:
+        select_mf(conn)
+        smsc = read_sms_center(conn)
+        if smsc and aid:
+            reselect_aid(conn, aid)
 
-    if not imsi:
-        raise RuntimeError("Failed to read IMSI from card")
-    if not iccid:
-        raise RuntimeError("Failed to read ICCID from card")
+    # If ICCID is still unknown, derive from IMSI
+    if not iccid and imsi:
+        iccid = "imsi:" + imsi
 
-    mcc = imsi[:3]
-    mnc = imsi[3:3 + mnc_len].zfill(3)
-    if msisdn and not msisdn.startswith('+'):
-        msisdn = '+' + msisdn
+    mcc = imsi[:3] if imsi else None
+    mnc = imsi[3:3 + mnc_len] if imsi else None
 
-    print(json.dumps({'iccid': iccid, 'imsi': imsi, 'msisdn': msisdn,
-                      'mcc': mcc, 'mnc': mnc, 'sms_center': sms_center}))
+    print(json.dumps({
+        'iccid': iccid,
+        'imsi': imsi,
+        'mcc': mcc,
+        'mnc': mnc,
+        'msisdn': msisdn or '',
+        'sms_center': smsc or '',
+    }))
 except Exception as e:
     print(json.dumps({'error': str(e)}), file=sys.stderr)
-    try:
-        conn.reconnect(disposition=CardConnection.RESET)
-        conn.disconnect()
-    except Exception:
-        pass
     sys.exit(1)
-finally:
-    try:
-        conn.reconnect(disposition=CardConnection.RESET)
-        conn.disconnect()
-    except Exception:
-        pass
 """
 
 READ_CONTAINER = "asterisk"
@@ -398,6 +419,7 @@ def update_epdg(path, sim, hostname=None):
 def update_pjsip(path, sim):
     mcc, mnc, imsi = sim['mcc'], sim['mnc'], sim['imsi']
     msisdn = sim['msisdn']
+    sms_center = sim.get('sms_center', '')
     domain = f"ims.mnc{mnc}.mcc{mcc}.3gppnetwork.org"
     txt = path.read_text()
 
@@ -418,9 +440,14 @@ def update_pjsip(path, sim):
     txt = re.sub(
         r'^(from_domain\s*=\s*)ims\.mnc\d+\.mcc\d+\.3gppnetwork\.org',
         rf'\g<1>{domain}', txt, flags=re.MULTILINE)
-    txt = re.sub(
-        r'(smsc_uri\s*=\s*sip:[^@]+@)ims\.mnc\d+\.mcc\d+\.3gppnetwork\.org',
-        rf'\g<1>{domain}', txt)
+    if sms_center:
+        txt = re.sub(
+            r'(smsc_uri\s*=\s*sip:)[^@]+@ims\.mnc\d+\.mcc\d+\.3gppnetwork\.org',
+            rf'\g<1>{sms_center}@{domain}', txt)
+    else:
+        txt = re.sub(
+            r'(smsc_uri\s*=\s*sip:[^@]+@)ims\.mnc\d+\.mcc\d+\.3gppnetwork\.org',
+            rf'\g<1>{domain}', txt)
     txt = re.sub(
         r'^(username\s*=\s*)\d+@ims\.mnc\d+\.mcc\d+\.3gppnetwork\.org',
         rf'\g<1>{imsi}@{domain}', txt, flags=re.MULTILINE)
