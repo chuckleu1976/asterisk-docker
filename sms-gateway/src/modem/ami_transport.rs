@@ -27,6 +27,9 @@ const RECORDING_DIR: &str = "/logs/recordings";
 /// PJSIP endpoint/registration name configured in `config/<N>/asterisk/pjsip.conf`.
 const VOLTE_ENDPOINT: &str = "volte_ims";
 
+/// Default IMS domain used when the device config does not provide one.
+const DEFAULT_IMS_DOMAIN: &str = "ims.mnc240.mcc310.3gppnetwork.org";
+
 #[derive(Debug, Clone)]
 pub struct AmiTransportConfig {
     /// Stable sim id (ICCID once known, otherwise a fallback like `instance_3`).
@@ -38,6 +41,8 @@ pub struct AmiTransportConfig {
     /// 0-based PC/SC reader index (instance - 1). Used to look up IMEI,
     /// MSISDN, MCC/MNC from sim_inventory.db at runtime.
     pub reader_index: u8,
+    /// IMS domain used for outbound SIP MESSAGE (e.g. ims.mnc240.mcc310.3gppnetwork.org).
+    pub ims_domain: Option<String>,
 }
 
 pub struct AmiTransport {
@@ -161,10 +166,21 @@ impl Transport for AmiTransport {
 
     async fn send_sms(&self, to: &str, body: &str) -> Result<()> {
         // res_pjsip_messaging MessageSend.
-        //   To: pjsip:volte_ims/+<num>@volte_ims
+        //   To: pjsip:volte_ims/sip:+<num>@<ims_domain>
         //   From: <endpoint name>
         //   Body: <text>
-        let to_uri = format!("pjsip:{VOLTE_ENDPOINT}/{to}@{VOLTE_ENDPOINT}");
+        // The slash splits endpoint from Request-URI; the domain must be the
+        // real IMS domain (not the endpoint name) so Asterisk can resolve it.
+        let ims_domain = self
+            .cfg
+            .ims_domain
+            .as_deref()
+            .unwrap_or(DEFAULT_IMS_DOMAIN);
+        let to_uri = format!("pjsip:{VOLTE_ENDPOINT}/sip:{to}@{ims_domain}");
+        log::info!(
+            "[ami {}] MessageSend To={} From={} Body={}",
+            self.cfg.sim_id, to_uri, VOLTE_ENDPOINT, body
+        );
         let resp = self
             .client
             .action(vec![
@@ -176,11 +192,19 @@ impl Transport for AmiTransport {
             .await
             .context("MessageSend action")?;
         if !resp.is_success() {
+            log::error!(
+                "[ami {}] MessageSend failed: {:?}",
+                self.cfg.sim_id, resp
+            );
             return Err(anyhow!(
                 "MessageSend failed: {}",
                 resp.message().unwrap_or("(no message)")
             ));
         }
+        log::info!(
+            "[ami {}] MessageSend succeeded: {:?}",
+            self.cfg.sim_id, resp
+        );
         Ok(())
     }
 
@@ -429,15 +453,36 @@ fn parse_endpoint_status(pkt: &AmiPacket) -> Option<NetworkRegistrationStatus> {
 /// Periodically refresh SIM identity cache from sim_inventory.db.
 /// Uses a simple counter to limit DB reads to once per ~60 events.
 async fn refresh_sim_info_cache(cache: &mut super::SimInfo, reader_index: u8) {
-    if let Ok(Some(msisdn)) = sim_inventory::get_msisdn(reader_index) {
-        cache.msisdn = Some(msisdn);
+    match sim_inventory::get_iccid(reader_index) {
+        Ok(Some(iccid)) => cache.iccid = Some(iccid),
+        Ok(None) => cache.iccid = None,
+        _ => {}
     }
-    if let Ok(Some((mcc, mnc))) = sim_inventory::get_mcc_mnc(reader_index) {
-        cache.mcc = Some(mcc);
-        cache.mnc = Some(mnc);
+    match sim_inventory::get_imsi(reader_index) {
+        Ok(Some(imsi)) => cache.imsi = Some(imsi),
+        Ok(None) => cache.imsi = None,
+        _ => {}
     }
-    if let Ok(Some(sms_center)) = sim_inventory::get_sms_center(reader_index) {
-        cache.sms_center = Some(sms_center);
+    match sim_inventory::get_msisdn(reader_index) {
+        Ok(Some(msisdn)) => cache.msisdn = Some(msisdn),
+        Ok(None) => cache.msisdn = None,
+        _ => {}
+    }
+    match sim_inventory::get_mcc_mnc(reader_index) {
+        Ok(Some((mcc, mnc))) => {
+            cache.mcc = Some(mcc);
+            cache.mnc = Some(mnc);
+        }
+        Ok(None) => {
+            cache.mcc = None;
+            cache.mnc = None;
+        }
+        _ => {}
+    }
+    match sim_inventory::get_sms_center(reader_index) {
+        Ok(Some(sms_center)) => cache.sms_center = Some(sms_center),
+        Ok(None) => cache.sms_center = None,
+        _ => {}
     }
 }
 

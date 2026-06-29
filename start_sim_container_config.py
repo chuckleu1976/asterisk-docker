@@ -29,7 +29,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from scripts.sim_db import DB_PATH, SCRIPT_DIR, db_init, db_save_reader, db_save_sim
+from scripts.sim_db import DB_PATH, SCRIPT_DIR, db_clear_sim, db_clear_empty_sims, db_init, db_save_reader, db_save_sim
 from scripts.sim_config_gen import (
     CONFIG_DIR, EXAMPLE_DIR, generate_config, generate_compose,
 )
@@ -195,6 +195,9 @@ def watch_loop(interval, devices=None):
     for dev in devices:
         dev_map[dev['reader']] = dev
 
+    # Startup cleanup: clear sims rows for readers already marked empty/error.
+    db_clear_empty_sims()
+
     last_iccid = {}
     last_reader_indices = set()
     read_failures = {}
@@ -224,11 +227,13 @@ def watch_loop(interval, devices=None):
                 print(f"[{ts}] Readers removed: {sorted(removed)}")
                 for idx in removed:
                     dev = dev_map.get(idx, {})
+                    db_clear_sim(idx)
                     db_save_reader(idx, f"P{idx}", "error",
                                    hostname=dev.get('hostname', ''),
                                    imei=dev.get('imei', ''),
                                    module=dev.get('module', 'SAMSUNG'))
                     last_iccid.pop(idx, None)
+                    stop_instance(idx + 1)
             last_reader_indices = reader_indices
 
         for i in reader_indices:
@@ -249,11 +254,13 @@ def watch_loop(interval, devices=None):
                 if last_iccid[i] is not None and read_failures[i] >= REMOVE_THRESHOLD:
                     ts = datetime.now().strftime('%H:%M:%S')
                     print(f"[{ts}] P{i}: card removed")
+                    db_clear_sim(i)
                     db_save_reader(i, f"P{i}", "empty",
                                    hostname=dev.get('hostname', ''),
                                    imei=dev.get('imei', ''),
                                    module=dev.get('module', 'SAMSUNG'))
                     last_iccid[i] = None
+                    read_failures[i] = 0
                     stop_instance(instance)
                 continue
 
@@ -270,6 +277,7 @@ def watch_loop(interval, devices=None):
                     print(f"[{ts}] P{i}: card moved from P{moved_from} "
                           f"ICCID={iccid}  IMSI={sim['imsi']}")
                     old_dev = dev_map.get(moved_from, {})
+                    db_clear_sim(moved_from)
                     stop_instance(moved_from + 1)
                     last_iccid[moved_from] = None
                     read_failures[moved_from] = 0

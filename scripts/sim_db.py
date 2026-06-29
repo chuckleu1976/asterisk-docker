@@ -46,6 +46,22 @@ def db_init():
     con.close()
 
 
+def db_clear_sim(reader_index):
+    """Clear the sims row for a reader (SIM removed)."""
+    con = sqlite3.connect(DB_PATH)
+    con.execute("DELETE FROM sims WHERE reader = ?", (reader_index,))
+    con.commit()
+    con.close()
+
+
+def db_clear_empty_sims():
+    """Delete sims rows for readers whose status is empty/error (startup cleanup)."""
+    con = sqlite3.connect(DB_PATH)
+    con.execute("DELETE FROM sims WHERE reader IN (SELECT reader FROM readers WHERE status IN ('empty', 'error'))")
+    con.commit()
+    con.close()
+
+
 def db_save_reader(reader_index, reader_name, status,
                    hostname='', imei='', module='SAMSUNG'):
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')

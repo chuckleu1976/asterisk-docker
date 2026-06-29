@@ -63,6 +63,9 @@ pub struct Device {
     pub imsi: Option<String>,
     /// MSISDN for display.
     pub msisdn: Option<String>,
+    /// IMS domain used for outbound SIP MESSAGE (e.g. ims.mnc240.mcc310.3gppnetwork.org).
+    /// If absent, outbound SMS will fall back to the legacy endpoint-only URI.
+    pub ims_domain: Option<String>,
 
     // ─── Legacy serial fields (deprecated; ignored when ami_* is set) ───
     pub com_port: Option<String>,

@@ -43,6 +43,24 @@ pub fn get_msisdn(reader_index: u8) -> anyhow::Result<Option<String>> {
     Ok(result.filter(|s| !s.is_empty()))
 }
 
+pub fn get_imsi(reader_index: u8) -> anyhow::Result<Option<String>> {
+    let conn = open_ro()?;
+    let mut stmt = conn.prepare("SELECT imsi FROM sims WHERE reader = ?1")?;
+    let result: Option<String> = stmt
+        .query_row([reader_index], |row| row.get(0))
+        .ok();
+    Ok(result.filter(|s| !s.is_empty()))
+}
+
+pub fn get_iccid(reader_index: u8) -> anyhow::Result<Option<String>> {
+    let conn = open_ro()?;
+    let mut stmt = conn.prepare("SELECT iccid FROM sims WHERE reader = ?1")?;
+    let result: Option<String> = stmt
+        .query_row([reader_index], |row| row.get(0))
+        .ok();
+    Ok(result.filter(|s| !s.is_empty()))
+}
+
 pub fn get_mcc_mnc(reader_index: u8) -> anyhow::Result<Option<(String, String)>> {
     let conn = open_ro()?;
     let mut stmt = conn.prepare("SELECT mcc, mnc FROM sims WHERE reader = ?1")?;

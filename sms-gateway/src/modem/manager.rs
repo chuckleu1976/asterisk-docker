@@ -75,6 +75,8 @@ pub struct ModemManager {
     /// container-relative RecordingPath (`/logs/recordings/foo.wav`) to a host
     /// path under `{recordings_base_dir}/{instance}/recordings/foo.wav`.
     instance_by_sim: Arc<RwLock<HashMap<String, u8>>>,
+    /// MSISDN -> sim_id for local SMS loopback detection.
+    msisdn_to_sim: Arc<RwLock<HashMap<String, String>>>,
     /// Host base dir for the per-instance `/logs/` volumes.
     recordings_base_dir: std::path::PathBuf,
     sim_cards_cache: Arc<RwLock<HashMap<String, SimCard>>>,
@@ -93,6 +95,7 @@ impl ModemManager {
         let mut transports: HashMap<String, Arc<dyn super::Transport>> = HashMap::new();
         let mut instance_by_sim: HashMap<String, u8> = HashMap::new();
         let mut summaries: HashMap<String, ModemSummary> = HashMap::new();
+        let mut msisdn_to_sim: HashMap<String, String> = HashMap::new();
 
         for (index, device) in config.devices.iter().enumerate() {
             let instance = device.instance.unwrap_or((index + 1) as u8);
@@ -151,11 +154,15 @@ impl ModemManager {
                         secret,
                     },
                     reader_index: instance - 1,
+                    ims_domain: device.ims_domain.clone(),
                 },
                 event_tx.clone(),
             );
             transports.insert(sim_id.clone(), Arc::new(transport));
             instance_by_sim.insert(sim_id.clone(), instance);
+            if let Some(msisdn) = device.msisdn.clone() {
+                msisdn_to_sim.insert(msisdn, sim_id.clone());
+            }
             summaries.insert(
                 sim_id.clone(),
                 ModemSummary {
@@ -183,10 +190,11 @@ impl ModemManager {
             transports: Arc::new(RwLock::new(transports)),
             summaries: Arc::new(RwLock::new(summaries)),
             instance_by_sim: Arc::new(RwLock::new(instance_by_sim)),
+            msisdn_to_sim: Arc::new(RwLock::new(msisdn_to_sim)),
             recordings_base_dir: config
                 .settings
                 .recordings_base_dir
-                .clone()
+                .as_ref()
                 .map(std::path::PathBuf::from)
                 .unwrap_or_else(|| std::path::PathBuf::from("/home/ht/docker/logs")),
             sim_cards_cache: Arc::new(RwLock::new(HashMap::new())),
@@ -251,6 +259,15 @@ impl ModemManager {
         })
     }
 
+    /// Return the configured MSISDN for a given sim_id, if any.
+    async fn msisdn_for_sim(&self, sim_id: &str) -> Option<String> {
+        let msisdn_to_sim = self.msisdn_to_sim.read().await;
+        msisdn_to_sim
+            .iter()
+            .find(|(_, s)| *s == sim_id)
+            .map(|(m, _)| m.clone())
+    }
+
     pub async fn update_sim_cache(&self, sim_card: SimCard) {
         let mut cache = self.sim_cards_cache.write().await;
         cache.insert(sim_card.id.clone(), sim_card);
@@ -266,14 +283,59 @@ impl ModemManager {
 
     /// Send an SMS via AMI MessageSend and record it locally.
     /// Returns (sms_id, contact_id) for API parity with the legacy path.
+    ///
+    /// If the destination phone number belongs to another SIM managed by this
+    /// gateway, the message is looped back locally instead of being sent over
+    /// the carrier IMS network. This makes on-premise testing between local
+    /// SIMs reliable while still preserving the real outbound path for external
+    /// numbers.
     pub async fn send_sms(
         &self,
         sim_id: &str,
         contact: &Contact,
         message: &str,
     ) -> anyhow::Result<(i64, String)> {
+        let source_msisdn = self.msisdn_for_sim(sim_id).await.unwrap_or_default();
+        let dest_msisdn = contact.id.clone();
+
+        // Local loopback: destination is another SIM managed by this gateway.
+        let is_local = {
+            let msisdn_to_sim = self.msisdn_to_sim.read().await;
+            msisdn_to_sim.get(&dest_msisdn).map(|s| s != sim_id).unwrap_or(false)
+        };
+
+        if is_local {
+            log::info!(
+                "[ami {}] local SMS loopback to {} (bypassing carrier IMS)",
+                sim_id, dest_msisdn
+            );
+            let outgoing = ModemSMS {
+                contact: contact.name.clone(),
+                timestamp: chrono::Utc::now().naive_utc(),
+                message: message.to_string(),
+                send: true,
+                sim_id: sim_id.to_string(),
+            };
+            let sms_id = outgoing.insert().await?;
+
+            let dest_sim_id = {
+                let msisdn_to_sim = self.msisdn_to_sim.read().await;
+                msisdn_to_sim.get(&dest_msisdn).cloned().unwrap()
+            };
+            let incoming = ModemSMS {
+                contact: source_msisdn,
+                timestamp: chrono::Utc::now().naive_utc(),
+                message: message.to_string(),
+                send: false,
+                sim_id: dest_sim_id,
+            };
+            incoming.insert().await?;
+
+            return Ok((sms_id, dest_msisdn));
+        }
+
         let t = self.transport_for(sim_id).await?;
-        t.send_sms(&contact.name, message).await?;
+        t.send_sms(&contact.id, message).await?;
         let sms = ModemSMS {
             contact: contact.name.clone(),
             timestamp: chrono::Utc::now().naive_utc(),
