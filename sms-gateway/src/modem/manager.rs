@@ -577,6 +577,12 @@ async fn handle_modem_event(
                 log::debug!("[ami {}] SmsReceived dropped (empty from+body)", sim_id);
                 return;
             }
+            // Deduplicate: native MessageReceived and dialplan UserEvent SmsReceived
+            // both fire for the same SIP MESSAGE. Skip if a match exists in the last 5 s.
+            if !body.is_empty() && ModemSMS::exists_recent(&body, &sim_id).await.unwrap_or(false) {
+                debug!("[ami {}] SmsReceived dropped (duplicate body={})", sim_id, body);
+                return;
+            }
             let sms = ModemSMS {
                 contact: contact.clone(),
                 timestamp: timestamp.naive_utc(),

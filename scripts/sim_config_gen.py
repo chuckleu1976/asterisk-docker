@@ -152,6 +152,7 @@ def generate_config(instance, device):
         "outbound_auth=volte_ims\n"
         "aors=volte_ims\n"
         "rewrite_contact=yes\n"
+        "trust_id_inbound=yes\n"
         "from_domain=ims.mnc000.mcc000.3gppnetwork.org\n"
         "from_user=+000\n"
         "volte=yes\n"

@@ -987,6 +987,26 @@ impl ModemSMS {
 
         Ok(sms_id)
     }
+
+    /// Check if an SMS with the same non-empty body and sim_id was inserted in
+    /// the last 5 seconds. Used to deduplicate native MessageReceived vs
+    /// dialplan UserEvent SmsReceived which both fire for the same SIP MESSAGE.
+    pub async fn exists_recent(body: &str, sim_id: &str) -> Result<bool> {
+        let pool = get_pool()?;
+        let exists = sqlx::query_scalar::<_, i64>(
+            r#"
+            SELECT COUNT(*) FROM sms
+            WHERE message = ? AND sim_id = ? AND send = 0
+              AND timestamp >= datetime('now', '-5 seconds')
+            "#,
+        )
+        .bind(body)
+        .bind(sim_id)
+        .fetch_one(pool)
+        .await?;
+        Ok(exists > 0)
+    }
+
     pub async fn bulk_insert(records: &[Self]) -> Result<Vec<String>> {
         let pool = get_pool()?;
 
