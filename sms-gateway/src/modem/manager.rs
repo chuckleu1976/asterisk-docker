@@ -20,6 +20,7 @@ use crate::api::sse_manager::CallEvent;
 use crate::api::SseManager;
 use crate::config::{Settings, SmsStorage};
 use crate::db::{Call, Contact, ModemSMS, SimCard};
+use crate::sim_inventory;
 use crate::webhook;
 
 use super::types::{
@@ -99,6 +100,20 @@ impl ModemManager {
 
         for (index, device) in config.devices.iter().enumerate() {
             let instance = device.instance.unwrap_or((index + 1) as u8);
+
+            // Skip devices whose reader is marked empty/error in sim_inventory.db.
+            let reader_idx = instance - 1;
+            match sim_inventory::get_reader_status(reader_idx) {
+                Ok(Some(status)) if status == "empty" || status == "error" => {
+                    info!(
+                        "Skipping device {} (instance {}, reader {}): reader status={}",
+                        index, instance, reader_idx, status
+                    );
+                    continue;
+                }
+                _ => {}
+            }
+
             let ami_host = device
                 .ami_host
                 .clone()

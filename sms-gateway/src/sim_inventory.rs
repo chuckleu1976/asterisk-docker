@@ -25,6 +25,15 @@ fn open_ro() -> anyhow::Result<Connection> {
     Ok(conn)
 }
 
+pub fn get_reader_status(reader_index: u8) -> anyhow::Result<Option<String>> {
+    let conn = open_ro()?;
+    let mut stmt = conn.prepare("SELECT status FROM readers WHERE reader = ?1")?;
+    let result: Option<String> = stmt
+        .query_row([reader_index], |row| row.get(0))
+        .ok();
+    Ok(result.filter(|s| !s.is_empty()))
+}
+
 pub fn get_imei(reader_index: u8) -> anyhow::Result<Option<String>> {
     let conn = open_ro()?;
     let mut stmt = conn.prepare("SELECT imei FROM readers WHERE reader = ?1")?;
