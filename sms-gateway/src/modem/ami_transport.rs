@@ -99,39 +99,55 @@ impl AmiTransport {
             let _ = pump_client
                 .action(vec![("Action", "PJSIPShowRegistrationsOutbound")])
                 .await;
+            let mut reg_refresh = tokio::time::interval(Duration::from_secs(30));
+            // Skip the immediate tick; first refresh happens after 30 s.
+            reg_refresh.tick().await;
             loop {
-                match rx.recv().await {
-                    Ok(pkt) => {
-                        event_counter = event_counter.wrapping_add(1);
-                        log::trace!(
-                            "[ami {label}] event pkt: event={:?} fields={:?}",
-                            pkt.event_name(),
-                            pkt.fields
-                        );
-                        // Track registration state from unsolicited AMI events.
-                        if let Some(status) = parse_registration_event(&pkt) {
-                            *reg_state.write().await = Some(status);
-                        }
-                        // Refresh sim_info cache from sim_inventory.db every ~60 events.
-                        if event_counter % 60 == 0 {
-                            let mut cache = s_cache.write().await;
-                            refresh_sim_info_cache(&mut cache, reader_idx).await;
-                        }
-                        if let Some(ev) =
-                            translate_event(&pkt, &sim_id, &pending).await
-                        {
-                            if events_tx.send(ev).await.is_err() {
-                                info!("[ami {label}] event consumer dropped, stopping pump");
+                tokio::select! {
+                    biased;
+                    _ = reg_refresh.tick() => {
+                        // Re-query outbound registration status so that a state
+                        // change after startup (e.g. Registered → Rejected) does
+                        // not remain stale in the frontend.
+                        let _ = pump_client
+                            .action(vec![("Action", "PJSIPShowRegistrationsOutbound")])
+                            .await;
+                    }
+                    result = rx.recv() => {
+                        match result {
+                            Ok(pkt) => {
+                                event_counter = event_counter.wrapping_add(1);
+                                log::trace!(
+                                    "[ami {label}] event pkt: event={:?} fields={:?}",
+                                    pkt.event_name(),
+                                    pkt.fields
+                                );
+                                // Track registration state from unsolicited AMI events.
+                                if let Some(status) = parse_registration_event(&pkt) {
+                                    *reg_state.write().await = Some(status);
+                                }
+                                // Refresh sim_info cache from sim_inventory.db every ~60 events.
+                                if event_counter % 60 == 0 {
+                                    let mut cache = s_cache.write().await;
+                                    refresh_sim_info_cache(&mut cache, reader_idx).await;
+                                }
+                                if let Some(ev) =
+                                    translate_event(&pkt, &sim_id, &pending).await
+                                {
+                                    if events_tx.send(ev).await.is_err() {
+                                        info!("[ami {label}] event consumer dropped, stopping pump");
+                                        return;
+                                    }
+                                }
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                                warn!("[ami {label}] event channel lagged by {n} packets");
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                debug!("[ami {label}] event broadcast closed");
                                 return;
                             }
                         }
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        warn!("[ami {label}] event channel lagged by {n} packets");
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                        debug!("[ami {label}] event broadcast closed");
-                        return;
                     }
                 }
             }
