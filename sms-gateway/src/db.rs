@@ -593,15 +593,18 @@ impl Contact {
             return Ok(());
         }
 
+        // Always use the contact name (phone number) as the id so the SMS
+        // destination is guaranteed to be a routable number, not a UUID.
         sqlx::query(
             r#"
             INSERT INTO contacts (id, name) VALUES (?, ?)
             "#,
         )
-        .bind(&self.id)
+        .bind(&self.name)
         .bind(&self.name)
         .execute(pool)
         .await?;
+        self.id = self.name.clone();
 
         Ok(())
     }
