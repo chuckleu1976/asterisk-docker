@@ -640,7 +640,7 @@ async fn handle_modem_event(
             });
         }
 
-        ModemEvent::CallEnded { sim_id, call_id, recording_path } => {
+        ModemEvent::CallEnded { sim_id, call_id, .. } => {
             if let Err(e) = Call::update_status(&call_id, "ended").await {
                 log::error!("[ami {}] failed to mark call {} ended: {}", sim_id, call_id, e);
             }
@@ -651,33 +651,21 @@ async fn handle_modem_event(
                 phone: None,
                 direction: "".into(),
             });
-            // Recording arrives as a container-relative path; resolve to host
-            // and spawn the load → save_recording → transcribe pipeline.
-            if let Some(rp) = recording_path {
-                let instance = instance_by_sim.read().await.get(&sim_id).copied();
-                let Some(instance) = instance else {
-                    log::warn!(
-                        "[ami {}] CallEnded recording_path={:?} but no instance mapping; skipping",
-                        sim_id, rp
-                    );
-                    return;
-                };
-                let host_path = resolve_recording_host_path(&rp, instance, recordings_base);
-                let cfg_owned = transcribe_cfg.cloned();
-                tokio::spawn(async move {
-                    if let Err(e) =
-                        ingest_recording(sim_id, call_id, host_path, cfg_owned).await
-                    {
-                        log::error!("[ami] recording ingest failed: {}", e);
-                    }
-                });
-            }
         }
 
         ModemEvent::RecordingDone { sim_id, call_id, path } => {
+            let instance = instance_by_sim.read().await.get(&sim_id).copied();
+            let Some(instance) = instance else {
+                log::warn!(
+                    "[ami {}] RecordingDone path={:?} but no instance mapping; skipping",
+                    sim_id, path
+                );
+                return;
+            };
+            let host_path = resolve_recording_host_path(&path, instance, recordings_base);
             let cfg_owned = transcribe_cfg.cloned();
             tokio::spawn(async move {
-                if let Err(e) = ingest_recording(sim_id, call_id, path, cfg_owned).await {
+                if let Err(e) = ingest_recording(sim_id, call_id, host_path, cfg_owned).await {
                     log::error!("[ami] recording ingest failed: {}", e);
                 }
             });

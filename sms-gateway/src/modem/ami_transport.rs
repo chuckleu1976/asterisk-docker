@@ -514,7 +514,17 @@ async fn translate_event(
         // Custom UserEvent emitted by the asterisk dialplan.
         // UserEvent: SmsReceived | CallStarted | CallAnswered | CallEnded
         // Fields differ by subtype (see asterisk-docker/.../extensions.conf).
-        "UserEvent" => translate_user_event(pkt, sim_id),
+        "UserEvent" => {
+            let me = translate_user_event(pkt, sim_id);
+            // Save recording_path → call_id so MixMonitorStop can correlate.
+            if let Some(ModemEvent::CallEnded { ref call_id, recording_path: Some(ref rp), .. }) = me {
+                let key = rp.to_string_lossy().into_owned();
+                let mut map = pending_originates.lock().await;
+                debug!("[ami {sim_id}] CallEnded recording_path={key} call_id={call_id}");
+                map.insert(key, call_id.clone());
+            }
+            me
+        }
         "MessageReceived" => {
             let from = pkt.get("from").unwrap_or("").to_string();
             let body = pkt.get("body").unwrap_or("").to_string();
@@ -567,19 +577,25 @@ async fn translate_event(
         "MixMonitorStop" => {
             let file = pkt.get("file")?.to_string();
             let path = PathBuf::from(&file);
-            // call_id: look up our internal id by the recording filename
             let call_id = pending_originates
                 .lock()
                 .await
                 .remove(&file)
-                .unwrap_or_else(|| file.clone());
+                .unwrap_or_else(|| {
+                    debug!("[ami {sim_id}] MixMonitorStop no pending entry for {file}");
+                    file.clone()
+                });
+            debug!("[ami {sim_id}] MixMonitorStop file={file} call_id={call_id}");
             Some(ModemEvent::RecordingDone {
                 sim_id: sim_id.to_string(),
                 call_id,
                 path,
             })
         }
-        _ => None,
+        _ => {
+            debug!("[ami {sim_id}] unhandled event: {}", name);
+            None
+        }
     }
 }
 
