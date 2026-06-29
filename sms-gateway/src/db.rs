@@ -934,19 +934,19 @@ impl ModemSMS {
         if let Some(contact_id) = contact_id {
             Ok(contact_id)
         } else {
-            let uuid = Uuid::new_v4().to_string();
-
+            // Use the phone number as both id and name so the SMS destination
+            // is the actual E.164 number, not a UUID.
             sqlx::query(
                 r#"
                 INSERT INTO contacts (id, name) VALUES (?, ?)
                 "#,
             )
-            .bind(&uuid)
+            .bind(&self.contact)
             .bind(&self.contact)
             .execute(&mut **transaction)
             .await?;
 
-            Ok(uuid)
+            Ok(self.contact.clone())
         }
     }
 

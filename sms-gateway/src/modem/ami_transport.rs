@@ -526,11 +526,17 @@ async fn translate_event(
             me
         }
         "MessageReceived" => {
+            let callerid = pkt.get("calleridnum").unwrap_or("").to_string();
             let from = pkt.get("from").unwrap_or("").to_string();
             let body = pkt.get("body").unwrap_or("").to_string();
+            // Prefer calleridnum (Asterisk's parsed caller ID) over the raw
+            // SIP From header — the IMS network may replace From with a trunk
+            // identifier (e.g. "17530") while calleridnum holds the E.164 number.
+            let from = if callerid.is_empty() { from } else { callerid };
             if from.is_empty() && body.is_empty() {
                 return None;
             }
+            debug!("[ami {sim_id}] MessageReceived from={from} body={body}");
             Some(ModemEvent::SmsReceived {
                 sim_id: sim_id.to_string(),
                 from,
