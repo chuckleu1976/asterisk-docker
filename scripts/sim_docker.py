@@ -56,10 +56,7 @@ def select_mf(conn):
     _apdu(conn, '00A40004023F00')
 
 def read_iccid(conn):
-    data, sw1, sw2 = _apdu(conn, '00A40804043F002FE2')
-    if sw1 == 0x61:
-        data, sw1, sw2 = _apdu(conn, f'00C00000{sw2:02X}')
-    if sw1 != 0x90:
+    if not _select_path(conn, 0x3F00, 0x2FE2):
         return None
     data, sw1, sw2 = _apdu(conn, '00B000000A')
     if sw1 != 0x90:

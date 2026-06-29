@@ -91,15 +91,14 @@ impl AmiTransport {
             }
             // Query initial registration state for the volte_ims endpoint.
             tokio::time::sleep(Duration::from_secs(3)).await;
-            if let Ok(resp) = pump_client
+            let _ = pump_client
                 .action(vec![("Action", "PJSIPShowEndpoint"), ("Endpoint", "volte_ims")])
-                .await
-            {
-                log::debug!("[ami {label}] PJSIPShowEndpoint response: {resp:?}");
-                if let Some(status) = parse_endpoint_status(&resp) {
-                    *reg_state.write().await = Some(status);
-                }
-            }
+                .await;
+            // Query outbound registration status — generates OutboundRegistrationDetail
+            // events that the event pump captures via parse_registration_event.
+            let _ = pump_client
+                .action(vec![("Action", "PJSIPShowRegistrationsOutbound")])
+                .await;
             loop {
                 match rx.recv().await {
                     Ok(pkt) => {
@@ -364,10 +363,16 @@ impl Transport for AmiTransport {
         let name = sim_inventory::lookup_operator(&mcc, &mnc)
             .unwrap_or("Unknown")
             .to_string();
+        let reg = self.registration_state.read().await;
+        let registration_status = match reg.as_ref() {
+            Some(s) if s.status == "1" => "home".into(),
+            Some(_) => "rejected".into(),
+            None => "unknown".into(),
+        };
         Ok(Some(OperatorInfo {
             operator_name: name,
             operator_id: format!("{}{}", mcc, mnc),
-            registration_status: "home".to_string(),
+            registration_status,
         }))
     }
 }
@@ -426,27 +431,23 @@ fn parse_registration_event(pkt: &AmiPacket) -> Option<NetworkRegistrationStatus
                 cell_id: None,
             })
         }
+        "OutboundRegistrationDetail" => {
+            // Response to PJSIPShowRegistrationsOutbound
+            let name = pkt.get("objectname").or_else(|| pkt.get("endpoint"))?;
+            if name != "volte_ims" {
+                return None;
+            }
+            let status = pkt.get("status")?;
+            let registered = status.eq_ignore_ascii_case("Registered")
+                || status.eq_ignore_ascii_case("Reachable")
+                || status.eq_ignore_ascii_case("Online");
+            Some(NetworkRegistrationStatus {
+                status: if registered { "1" } else { "0" }.into(),
+                location_area_code: None,
+                cell_id: None,
+            })
+        }
         _ => None,
-    }
-}
-
-/// Parse PJSIPShowEndpoint response into registration status.
-fn parse_endpoint_status(pkt: &AmiPacket) -> Option<NetworkRegistrationStatus> {
-    // The action() response for PJSIPShowEndpoint is just "Response: Success".
-    // We rely on the ContactDetail/EndpointDetail events that follow on the
-    // broadcast channel instead. This is a fallback that returns None.
-    // Registration status is captured from ContactDetail events in the event pump.
-    if pkt.is_success() {
-        // Mark as registered (code 1 = home network) since the endpoint
-        // exists and is configured. Use 3GPP TS 27.007 registration codes
-        // so the frontend displays the correct i18n label.
-        Some(NetworkRegistrationStatus {
-            status: "1".to_string(),
-            location_area_code: None,
-            cell_id: None,
-        })
-    } else {
-        None
     }
 }
 
