@@ -10,7 +10,7 @@
 //! Diagnostic getters now return `Ok(None)` by default; per-transport
 //! implementations may override them.
 
-use log::{error, info};
+use log::{debug, error, info};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -640,7 +640,7 @@ async fn handle_modem_event(
             });
         }
 
-        ModemEvent::CallEnded { sim_id, call_id, .. } => {
+        ModemEvent::CallEnded { sim_id, call_id, recording_path } => {
             if let Err(e) = Call::update_status(&call_id, "ended").await {
                 log::error!("[ami {}] failed to mark call {} ended: {}", sim_id, call_id, e);
             }
@@ -651,6 +651,28 @@ async fn handle_modem_event(
                 phone: None,
                 direction: "".into(),
             });
+            // Try to ingest recording. MixMonitorStop events are unreliable in
+            // the custom asterisk build, so we also try here with a longer wait
+            // for the file to grow past the WAV header.
+            if let Some(rp) = recording_path {
+                let instance = instance_by_sim.read().await.get(&sim_id).copied();
+                let Some(instance) = instance else {
+                    log::warn!(
+                        "[ami {}] CallEnded recording_path={:?} but no instance mapping; skipping",
+                        sim_id, rp
+                    );
+                    return;
+                };
+                let host_path = resolve_recording_host_path(&rp, instance, recordings_base);
+                let cfg_owned = transcribe_cfg.cloned();
+                tokio::spawn(async move {
+                    if let Err(e) =
+                        ingest_recording(sim_id, call_id, host_path, cfg_owned).await
+                    {
+                        log::error!("[ami] recording ingest failed: {}", e);
+                    }
+                });
+            }
         }
 
         ModemEvent::RecordingDone { sim_id, call_id, path } => {
@@ -681,10 +703,21 @@ async fn ingest_recording(
     host_path: std::path::PathBuf,
     transcribe_cfg: Option<TranscribeConfig>,
 ) -> anyhow::Result<()> {
-    // MixMonitor finalizes the file on Hangup; give it a moment to flush.
-    for _ in 0..20 {
-        if tokio::fs::try_exists(&host_path).await.unwrap_or(false) {
-            break;
+    // Skip if the call already has a recording (e.g. ingested via CallEnded
+    // before a late MixMonitorStop).
+    if let Ok(Some(_)) = Call::get_recording(&call_id).await {
+        debug!("[ami {}] recording already saved for call {}, skipping", sim_id, call_id);
+        return Ok(());
+    }
+
+    // MixMonitor may still be writing audio after the UserEvent fires.
+    // Wait for the file to grow past the 44-byte WAV header size.
+    let min_size: u64 = 100;
+    for _ in 0..40 {
+        if let Ok(meta) = tokio::fs::metadata(&host_path).await {
+            if meta.len() >= min_size {
+                break;
+            }
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
