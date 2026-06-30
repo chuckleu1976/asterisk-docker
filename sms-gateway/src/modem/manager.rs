@@ -148,20 +148,28 @@ impl ModemManager {
                     .unwrap_or_else(|| "geheim".to_string()),
             };
 
-            // Stable sim_id: prefer configured ICCID; otherwise instance fallback.
-            let sim_id = device
-                .iccid
-                .clone()
-                .unwrap_or_else(|| format!("instance_{}", instance));
+            // Derive SIM data from sim_inventory.db (not config.toml) so that
+            // physical SIM re-arrangement is handled automatically.
+            let db_iccid = sim_inventory::get_iccid(reader_idx).ok().flatten();
+            let db_imsi = sim_inventory::get_imsi(reader_idx).ok().flatten();
+            let db_msisdn = sim_inventory::get_msisdn(reader_idx).ok().flatten();
+            let db_mcc_mnc = sim_inventory::get_mcc_mnc(reader_idx).ok().flatten();
 
+            let sim_id = db_iccid.clone()
+                .unwrap_or_else(|| format!("instance_{}", instance));
             let sim_info = super::SimInfo {
-                iccid: device.iccid.clone(),
-                imsi: device.imsi.clone(),
-                msisdn: device.msisdn.clone(),
-                mcc: None,
-                mnc: None,
+                iccid: db_iccid,
+                imsi: db_imsi.clone(),
+                msisdn: db_msisdn.clone(),
+                mcc: db_mcc_mnc.as_ref().map(|(m, _)| m.clone()),
+                mnc: db_mcc_mnc.as_ref().map(|(_, n)| n.clone()),
                 sms_center: None,
             };
+            let ims_domain = device.ims_domain.clone().or_else(|| {
+                db_mcc_mnc.map(|(mcc, mnc)| {
+                    format!("ims.mnc{:0>3}.mcc{}.3gppnetwork.org", mnc, mcc)
+                })
+            });
 
             let label = format!("asterisk{}@{}:{}", instance, ami_host, ami_port);
             let transport = super::ami_transport::AmiTransport::spawn(
@@ -176,13 +184,14 @@ impl ModemManager {
                         secret,
                     },
                     reader_index: instance - 1,
-                    ims_domain: device.ims_domain.clone(),
+                    ims_domain,
                 },
                 event_tx.clone(),
             );
             transports.insert(sim_id.clone(), Arc::new(transport));
             instance_by_sim.insert(sim_id.clone(), instance);
-            if let Some(msisdn) = device.msisdn.clone() {
+            let msisdn = db_msisdn.or_else(|| device.msisdn.clone());
+            if let Some(msisdn) = msisdn {
                 msisdn_to_sim.insert(msisdn, sim_id.clone());
             }
             summaries.insert(
