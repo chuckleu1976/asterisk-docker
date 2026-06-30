@@ -206,9 +206,9 @@ try:
         if smsc and aid:
             reselect_aid(conn, aid)
 
-    # If ICCID is still unknown, derive from IMSI
+    # If ICCID is still unknown, use IMSI as a stable identifier
     if not iccid and imsi:
-        iccid = "imsi:" + imsi
+        iccid = imsi
 
     mcc = imsi[:3] if imsi else None
     mnc = imsi[3:3 + mnc_len] if imsi else None
