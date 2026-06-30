@@ -398,22 +398,26 @@ def update_ami_usim(path, sim):
     print(f"    ami_usim.ini  reader=imsi:{sim['imsi']}")
 
 
+def _pad_mnc(mnc):
+    return mnc.zfill(3) if mnc else mnc
+
 def update_epdg(path, sim, hostname=None):
     mcc, mnc, imsi = sim['mcc'], sim['mnc'], sim['imsi']
     if not mcc or not mnc or not imsi:
         print("    [warn] Missing MCC/MNC/IMSI — epdg.conf not updated")
         return
+    mnc3 = _pad_mnc(mnc)
     txt = path.read_text()
     txt = re.sub(
         r'(remote_addrs\s*=\s*)epdg\.epc\.mnc\w+\.mcc\w+\.pub\.3gppnetwork\.org',
-        rf'\g<1>epdg.epc.mnc{mnc}.mcc{mcc}.pub.3gppnetwork.org', txt)
+        rf'\g<1>epdg.epc.mnc{mnc3}.mcc{mcc}.pub.3gppnetwork.org', txt)
     txt = re.sub(
         r'(id\s*=\s*)0\w+@nai\.epc\.mnc\w+\.mcc\w+\.3gppnetwork\.org',
-        rf'\g<1>0{imsi}@nai.epc.mnc{mnc}.mcc{mcc}.3gppnetwork.org', txt)
+        rf'\g<1>0{imsi}@nai.epc.mnc{mnc3}.mcc{mcc}.3gppnetwork.org', txt)
     if hostname:
         txt = re.sub(r'(local_addrs\s*=\s*)\S+', rf'\g<1>{hostname}', txt)
     path.write_text(txt)
-    print(f"    epdg.conf     ePDG=mnc{mnc}.mcc{mcc}, NAI=0{imsi}")
+    print(f"    epdg.conf     ePDG=mnc{mnc3}.mcc{mcc}, NAI=0{imsi}")
 
 
 def update_pjsip(path, sim):
@@ -423,7 +427,7 @@ def update_pjsip(path, sim):
         return
     msisdn = sim['msisdn']
     sms_center = sim.get('sms_center', '')
-    domain = f"ims.mnc{mnc}.mcc{mcc}.3gppnetwork.org"
+    domain = f"ims.mnc{_pad_mnc(mnc)}.mcc{mcc}.3gppnetwork.org"
     txt = path.read_text()
 
     if msisdn:
