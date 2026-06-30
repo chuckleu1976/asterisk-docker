@@ -83,6 +83,8 @@ pub struct ModemManager {
     sim_cards_cache: Arc<RwLock<HashMap<String, SimCard>>>,
     /// Preserved for API parity with the old serial path; always empty now.
     pub unavailable_ports: Vec<(String, u32)>,
+    /// Sender for spawning new transport event-pump tasks at runtime.
+    event_tx: tokio::sync::Mutex<Option<tokio::sync::mpsc::Sender<super::ModemEvent>>>,
     /// Receiver end of the channel that transports push ModemEvents into.
     /// Wrapped in Mutex<Option<...>> so `start_urc_handlers` can take exclusive
     /// ownership.
@@ -271,8 +273,10 @@ impl ModemManager {
             );
         }
 
-        // Drop the spare event_tx so the receiver knows when all transports go away.
-        drop(event_tx);
+        // Keep a clone of event_tx so we can spawn new transports at runtime
+        // (rescan_sims). The original in the struct stays alive until the
+        // manager is dropped; transports hold their own clones.
+        let event_tx_clone = event_tx.clone();
 
         if transports.is_empty() {
             return Err(anyhow::anyhow!(
@@ -295,6 +299,7 @@ impl ModemManager {
                 .unwrap_or_else(|| std::path::PathBuf::from("/home/ht/docker/logs")),
             sim_cards_cache: Arc::new(RwLock::new(HashMap::new())),
             unavailable_ports: Vec::new(),
+            event_tx: tokio::sync::Mutex::new(Some(event_tx_clone)),
             event_rx: tokio::sync::Mutex::new(Some(event_rx)),
         };
 
@@ -566,13 +571,87 @@ impl ModemManager {
         self.transport_for(sim_id).await?.sms_storage_status().await
     }
 
+    // ─── Runtime rescan ──────────────────────────────────────────────────────
+
+    /// Check sim_inventory.db for new readers and spawn transports for any that
+    /// are not yet managed. Safe to call repeatedly.
+    pub async fn rescan_sims(&self) {
+        let Some(tx) = self.event_tx.lock().await.clone() else {
+            log::warn!("rescan_sims: event_tx already taken");
+            return;
+        };
+        let existing: std::collections::HashSet<String> =
+            self.transports.read().await.keys().cloned().collect();
+
+        for (reader_idx, iccid, imsi, msisdn, mcc, mnc) in sim_inventory::get_all_sims() {
+            if existing.contains(&iccid) {
+                continue;
+            }
+            let instance = reader_idx + 1;
+            match sim_inventory::get_reader_status(reader_idx) {
+                Ok(Some(status)) if status == "empty" || status == "error" => continue,
+                _ => {}
+            }
+            let sim_id = iccid.clone();
+            let label = format!("asterisk{}", instance);
+            let ims_domain = format!("ims.mnc{:0>3}.mcc{}.3gppnetwork.org", mnc, mcc);
+            let transport = super::ami_transport::AmiTransport::spawn(
+                super::ami_transport::AmiTransportConfig {
+                    sim_id: sim_id.clone(),
+                    sim_info: super::SimInfo {
+                        iccid: Some(iccid.clone()),
+                        imsi: Some(imsi.clone()),
+                        msisdn: Some(msisdn.clone()),
+                        mcc: Some(mcc.clone()),
+                        mnc: Some(mnc.clone()),
+                        sms_center: None,
+                    },
+                    ami: super::ami::AmiConfig {
+                        label: label.clone(),
+                        host: "127.0.0.1".to_string(),
+                        port: 5037u16 + instance as u16,
+                        username: "jolly".to_string(),
+                        secret: "geheim".to_string(),
+                    },
+                    reader_index: instance - 1,
+                    ims_domain: Some(ims_domain),
+                },
+                tx.clone(),
+            );
+            self.transports.write().await.insert(sim_id.clone(), Arc::new(transport));
+            self.instance_by_sim.write().await.insert(sim_id.clone(), instance);
+            if !msisdn.is_empty() {
+                self.msisdn_to_sim.write().await.insert(msisdn.clone(), sim_id.clone());
+            }
+            self.summaries.write().await.insert(
+                sim_id.clone(),
+                ModemSummary {
+                    com_port: label,
+                    baud_rate: 0,
+                },
+            );
+            if let Err(e) = SimCard::find_or_create_with_phone(
+                &sim_id, Some(imsi.clone()), Some(msisdn.clone()),
+            ).await {
+                log::warn!("rescan_sims: failed to upsert sim_card for {}: {}", sim_id, e);
+            }
+            log::info!(
+                "rescan_sims: added transport for reader {} (instance {}, sim_id={})",
+                reader_idx, instance, sim_id
+            );
+        }
+    }
+
     // ─── Event handler ───────────────────────────────────────────────────────
 
     /// Spawn the AMI ModemEvent consumer. Each event is fanned out to the DB,
     /// SSE, webhooks, and (for CallEnded with a recording) the transcription
     /// pipeline. Called exactly once at startup.
+    ///
+    /// Also spawns a periodic (60 s) sim_inventory rescan so newly inserted
+    /// SIMs are discovered without restarting the gateway.
     pub async fn start_urc_handlers(
-        &self,
+        self: &Arc<Self>,
         sse_manager: Arc<SseManager>,
         webhook_manager: Option<webhook::WebhookManager>,
         transcribe_cfg: Option<Arc<TranscribeConfig>>,
@@ -581,6 +660,21 @@ impl ModemManager {
             log::warn!("start_urc_handlers called twice; event consumer already running");
             return;
         };
+        // Periodic rescan of sim_inventory.db for newly inserted SIMs.
+        let weak = Arc::downgrade(self);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+            interval.tick().await; // skip the immediate first tick
+            loop {
+                interval.tick().await;
+                if let Some(mgr) = weak.upgrade() {
+                    mgr.rescan_sims().await;
+                } else {
+                    break;
+                }
+            }
+        });
+
         let sse = sse_manager.clone();
         let wh = webhook_manager.clone();
         let cfg = transcribe_cfg.clone();
