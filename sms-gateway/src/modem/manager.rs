@@ -571,10 +571,9 @@ async fn handle_modem_event(
     match ev {
         ModemEvent::SmsReceived { sim_id, from, body, timestamp } => {
             let contact = extract_phone(&from);
-            // Empty body and no parseable sender is carrier noise (e.g. RP-ACK);
-            // skip persistence but still leave a trace for debugging.
-            if body.is_empty() && contact.is_empty() {
-                log::debug!("[ami {}] SmsReceived dropped (empty from+body)", sim_id);
+            // Empty body is carrier noise (RP-ACK, silent SMS, status checks).
+            if body.is_empty() {
+                log::debug!("[ami {}] SmsReceived dropped (empty body, from={})", sim_id, from);
                 return;
             }
             // Deduplicate: native MessageReceived and dialplan UserEvent SmsReceived
