@@ -933,6 +933,10 @@ impl ModemSMS {
 
         if let Some(contact_id) = contact_id {
             Ok(contact_id)
+        } else if self.contact.is_empty() {
+            // Empty sender — carrier noise (RP-ACK, etc.). Don't create a
+            // spurious contact with empty id/name.
+            Ok(String::new())
         } else {
             // Use the phone number as both id and name so the SMS destination
             // is the actual E.164 number, not a UUID.
