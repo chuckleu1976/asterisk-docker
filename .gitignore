@@ -11,6 +11,8 @@ _backup/
 
 # SQLite DB
 *.db
+*.db-shm
+*.db-wal
 
 # Compiled remsim binaries (platform-specific ARM64)
 remsim/libs/
