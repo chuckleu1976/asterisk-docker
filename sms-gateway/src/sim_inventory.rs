@@ -159,6 +159,35 @@ const OPERATOR_LOOKUP: &[(&str, &str, &str)] = &[
     ("310", "340", "T-Mobile US"),
 ];
 
+/// Returns all readers that have a valid SIM (non-empty ICCID) as a list of
+/// `(reader_idx, iccid, imsi, msisdn, mcc, mnc)` tuples.
+pub fn get_all_sims() -> Vec<(u8, String, String, String, String, String)> {
+    let conn = match open_ro() {
+        Ok(c) => c,
+        Err(_) => return vec![],
+    };
+    let mut stmt = match conn.prepare(
+        "SELECT reader, iccid, imsi, msisdn, mcc, mnc FROM sims WHERE iccid IS NOT NULL AND iccid != ''"
+    ) {
+        Ok(s) => s,
+        Err(_) => return vec![],
+    };
+    let rows = stmt
+        .query_map([], |row| {
+            let reader: u8 = row.get(0)?;
+            let iccid: String = row.get::<_, String>(1)?.trim().to_string();
+            let imsi: String = row.get::<_, String>(2)?.trim().to_string();
+            let msisdn: String = row.get::<_, String>(3)?.trim().to_string();
+            let mcc: String = row.get::<_, String>(4)?.trim().to_string();
+            let mnc: String = row.get::<_, String>(5)?.trim().to_string();
+            Ok((reader, iccid, imsi, msisdn, mcc, mnc))
+        });
+    match rows {
+        Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+        Err(_) => vec![],
+    }
+}
+
 pub fn get_sms_center(reader_index: u8) -> anyhow::Result<Option<String>> {
     let conn = open_ro()?;
     let mut stmt = conn.prepare("SELECT sms_center FROM sims WHERE reader = ?1")?;

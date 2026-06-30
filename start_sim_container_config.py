@@ -353,9 +353,7 @@ def main():
                     sim['msisdn'] = args.msisdn
                 print(f"  IMSI={sim['imsi']}  MSISDN={sim['msisdn'] or '(none)'}")
                 db_save_sim(i, sim)
-                from scripts.sim_docker import update_instance
                 if update_instance(instance, sim) and args.restart:
-                    from scripts.sim_docker import restart_instance
                     restart_instance(instance)
             except Exception as e:
                 print(f"  Skipping: {e}", file=sys.stderr)

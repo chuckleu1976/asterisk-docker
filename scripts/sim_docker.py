@@ -449,17 +449,17 @@ def update_pjsip(path, sim):
             rf'\g<1>{sms_center}@{domain}', txt)
     else:
         txt = re.sub(
-            r'(smsc_uri\s*=\s*sip:[^@]+@)ims\.mnc\d+\.mcc\d+\.3gppnetwork\.org',
+            r'(smsc_uri\s*=\s*sip:[^@]+@)ims\.mnc\w+\.mcc\w+\.3gppnetwork\.org',
             rf'\g<1>{domain}', txt)
     txt = re.sub(
-        r'^(username\s*=\s*)\d+@ims\.mnc\d+\.mcc\d+\.3gppnetwork\.org',
+        r'^(username\s*=\s*)\S+@ims\.mnc\w+\.mcc\w+\.3gppnetwork\.org',
         rf'\g<1>{imsi}@{domain}', txt, flags=re.MULTILINE)
     txt = re.sub(
-        r'(contact\s*=\s*sip:)\d+@ims\.mnc\d+\.mcc\d+\.3gppnetwork\.org',
+        r'(contact\s*=\s*sip:)\S+@ims\.mnc\w+\.mcc\w+\.3gppnetwork\.org',
         rf'\g<1>{imsi}@{domain}', txt)
-    txt = re.sub(r'\[ims\.mnc\d+\.mcc\d+\.3gppnetwork\.org\]',
+    txt = re.sub(r'\[ims\.mnc\w+\.mcc\w+\.3gppnetwork\.org\]',
                  f'[{domain}]', txt)
-    txt = re.sub(r'\[smsoip\.ims\.mnc\d+\.mcc\d+\.3gppnetwork\.org\]',
+    txt = re.sub(r'\[smsoip\.ims\.mnc\w+\.mcc\w+\.3gppnetwork\.org\]',
                  f'[smsoip.{domain}]', txt)
     path.write_text(txt)
     print(f"    pjsip.conf    IMSI={imsi}, MSISDN={msisdn or '(unchanged)'}, domain={domain}")

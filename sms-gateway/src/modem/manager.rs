@@ -98,8 +98,13 @@ impl ModemManager {
         let mut summaries: HashMap<String, ModemSummary> = HashMap::new();
         let mut msisdn_to_sim: HashMap<String, String> = HashMap::new();
 
+        // Track explicitly-configured instances so auto-discovery doesn't
+        // duplicate them.
+        let mut explicit_instances: std::collections::HashSet<u8> = std::collections::HashSet::new();
+
         for (index, device) in config.devices.iter().enumerate() {
             let instance = device.instance.unwrap_or((index + 1) as u8);
+            explicit_instances.insert(instance);
 
             // Skip devices whose reader is marked empty/error in sim_inventory.db.
             let reader_idx = instance - 1;
@@ -190,6 +195,82 @@ impl ModemManager {
                 index, sim_id
             );
         }
+        // ── Auto-discover additional asterisk instances from sim_inventory ──
+        for (reader_idx, iccid, imsi, msisdn, mcc, mnc) in sim_inventory::get_all_sims() {
+            let instance = reader_idx + 1;
+            if explicit_instances.contains(&instance) {
+                continue;
+            }
+            // Skip readers whose status is empty/error.
+            match sim_inventory::get_reader_status(reader_idx) {
+                Ok(Some(status)) if status == "empty" || status == "error" => {
+                    info!(
+                        "Auto-skip reader {} (instance {}): status={}",
+                        reader_idx, instance, status
+                    );
+                    continue;
+                }
+                _ => {}
+            }
+            let sim_id = iccid.clone();
+            let label = format!("asterisk{}", instance);
+            let ims_domain = format!("ims.mnc{:0>3}.mcc{}.3gppnetwork.org", mnc, mcc);
+            let transport = super::ami_transport::AmiTransport::spawn(
+                super::ami_transport::AmiTransportConfig {
+                    sim_id: sim_id.clone(),
+                    sim_info: super::SimInfo {
+                        iccid: Some(iccid.clone()),
+                        imsi: Some(imsi.clone()),
+                        msisdn: Some(msisdn.clone()),
+                        mcc: Some(mcc.clone()),
+                        mnc: Some(mnc.clone()),
+                        sms_center: None,
+                    },
+                    ami: super::ami::AmiConfig {
+                        label: label.clone(),
+                        host: "127.0.0.1".to_string(),
+                        port: 5037u16 + instance as u16,
+                        username: "jolly".to_string(),
+                        secret: "geheim".to_string(),
+                    },
+                    reader_index: instance - 1,
+                    ims_domain: Some(ims_domain),
+                },
+                event_tx.clone(),
+            );
+            transports.insert(sim_id.clone(), Arc::new(transport));
+            instance_by_sim.insert(sim_id.clone(), instance);
+            if !msisdn.is_empty() {
+                msisdn_to_sim.insert(msisdn.clone(), sim_id.clone());
+            }
+            summaries.insert(
+                sim_id.clone(),
+                ModemSummary {
+                    com_port: label,
+                    baud_rate: 0,
+                },
+            );
+            // Ensure a sim_cards row exists so /api/sim-cards returns this SIM.
+            if let Err(e) = SimCard::find_or_create_with_phone(
+                &sim_id,
+                Some(imsi.clone()),
+                Some(msisdn.clone()),
+            )
+            .await
+            {
+                log::warn!(
+                    "Auto-discovered: failed to upsert sim_card for {}: {}",
+                    sim_id,
+                    e
+                );
+            }
+
+            info!(
+                "Auto-discovered AMI transport for reader {} (instance {}, sim_id={})",
+                reader_idx, instance, sim_id
+            );
+        }
+
         // Drop the spare event_tx so the receiver knows when all transports go away.
         drop(event_tx);
 
