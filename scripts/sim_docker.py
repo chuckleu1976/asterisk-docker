@@ -400,12 +400,15 @@ def update_ami_usim(path, sim):
 
 def update_epdg(path, sim, hostname=None):
     mcc, mnc, imsi = sim['mcc'], sim['mnc'], sim['imsi']
+    if not mcc or not mnc or not imsi:
+        print("    [warn] Missing MCC/MNC/IMSI — epdg.conf not updated")
+        return
     txt = path.read_text()
     txt = re.sub(
-        r'(remote_addrs\s*=\s*)epdg\.epc\.mnc\d+\.mcc\d+\.pub\.3gppnetwork\.org',
+        r'(remote_addrs\s*=\s*)epdg\.epc\.mnc\w+\.mcc\w+\.pub\.3gppnetwork\.org',
         rf'\g<1>epdg.epc.mnc{mnc}.mcc{mcc}.pub.3gppnetwork.org', txt)
     txt = re.sub(
-        r'(id\s*=\s*)0\d+@nai\.epc\.mnc\d+\.mcc\d+\.3gppnetwork\.org',
+        r'(id\s*=\s*)0\w+@nai\.epc\.mnc\w+\.mcc\w+\.3gppnetwork\.org',
         rf'\g<1>0{imsi}@nai.epc.mnc{mnc}.mcc{mcc}.3gppnetwork.org', txt)
     if hostname:
         txt = re.sub(r'(local_addrs\s*=\s*)\S+', rf'\g<1>{hostname}', txt)
@@ -415,6 +418,9 @@ def update_epdg(path, sim, hostname=None):
 
 def update_pjsip(path, sim):
     mcc, mnc, imsi = sim['mcc'], sim['mnc'], sim['imsi']
+    if not mcc or not mnc or not imsi:
+        print("    [warn] Missing MCC/MNC/IMSI — pjsip.conf not updated")
+        return
     msisdn = sim['msisdn']
     sms_center = sim.get('sms_center', '')
     domain = f"ims.mnc{mnc}.mcc{mcc}.3gppnetwork.org"
@@ -429,17 +435,17 @@ def update_pjsip(path, sim):
         print("    [warn] MSISDN not on card — callerid/from_user unchanged")
 
     txt = re.sub(
-        r'(server_uri\s*=\s*sip:)ims\.mnc\d+\.mcc\d+\.3gppnetwork\.org',
+        r'(server_uri\s*=\s*sip:)ims\.mnc\w+\.mcc\w+\.3gppnetwork\.org',
         rf'\g<1>{domain}', txt)
     txt = re.sub(
-        r'(client_uri\s*=\s*sip:)\d+@ims\.mnc\d+\.mcc\d+\.3gppnetwork\.org',
+        r'(client_uri\s*=\s*sip:)\w+@ims\.mnc\w+\.mcc\w+\.3gppnetwork\.org',
         rf'\g<1>{imsi}@{domain}', txt)
     txt = re.sub(
-        r'^(from_domain\s*=\s*)ims\.mnc\d+\.mcc\d+\.3gppnetwork\.org',
+        r'^(from_domain\s*=\s*)ims\.mnc\w+\.mcc\w+\.3gppnetwork\.org',
         rf'\g<1>{domain}', txt, flags=re.MULTILINE)
     if sms_center:
         txt = re.sub(
-            r'(smsc_uri\s*=\s*sip:)[^@]+@ims\.mnc\d+\.mcc\d+\.3gppnetwork\.org',
+            r'(smsc_uri\s*=\s*sip:)[^@]+@ims\.mnc\w+\.mcc\w+\.3gppnetwork\.org',
             rf'\g<1>{sms_center}@{domain}', txt)
     else:
         txt = re.sub(
