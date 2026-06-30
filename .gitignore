@@ -23,6 +23,17 @@ remsim/serial/
 *.pyc
 __pycache__/
 
+# Session notes / scratch files
+session/
+*_session.txt
+*.bak
+
+# Test / debug output
+test_api.log
+debug_*.txt
+porting_*.txt
+recompile_*.txt
+
 # Generated compose file
 compose.yaml
 
@@ -31,3 +42,4 @@ config/[1-9]/
 
 # Log directories
 ../logs/
+logs/
