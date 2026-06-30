@@ -590,6 +590,33 @@ impl ModemManager {
         let existing: std::collections::HashSet<String> =
             self.transports.read().await.keys().cloned().collect();
 
+        // ── Remove transports whose reader is now empty/error ──
+        {
+            let instance_by_sim = self.instance_by_sim.read().await;
+            let mut to_remove: Vec<String> = Vec::new();
+            for sim_id in &existing {
+                if let Some(&inst) = instance_by_sim.get(sim_id) {
+                    let reader_idx = inst - 1;
+                    match sim_inventory::get_reader_status(reader_idx) {
+                        Ok(Some(status)) if status == "empty" || status == "error" => {
+                            to_remove.push(sim_id.clone());
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            drop(instance_by_sim);
+            for sim_id in &to_remove {
+                log::info!("rescan_sims: removing stale transport {}", sim_id);
+                self.transports.write().await.remove(sim_id);
+                if let Some(inst) = self.instance_by_sim.write().await.remove(sim_id) {
+                    // Also remove msisdn mapping
+                    self.msisdn_to_sim.write().await.retain(|_, v| v != sim_id);
+                }
+                self.summaries.write().await.remove(sim_id);
+            }
+        }
+
         for (reader_idx, iccid, imsi, msisdn, mcc, mnc) in sim_inventory::get_all_sims() {
             if existing.contains(&iccid) {
                 continue;
