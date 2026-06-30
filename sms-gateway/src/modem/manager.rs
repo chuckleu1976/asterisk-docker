@@ -198,6 +198,9 @@ impl ModemManager {
             );
         }
         // ── Auto-discover additional asterisk instances from sim_inventory ──
+        // Track com_ports already claimed so we don't duplicate when DB ICCID changes.
+        let mut used_labels: std::collections::HashSet<String> =
+            summaries.values().map(|s| s.com_port.clone()).collect();
         for (reader_idx, iccid, imsi, msisdn, mcc, mnc) in sim_inventory::get_all_sims() {
             let instance = reader_idx + 1;
             if explicit_instances.contains(&instance) {
@@ -216,6 +219,10 @@ impl ModemManager {
             }
             let sim_id = iccid.clone();
             let label = format!("asterisk{}", instance);
+            if used_labels.contains(&label) {
+                continue;
+            }
+            used_labels.insert(label.clone());
             let ims_domain = format!("ims.mnc{:0>3}.mcc{}.3gppnetwork.org", mnc, mcc);
             let transport = super::ami_transport::AmiTransport::spawn(
                 super::ami_transport::AmiTransportConfig {

@@ -1,0 +1,356 @@
+================================================================================
+  recompile_asterisk_sms — clean-machine install for the merged repo
+================================================================================
+
+This guide installs the merged asterisk-docker + sms-gateway project on a
+clean Ubuntu 24.04 x86_64 machine, builds both halves from source, and runs
+them together.
+
+Both projects now live in ONE repo:
+
+  https://github.com/chuckleu1976/asterisk-docker
+
+Layout after clone:
+
+  asterisk-docker/                   <- Docker stack (Asterisk + PC/SC + IMS)
+  asterisk-docker/sms-gateway/       <- Rust API + Svelte frontend
+
+The Docker stack provides per-SIM Asterisk containers exposing AMI on ports
+5038, 5039, .... The sms-gateway connects to those AMI ports and serves the
+web dashboard on http://127.0.0.1:8080.
+
+================================================================================
+  0) Conventions
+================================================================================
+
+  HOST_USER  = the Linux user you log in as (example: ht)
+  WORKDIR    = $HOME/docker                                (any path is fine)
+  REPO       = $WORKDIR/asterisk-docker
+  SMSGW      = $REPO/sms-gateway
+  LOGS_DIR   = $WORKDIR/logs                               (call recordings)
+
+Open a fresh terminal and set them:
+
+  export WORKDIR=$HOME/docker
+  export REPO=$WORKDIR/asterisk-docker
+  export SMSGW=$REPO/sms-gateway
+  export LOGS_DIR=$WORKDIR/logs
+  mkdir -p "$WORKDIR" "$LOGS_DIR"
+
+================================================================================
+  1) System prerequisites
+================================================================================
+
+  sudo apt update
+  sudo apt install -y \
+      ca-certificates curl gnupg lsb-release git build-essential pkg-config \
+      python3 python3-pip python3-venv python3-pyscard \
+      pcscd libpcsclite-dev libpcsclite1 libccid pcsc-tools \
+      libssl-dev libsqlite3-dev ffmpeg openssl uidmap
+
+Enable the PC/SC daemon and confirm it sees your reader:
+
+  sudo systemctl enable --now pcscd
+  pcsc_scan        # Ctrl+C to exit after you see the reader name
+
+================================================================================
+  2) Docker Engine + Compose plugin
+================================================================================
+
+  sudo install -m 0755 -d /etc/apt/keyrings
+  curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+      | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+  echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
+https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" \
+      | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+  sudo apt update
+  sudo apt install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+  sudo systemctl enable --now docker
+  sudo usermod -aG docker "$USER"
+  # log out and back in, then verify:
+  docker --version && docker compose version
+
+================================================================================
+  3) Rust toolchain (for sms-gateway backend)
+================================================================================
+
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+  source "$HOME/.cargo/env"
+  rustc --version    # 1.74 or newer is fine
+
+================================================================================
+  4) Node.js + pnpm (for sms-gateway frontend)
+================================================================================
+
+Install Node 20 via NodeSource:
+
+  curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+  sudo apt install -y nodejs
+  sudo corepack enable
+  corepack prepare pnpm@latest --activate
+  node --version && pnpm --version
+
+================================================================================
+  5) Clone the merged repository
+================================================================================
+
+  cd "$WORKDIR"
+  git clone https://github.com/chuckleu1976/asterisk-docker.git
+  cd "$REPO"
+
+You now have:
+
+  $REPO/             <- Docker stack files (compose.yaml, asterisk/, pcscd/, ...)
+  $SMSGW/            <- Rust + Svelte sms-gateway
+
+================================================================================
+  6) Build the Asterisk Docker images
+================================================================================
+
+  cd "$REPO"
+  bash build-images.sh            # builds the asterisk and pcscd images
+
+If you need to rebuild later after editing a Dockerfile, run the same command
+or `docker compose build --no-cache <service>`.
+
+================================================================================
+  7) Configure SIM readers and per-instance Asterisk
+================================================================================
+
+A. Map readers to instances and IMEIs.
+
+  nano "$REPO/devices.toml"
+
+Example (one entry per reader you plan to use):
+
+  [[readers]]
+  P0 = "asterisk1"
+  IMEI = 359801043400751
+
+  [[readers]]
+  P1 = "asterisk2"
+  IMEI = 353295065048026
+
+P0/P1/... are the reader indexes shown by `pcsc_scan`.
+
+B. Create per-instance configs from the example template.
+
+  cd "$REPO"
+  cp -r config/example config/1
+  cp -r config/example config/2    # repeat for each instance you defined
+
+C. Fill in carrier/SIM-specific values in each config/<N>/ tree:
+
+  - config/<N>/ami_usim.ini           IMSI, AMI password
+  - config/<N>/asterisk/pjsip.conf    carrier domain, SIP password, IMEI
+  - config/<N>/asterisk/extensions.conf  dialplan, optional Telegram chat id
+  - config/<N>/epdg.conf              MCC/MNC, carrier ePDG addresses
+  - config/<N>/telegram_token         your bot token (or leave blank)
+
+Generate a self-signed TLS cert for Asterisk (per instance):
+
+  openssl req -x509 -newkey rsa:4096 -nodes -days 3650 \
+      -keyout config/1/asterisk/certificate.key \
+      -out    config/1/asterisk/certificate.crt \
+      -subj "/CN=asterisk"
+
+D. Recording / log directory expected by the compose stack:
+
+  mkdir -p "$LOGS_DIR/1" "$LOGS_DIR/2"
+
+================================================================================
+  8) Start the Asterisk stack (SIM-driven, recommended)
+================================================================================
+
+This probes the readers first and starts ONLY the containers that have a SIM.
+
+  cd "$REPO"
+  export SIM_MODE=local
+  python3 start_sim_container_config.py --setup --watch
+
+To stop watching: Ctrl+C (the containers keep running).
+
+Manual alternative if you want every defined instance up regardless of SIM
+presence:
+
+  export SIM_MODE=local
+  docker compose up -d --build
+
+Verify:
+
+  docker compose ps
+  docker compose logs -f asterisk          # registration progress
+  # look for: "Registered" against the configured pjsip endpoint
+
+================================================================================
+  9) Build the sms-gateway (frontend + backend)
+================================================================================
+
+A. Build the Svelte frontend (RustEmbed embeds the dist into the binary):
+
+  cd "$SMSGW/frontend"
+  pnpm install
+  pnpm build
+  # Output: $SMSGW/frontend/dist/{index.html, assets/*}
+
+B. Build the Rust backend in release mode:
+
+  cd "$SMSGW"
+  cargo build --release
+  # Output: $SMSGW/target/release/sms-gateway
+
+================================================================================
+  10) Configure the sms-gateway
+================================================================================
+
+  cd "$SMSGW"
+  cp config.toml.example config.toml
+  nano config.toml
+
+Minimum config that pairs with the two-instance example above:
+
+  [settings]
+  server_host         = "127.0.0.1"
+  server_port         = 8080
+  username            = "admin"
+  password            = "change-me"
+  read_sms_frequency  = 30
+  recordings_base_dir = "/home/ht/docker/logs"    # = $LOGS_DIR
+
+  [[devices]]
+  instance = 1                                    # AMI port 5038
+  iccid    = "8901240387150170144"
+  imsi     = "310240385017144"
+  msisdn   = "+18165537405"
+
+  [[devices]]
+  instance = 2                                    # AMI port 5039
+  iccid    = "8901240387150170530"
+  imsi     = "310240385017053"
+  msisdn   = "+18165537217"
+
+Replace the ICCID / IMSI / MSISDN values with what `pcsc_scan` and your SIM
+provisioning report. The instance number must match the per-instance config
+folder (config/1, config/2, ...) and the AMI port is 5037 + instance.
+
+The AMI username and secret default to "jolly" / "geheim"; if you changed
+them in `config/<N>/asterisk/manager.conf`, set `ami_user` and `ami_secret`
+in each `[[devices]]` block.
+
+================================================================================
+  11) Run the sms-gateway
+================================================================================
+
+Foreground (for testing):
+
+  cd "$SMSGW"
+  mkdir -p logs
+  ./target/release/sms-gateway -c ./config.toml -l ./logs --log-level info
+
+You should see, within a few seconds:
+
+  Registered AMI transport for device 0 (sim_id=...)
+  Registered AMI transport for device 1 (sim_id=...)
+  Initialized 2 AMI transport(s)
+  [ami asterisk1@127.0.0.1:5038] logged in
+  [ami asterisk2@127.0.0.1:5039] logged in
+
+Background (detached):
+
+  cd "$SMSGW"
+  nohup ./target/release/sms-gateway \
+        -c ./config.toml -l ./logs --log-level info \
+        > /tmp/sms-gateway.log 2>&1 &
+
+================================================================================
+  12) Verify the web UI
+================================================================================
+
+  curl -i http://127.0.0.1:8080/ | head
+  # expect HTTP/1.1 200 OK and an HTML body referencing /assets/index-*.js
+
+Open in a browser:
+
+  http://127.0.0.1:8080
+
+Log in with the username and password from `config.toml [settings]`. The SIM
+dashboard should list each configured instance with its COM port (shown as
+`ami:127.0.0.1:<port>`), phone number, IMSI, and call/SMS stats.
+
+================================================================================
+  13) Optional: run sms-gateway as a systemd service
+================================================================================
+
+A reference unit lives at:
+
+  $SMSGW/contrib/systemd/sms-gateway.service
+
+Edit the paths in that file to match your install, then:
+
+  sudo cp "$SMSGW/contrib/systemd/sms-gateway.service" /etc/systemd/system/
+  sudo systemctl daemon-reload
+  sudo systemctl enable --now sms-gateway
+  sudo systemctl status sms-gateway
+
+================================================================================
+  14) Common troubleshooting
+================================================================================
+
+- "No PC/SC readers" inside containers:
+    sudo systemctl restart pcscd
+    docker compose restart pcscd
+    pcsc_scan         # must list the reader on the host first
+
+- Asterisk registration stays at "Sent"/"Rejected":
+    Double-check IMSI / MSISDN / MCC / MNC / SMSC and the SIP password.
+    Inspect: docker compose logs -f asterisk
+
+- "Permission denied (os error 13)" from sms-gateway:
+    The binary tries /var/lib/sms-gateway first and falls back to ./data.
+    Either run it from a directory where ./data is writable, or
+    `sudo mkdir -p /var/lib/sms-gateway && sudo chown $USER /var/lib/sms-gateway`.
+
+- Frontend shows a blank page:
+    Rebuild it: `cd $SMSGW/frontend && pnpm install && pnpm build`
+    then rebuild the Rust binary so the assets are re-embedded:
+    `cd $SMSGW && cargo build --release` and restart the binary.
+
+- pnpm install fails with 404 on registry.npmmirror.com:
+    The lockfile is already pinned to https://registry.npmjs.org/. Run:
+    `pnpm install --registry=https://registry.npmjs.org`
+
+- AMI logins fail:
+    Confirm the per-instance `config/<N>/asterisk/manager.conf` user/secret
+    match `[[devices]] ami_user / ami_secret` in `sms-gateway/config.toml`.
+
+================================================================================
+  15) Useful day-to-day commands
+================================================================================
+
+  # Docker stack
+  cd $REPO
+  docker compose ps
+  docker compose logs -f asterisk
+  docker compose restart asterisk
+  docker compose down
+
+  # SIM-driven bootstrap / monitor
+  cd $REPO && python3 start_sim_container_config.py --list
+  cd $REPO && python3 start_sim_container_config.py --setup --watch
+
+  # sms-gateway
+  cd $SMSGW
+  cargo build --release
+  cd frontend && pnpm build && cd ..
+  ./target/release/sms-gateway -c ./config.toml -l ./logs --log-level info
+
+  # Pull updates from GitHub
+  cd $REPO && git pull --ff-only
+
+================================================================================
+  Notes
+================================================================================
+
+This stack is intended for evaluation and lab use. Carrier-specific tuning
+(IMS/ePDG addresses, ciphering, SMSC format) is expected and varies by
+operator and SIM profile.

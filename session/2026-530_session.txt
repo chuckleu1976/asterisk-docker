@@ -1,0 +1,225 @@
+================================================================================
+SESSION LOG: 2026-05-30
+Project: asterisk-docker (VoWiFi/VoLTE ePDG with Asterisk + StrongSwan)
+Workspace: /home/ht/docker/asterisk-docker
+GitHub: https://github.com/chuckleu1976/asterisk-docker.git
+================================================================================
+
+--------------------------------------------------------------------------------
+OBJECTIVE
+--------------------------------------------------------------------------------
+1. Pull Docker images from Docker Hub (phcodercat/pcscd, phcodercat/asterisk-vowifi)
+2. Save them locally as tarballs
+3. Rebuild asterisk-vowifi from source (Dockerfile)
+4. Start all containers and verify VoWiFi/IMS registration
+
+--------------------------------------------------------------------------------
+DOCKER IMAGES
+--------------------------------------------------------------------------------
+phcodercat/pcscd
+  - Digest: sha256:c517dfc90ef38483eff86b80c72e2c0908b25a39ad6767451cd7e2b53c13e7df
+  - Saved: /home/ht/docker/pcscd.tar (183MB)
+  - Built from: fedora:latest + dnf install pcsc-lite pcsc-tools dbus-daemon
+  - No compilation needed — pure package install
+
+phcodercat/asterisk-vowifi
+  - Digest: sha256:bfedc8c91d16f18a25c79f3f72a8724db48c68ef133a336fff3b71abe555f00c (original)
+  - Saved: /home/ht/docker/asterisk-vowifi.tar (813MB)
+  - Rebuilt: SHA e7a48d7ab5fa, 1.08GB, created 2026-05-30T17:10:27+08:00
+  - Contains: Asterisk 20.7.0, StrongSwan 5.9.3 (sysmocom ePDG fork)
+
+--------------------------------------------------------------------------------
+KEY PROBLEM: Anubis Bot-Protection on gitea.sysmocom.de
+--------------------------------------------------------------------------------
+- gitea.sysmocom.de returns HTTP 200 with content-type: text/html (JS challenge)
+  for ALL requests, including git clone and git-upload-pack
+- This blocks both direct git clone and Docker build-time git clone
+- git ls-remote: "not valid: could not determine hash algorithm"
+- curl -sI shows: content-type: text/html; charset=utf-8 (should be application/x-git-upload-pack-advertisement)
+- gitea.osmocom.org: No Anubis protection — StrongSwan clone works fine
+
+SOLUTION: Multi-stage Dockerfile
+  Stage 1: FROM phcodercat/asterisk-vowifi AS source
+    - Reuse pre-cloned pjproject + asterisk sources from existing image
+    - cherry-pick already applied in existing image
+  Stage 2: FROM fedora:latest
+    - COPY --from=source /home/asterisk-build/pjproject
+    - COPY --from=source /home/asterisk-build/asterisk
+    - make distclean || true (clean stale build artifacts from old container env)
+    - sh bootstrap.sh && ln -sf ../../../pjproject && ./configure && make && make install
+
+Source sizes in existing image:
+  /home/asterisk-build/pjproject    227MB
+  /home/asterisk-build/asterisk     645MB
+  /home/asterisk-build/strongswan-epdg  183MB
+
+--------------------------------------------------------------------------------
+DOCKERFILE CHANGES (asterisk/Dockerfile)
+--------------------------------------------------------------------------------
+Added at top:
+  # Stage 1: use the existing image as source for pjproject and asterisk
+  # (gitea.sysmocom.de is protected by Anubis bot-protection and blocks git clone)
+  FROM phcodercat/asterisk-vowifi AS source
+
+  # Stage 2: fresh build from source
+  FROM fedora:latest
+
+Replaced git clone block with:
+  COPY --from=source /home/asterisk-build/pjproject /home/asterisk-build/pjproject
+  COPY --from=source /home/asterisk-build/asterisk /home/asterisk-build/asterisk
+  RUN cd asterisk && \
+      make distclean || true && \
+      sh bootstrap.sh && \
+      ln -sf ../../../pjproject third-party/pjproject/source && \
+      ./configure --enable-binary-modules && \
+      make menuselect/menuselect menuselect-tree menuselect.makeopts && \
+      make -j$(nproc) && \
+      make install
+
+Changed: ln -s → ln -sf (force, to avoid "already exists" error in new env)
+
+StrongSwan clone from gitea.osmocom.org (no Anubis) — left unchanged.
+
+Build command:
+  sudo docker build -t phcodercat/asterisk-vowifi ./asterisk/ \
+    2>&1 | tee /home/ht/docker/build-asterisk.log
+
+Build result: SUCCESS, exit code 0
+
+--------------------------------------------------------------------------------
+IPTABLES PROBLEM & SOLUTION
+--------------------------------------------------------------------------------
+PROBLEM:
+  Docker creates one iptables DNAT rule per port in a mapped range.
+  Original compose.yaml:
+    asterisk:  ports 10000-11000:10000-11000/udp  → 1001 rules
+    asterisk2: ports 11001-12001:11001-12001/udp  → 1001 rules
+  Total: 2002 rules, ~1s/rule = 23+ minutes per docker compose up
+
+OPTION A (Recommended, not implemented): Switch to nftables backend
+  - /etc/docker/daemon.json: add "iptables": "nftables"
+  - nftables handles ranges as single rule
+  - Requires Docker 25+, kernel nftables support
+
+OPTION B (not implemented): network_mode: host
+  - Zero NAT rules, instant startup
+  - Requires Asterisk port config changes per container
+
+OPTION C (IMPLEMENTED): Reduce RTP port range to 20 ports
+  Files changed:
+    compose.yaml:
+      asterisk:  10000-11000:10000-11000/udp → 10000-10019:10000-10019/udp
+      asterisk2: 11001-12001:11001-12001/udp → 11001-11020:10000-10019/udp
+    config/1/asterisk/rtp.conf:  rtpend=11000 → rtpend=10019
+    config/2/asterisk/rtp.conf:  rtpend=11000 → rtpend=10019
+    config/example/asterisk/rtp.conf: rtpend=11000 → rtpend=10019 (committed)
+
+  Result:
+    Old startup: asterisk-1=423s, asterisk2=1387s
+    New startup: asterisk-1=6.7s,  asterisk2=3.8s
+
+  Note: 20 ports = 10 RTP+RTCP pairs = 10 simultaneous calls per SIM
+  One-time cost to remove old rules: ~1449s (compose down ran through old rules)
+
+--------------------------------------------------------------------------------
+CONTAINER ARCHITECTURE
+--------------------------------------------------------------------------------
+Services:
+  pcscd
+    image: phcodercat/pcscd
+    volumes: pcsc-sock:/run/pcscd
+    devices: /dev/bus/usb (USB SIM card readers)
+    restart: always
+
+  asterisk (SIM #1)
+    image: phcodercat/asterisk-vowifi
+    ports: 5060:5060/udp, 10000-10019:10000-10019/udp
+    volumes:
+      - ./config/1/epdg.conf → /usr/local/etc/swanctl/conf.d/epdg.conf
+      - ./config/1/asterisk  → /etc/asterisk
+      - ./config/1/ami_usim.ini → /usr/local/etc/ami_usim.ini
+      - ./config/1/telegram_token → /usr/local/etc/telegram_token
+      - ../logs/1 → /logs
+      - pcsc-sock:/run/pcscd
+    pid: service:pcscd
+    cap_add: CAP_NET_ADMIN
+    devices: /dev/net/tun
+
+  asterisk2 (SIM #2)
+    image: phcodercat/asterisk-vowifi
+    ports: 5061:5060/udp, 11001-11020:10000-10019/udp
+    volumes:
+      - ./config/2/epdg.conf → /usr/local/etc/swanctl/conf.d/epdg.conf
+      - ./config/2/asterisk  → /etc/asterisk
+      - etc...
+    pid: service:pcscd
+
+entrypoint.sh sequence:
+  1. sleep 3
+  2. ipsec start
+  3. sleep 2
+  4. swanctl --load-creds && --load-conns && --initiate --child ims
+  5. swanctl --log &
+  6. (backoff loop: restart ims SA if it drops) &
+  7. python3 /usr/local/bin/ami_usim.py /usr/local/etc/ami_usim.ini &
+  8. asterisk -f
+
+--------------------------------------------------------------------------------
+IMS/VoWiFi CONNECTIVITY
+--------------------------------------------------------------------------------
+Protocol: IKEv2 (StrongSwan) → ePDG → IMS core (T-Mobile)
+ePDG hostname: epdg.epc.mnc240.mcc310.pub.3gppnetwork.org
+  (DNS load-balanced, multiple IPs e.g. 208.54.39.35, 208.54.2.163)
+
+SIM #1 (asterisk-1):
+  IMSI: 310240385017053
+  EAP-AKA auth: 0310240385017053@nai.epc.mnc240.mcc310.3gppnetwork.org
+  IPsec: ESTABLISHED to 208.54.39.35[4500] (IPv6)
+  Ciphers: 3DES_CBC/HMAC_SHA1_96/PRF_AES128_XCBC/MODP_2048
+  SIP: Registered to sip:ims.mnc240.mcc310.3gppnetwork.org
+
+SIM #2 (asterisk2):
+  IMSI: 310240385017144
+  SIP: Registered to sip:ims.mnc240.mcc310.3gppnetwork.org (exp. 2991s)
+  Note: Initial config/2 had wrong ePDG IP (208.54.2.163 unreachable).
+        User rewrote config/2 files — registration succeeded after restart.
+
+--------------------------------------------------------------------------------
+FINAL CONTAINER STATUS
+--------------------------------------------------------------------------------
+asterisk-docker-pcscd-1     Up
+asterisk-docker-asterisk-1  Up  — SIP Registered (IMSI 310240385017053)
+asterisk-docker-asterisk2-1 Up  — SIP Registered (IMSI 310240385017144)
+
+--------------------------------------------------------------------------------
+CRITICAL WARNING
+--------------------------------------------------------------------------------
+NEVER run: asterisk -rx "module reload res_pjsip.so" on live containers
+→ Causes PJSIP deadlock → Docker daemon freeze → requires full system reboot
+
+--------------------------------------------------------------------------------
+GIT COMMIT
+--------------------------------------------------------------------------------
+Commit: 73a1d11
+Branch: main
+Message: "Reduce RTP port range to 20 ports; fix Dockerfile for Anubis-blocked gitea"
+Files:
+  asterisk/Dockerfile          (multi-stage build workaround)
+  compose.yaml                 (RTP range 1001→20 ports)
+  config/example/asterisk/rtp.conf  (rtpend=10019)
+Remote: https://github.com/chuckleu1976/asterisk-docker.git
+Push: 53ebf19..73a1d11  main -> main
+
+--------------------------------------------------------------------------------
+NOTES ON config/ GITIGNORE
+--------------------------------------------------------------------------------
+.gitignore excludes:
+  config/1/
+  config/2/
+  logs/
+Only config/example/ is tracked in git.
+Changes to config/1/ and config/2/ must be managed manually.
+
+================================================================================
+END OF SESSION
+================================================================================

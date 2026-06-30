@@ -1,0 +1,101 @@
+2026-06-30 Session Log
+========================
+
+=== 1. What did we do so far? ===
+
+User asked for anchored summary of everything done. Provided full status:
+- Registration state staleness fix (tokio::select! biased, 30s refresh)
+- Empty MixMonitor recording fix (removed bridged-only option)
+- Recording ingest timing + dedup
+- find_or_create() fix (contact id = name)
+- get_contact_id() fix
+- calleridnum fix for MessageReceived handler
+- trust_id_inbound=yes added
+- Dedup for native + UserEvent race
+- Current issue: dialplan CUT -2 bug makes SMS_FROM empty
+
+=== 2. Fix dialplan CUT bug + CALLERID(num) fallback ===
+
+Changed config/example/asterisk/extensions.conf, config/1/, config/2/:
+
+Old (buggy):
+  same => n,Set(SMS_FROM=${CUT(CUT(SMS_FROM,@,1),:,2)})
+  same => n,Set(SMS_FROM=${CUT(SMS_FROM,>,1)})
+  same => n,Set(SMS_FROM=${CUT(SMS_FROM,<,-2)})
+
+New with CALLERID(num) fallback + CUT chain:
+  same => n,Set(SMS_FROM=${IF($["${SMS_FROM}"!=""]?${SMS_FROM}:${CALLERID(num)})})
+  same => n,Set(SMS_FROM=${CUT(CUT(SMS_FROM,<,2),>,1)})
+  same => n,Set(SMS_FROM=${CUT(CUT(SMS_FROM,@,1),:,2)})
+
+Reloaded dialplan on both containers, restarted gateway.
+Also added empty contact guard in db.rs get_contact_id().
+
+Committed dc70b0c.
+
+=== 3. Test SMS still has empty contact_id ===
+
+SMS 155 arrived but showed empty contact_id.
+Discovered: FILTER(SMS_FROM,0123456789+) was wrong!
+FILTER(allowed_chars, string) — first arg is allowed chars, second is string.
+FILTER(SMS_FROM,0123456789+) treats "SMS_FROM" (literal text) as allowed chars
+and "0123456789+" as the string to filter!
+
+Changed to:
+- FILTER(0123456789+,${SMS_FROM})
+- GotoIf fallback chain instead of IF
+
+=== 4. Working fix confirmed ===
+
+SMS 157: contact_id = +18165537405 ✓
+Applied to config/1/, config/2/, reloaded, gateways restarted.
+Cleaned up SMS 155-156 (stale empty-contact rows).
+Committed 1346d1c.
+
+=== 5. SIM swap caused asterisk1 Rejected ===
+
+User: "I have change the sim card in p1, and found looks like it effected
+the ims registration status in p0, and asterisk1 show reject please found
+out the reason."
+
+Investigation findings:
+- asterisk1 showed: ims.mncNone.mccNone.3gppnetwork.org (Rejected)
+- asterisk2 showed: ims.mnc240.mcc310.3gppnetwork.org (Registered)
+- File contents had mncNone.mccNone throughout pjsip.conf and epdg.conf
+
+Root cause: read_sim() returns valid JSON dict even when IMSI read fails
+(imsi=None, mcc=None, mnc=None). The update_epdg/pjsip functions don't
+validate and write mncNone.mccNone. Once written, regex \d+ never matches
+None, so re-running setup can never fix it.
+
+Trigger: Sim swap triggered container restart via watch loop, loaded
+already-corrupted config.
+
+Fixes:
+1. scripts/sim_docker.py: Added validation guards (skip update if missing)
+2. Changed regex \d+ to \w+ to match None for recovery
+3. Directly sed-fixed config/1/epdg.conf and config/1/asterisk/pjsip.conf
+4. Force-recreated container
+
+Confirmed asterisk1 Registered on ims.mnc240.mcc310.3gppnetwork.org.
+Committed d794fcc.
+
+=== 6. User questioned pcscd reset theory ===
+
+User: "why I swap P1 sim cause pcsd to reset it should not be right"
+
+Checked pcscd logs — pcscd had 16h uptime, no restart.
+Confirmed P1 SIM swap did NOT cause pcscd reset.
+Re-explained: the corruption was pre-existing from a prior read_sim failure
+(None IMSI). The P1 swap merely triggered a container restart that loaded
+the already-broken config. Coincidental timing, not causal.
+
+=== 7. Final commits ===
+
+All changes pushed to GitHub:
+  d794fcc Fix regex to match mncNone/mccNone; guard against None values
+           in update_epdg/pjsip
+  1346d1c Fix FILTER arg order: allowed-chars must be first arg,
+           use ${var} expansion
+  dc70b0c Fix dialplan SMS_FROM extraction: CUT -2 bug,
+           add CALLERID(num) fallback

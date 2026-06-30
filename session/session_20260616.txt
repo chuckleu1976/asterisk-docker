@@ -1,0 +1,25 @@
+Session Date: 2026-06-16
+
+Summary:
+- Built and tested asterisk-docker multi-SIM setup from devices.toml for 8 containers (asterisk1-8).
+- Verified SIM reading over PC/SC/APDU for ICCID, IMSI, MSISDN, and per-reader hostname/IMEI mapping.
+- Fixed MSISDN reading for USIM cards by reselecting the AID before reading EF.MSISDN.
+- Fixed per-instance epdg.conf local_addrs handling so each container binds correctly.
+- Swapped SIMs between P0 and P1 and verified both containers register to IMS after reconfiguration.
+- Found that strongSwan p-cscf only logs P-CSCF server IPs; it does not pass them to the updown script.
+- Added strongSwan file logging so the updown script can read P-CSCF IPv6 from /var/log/strongswan.log.
+- Updated ims.updown to extract the P-CSCF IPv6 address, patch pjsip.conf at tunnel-up time, reload res_pjsip.so, and send PJSIP register.
+
+Repository state:
+- Commit pushed to origin/main: 9d66185
+- Commit message: feat: auto-configure P-CSCF IP and add multi-SIM bootstrap
+
+Notable files:
+- asterisk/ims.updown
+- asterisk/charon-logging.conf
+- asterisk/Dockerfile
+- start_sim_container_config.py
+- compose.yaml
+- devices.toml
+- reader_config.toml
+- volte.transport
