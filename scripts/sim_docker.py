@@ -226,6 +226,108 @@ except Exception as e:
     sys.exit(1)
 """
 
+WRITE_MSISDN_SCRIPT = r"""
+import json, sys
+from smartcard.System import readers
+from smartcard.util import toHexString, toBytes
+
+reader_index = int(sys.argv[1])
+msisdn = sys.argv[2]  # e.g. "+447700123456"
+
+def _apdu(conn, hex_cmd):
+    data, sw1, sw2 = conn.transmit(toBytes(hex_cmd))
+    return data, sw1, sw2
+
+def _swap(s):
+    return ''.join(x + y for x, y in zip(s[1::2], s[0::2]))
+
+def _sel_path(conn, *fids):
+    for fid in fids:
+        d, sw1, sw2 = _apdu(conn, f'00A4000402{fid:04X}')
+        if sw1 == 0x61:
+            d, sw1, sw2 = _apdu(conn, f'00C00000{sw2:02X}')
+        if sw1 != 0x90:
+            return False
+    return True
+
+conn = readers()[reader_index].createConnection()
+conn.connect()
+
+# Navigate to USIM context (same path as read_sim)
+data, sw1, sw2 = _apdu(conn, '00A40004022F0000')
+if sw1 == 0x61:
+    data, sw1, sw2 = _apdu(conn, f'00C00000{sw2:02X}')
+    if (sw1, sw2) == (0x90, 0x00):
+        rl = data[7]
+        data, sw1, sw2 = _apdu(conn, f'00B20104{rl:02X}')
+        if sw1 == 0x90:
+            al = data[3]
+            aid = toHexString(data[4:4 + al]).replace(' ', '')
+            _apdu(conn, f'00A40400{len(aid)//2:02X}{aid}')
+
+# Navigate through DF Telecom to EF MSISDN
+_apdu(conn, '00A40004027F10')
+data, sw1, sw2 = _apdu(conn, '00A40004026F40')
+fcp = None
+if sw1 == 0x61:
+    fcp, sw1, sw2 = _apdu(conn, f'00C00000{sw2:02X}')
+
+rec_len = 28
+if fcp:
+    i = 0
+    while i < len(fcp) - 1:
+        tag, tlen = fcp[i], fcp[i + 1]
+        if tag == 0x62:
+            i += 2; continue
+        if tag == 0x82 and tlen >= 3:
+            rec_len = (fcp[i+4] << 8 | fcp[i+5]) if tlen >= 5 else fcp[i+4]
+            break
+        i += 2 + tlen
+
+# Read current record to preserve alpha_id
+data, sw1, sw2 = _apdu(conn, f'00B20104{rec_len:02X}')
+if sw1 != 0x90:
+    print(json.dumps({'error': f'Read MSISDN failed: SW={sw1:02X} {sw2:02X}'}), file=sys.stderr)
+    sys.exit(1)
+
+alpha_id = data[:-14]
+
+# Strip + if present
+clean = msisdn.lstrip('+')
+if not clean.isdigit():
+    print(json.dumps({'error': f'Invalid MSISDN: {msisdn}'}), file=sys.stderr)
+    sys.exit(1)
+
+# BCD encode
+bcd = clean
+if len(bcd) % 2 == 1:
+    bcd += 'F'
+bcd_swapped = _swap(bcd)
+addr_len_val = 1 + len(bcd_swapped) // 2
+
+new_rec = list(alpha_id) + [addr_len_val, 0x91] + toBytes(bcd_swapped)
+while len(new_rec) < rec_len:
+    new_rec += [0xff]
+
+hex_enc = toHexString(new_rec).replace(' ', '')
+data, sw1, sw2 = _apdu(conn, f'00DC0104{rec_len:02X}{hex_enc}')
+if (sw1, sw2) != (0x90, 0x00):
+    print(json.dumps({'error': f'Write MSISDN failed: SW={sw1:02X} {sw2:02X}'}), file=sys.stderr)
+    sys.exit(1)
+
+# Read back to verify
+data, sw1, sw2 = _apdu(conn, f'00B20104{rec_len:02X}')
+addr_len = data[-14]
+ton = data[-13]
+num_digits = addr_len - 1
+dh = toHexString(data[-12:-12 + num_digits]).replace(' ', '')
+digits = _swap(dh).rstrip('fF')
+if (ton & 0x70) == 0x10:
+    digits = '+' + digits
+
+print(json.dumps({'written': digits}))
+"""
+
 READ_CONTAINER = "asterisk"
 
 
@@ -493,3 +595,29 @@ def update_instance(instance, sim):
     update_epdg(d / "epdg.conf", sim, hostname=hostname)
     update_pjsip(d / "asterisk" / "pjsip.conf", sim)
     return True
+
+
+def write_msisdn_to_sim(reader_index, msisdn):
+    """Write MSISDN to the physical SIM card via APDU UPDATE RECORD.
+
+    Returns the MSISDN string as read back from the card on success.
+    Raises RuntimeError on failure.
+    """
+    container = get_read_container()
+    r = docker_compose(
+        "exec", "-T", container,
+        "python3", "-c", WRITE_MSISDN_SCRIPT, str(reader_index), msisdn,
+        timeout=30,
+    )
+    if r.returncode != 0:
+        err_text = r.stderr.strip()
+        try:
+            err_data = json.loads(err_text)
+            raise RuntimeError(err_data.get('error', err_text))
+        except (json.JSONDecodeError, TypeError):
+            raise RuntimeError(err_text or f"Write MSISDN failed (rc={r.returncode})")
+    try:
+        result = json.loads(r.stdout.strip())
+    except json.JSONDecodeError:
+        raise RuntimeError(f"Unexpected output: {r.stdout.strip()}")
+    return result['written']

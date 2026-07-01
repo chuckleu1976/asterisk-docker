@@ -36,7 +36,8 @@ from scripts.sim_config_gen import (
 from scripts.sim_docker import (
     get_read_container, enumerate_readers_in_container, read_sim,
     start_probe, start_instance, stop_instance, docker_compose,
-    update_instance,
+    update_instance, write_msisdn_to_sim,
+    restart_instance,
 )
 
 try:
@@ -350,7 +351,13 @@ def main():
             try:
                 sim = read_sim(i)
                 if args.msisdn:
-                    sim['msisdn'] = args.msisdn
+                    try:
+                        written = write_msisdn_to_sim(i, args.msisdn)
+                        print(f"  MSISDN written to SIM: {written}")
+                        sim['msisdn'] = args.msisdn
+                    except RuntimeError as e:
+                        print(f"  [warn] SIM write failed ({e}), using for config only")
+                        sim['msisdn'] = args.msisdn
                 print(f"  IMSI={sim['imsi']}  MSISDN={sim['msisdn'] or '(none)'}")
                 db_save_sim(i, sim)
                 if update_instance(instance, sim) and args.restart:
@@ -372,7 +379,13 @@ def main():
         sys.exit(1)
 
     if args.msisdn:
-        sim['msisdn'] = args.msisdn
+        try:
+            written = write_msisdn_to_sim(idx, args.msisdn)
+            print(f"  MSISDN written to SIM: {written}")
+            sim['msisdn'] = args.msisdn
+        except RuntimeError as e:
+            print(f"  [warn] SIM write failed ({e}), using --msisdn for config only")
+            sim['msisdn'] = args.msisdn
 
     print(f"  ICCID:   {sim['iccid']}")
     print(f"  IMSI:    {sim['imsi']}")
