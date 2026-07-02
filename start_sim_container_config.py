@@ -219,10 +219,6 @@ def watch_loop(interval, devices=None):
                 print(f"[{ts}] Readers added:   {sorted(added)}")
                 for idx in added:
                     dev = dev_map.get(idx, {})
-                    db_save_reader(idx, f"P{idx}", "available",
-                                   hostname=dev.get('hostname', ''),
-                                   imei=dev.get('imei', ''),
-                                   module=dev.get('module', 'SAMSUNG'))
                     last_iccid.setdefault(idx, None)
             if removed:
                 print(f"[{ts}] Readers removed: {sorted(removed)}")
@@ -252,14 +248,14 @@ def watch_loop(interval, devices=None):
                                module=dev.get('module', 'SAMSUNG'))
             except Exception:
                 read_failures[i] = read_failures.get(i, 0) + 1
+                db_save_reader(i, f"P{i}", "empty",
+                               hostname=dev.get('hostname', ''),
+                               imei=dev.get('imei', ''),
+                               module=dev.get('module', 'SAMSUNG'))
                 if last_iccid[i] is not None and read_failures[i] >= REMOVE_THRESHOLD:
                     ts = datetime.now().strftime('%H:%M:%S')
                     print(f"[{ts}] P{i}: card removed")
                     db_clear_sim(i)
-                    db_save_reader(i, f"P{i}", "empty",
-                                   hostname=dev.get('hostname', ''),
-                                   imei=dev.get('imei', ''),
-                                   module=dev.get('module', 'SAMSUNG'))
                     last_iccid[i] = None
                     read_failures[i] = 0
                     stop_instance(instance)
