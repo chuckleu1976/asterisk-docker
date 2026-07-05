@@ -12,7 +12,6 @@
 use std::path::PathBuf;
 
 use async_trait::async_trait;
-use tokio::sync::mpsc;
 
 use crate::config::SmsStorage;
 use crate::db::ModemSMS;
@@ -70,9 +69,6 @@ pub enum ModemEvent {
         path: PathBuf,
     },
 }
-
-pub type EventRx = mpsc::Receiver<ModemEvent>;
-pub type EventTx = mpsc::Sender<ModemEvent>;
 
 /// Abstract transport for one SIM / IMS endpoint.
 #[async_trait]

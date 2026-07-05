@@ -126,7 +126,6 @@ impl ModemManager {
                 .clone()
                 .unwrap_or_else(|| "127.0.0.1".to_string());
             let ami_port = device.ami_port.unwrap_or(5037u16 + instance as u16);
-            let ami_host_for_summary = ami_host.clone();
             let ami_user = device
                 .ami_user
                 .clone()
@@ -488,7 +487,7 @@ impl ModemManager {
         &self,
         sim_id: &str,
         phone: &str,
-        sse: Arc<SseManager>,
+        _sse: Arc<SseManager>,
     ) -> anyhow::Result<String> {
         let t = self.transport_for(sim_id).await?;
         let call_id = t.originate_call(phone).await?;
@@ -618,7 +617,7 @@ impl ModemManager {
             for sim_id in &to_remove {
                 log::info!("rescan_sims: removing stale transport {}", sim_id);
                 self.transports.write().await.remove(sim_id);
-                if let Some(inst) = self.instance_by_sim.write().await.remove(sim_id) {
+                if self.instance_by_sim.write().await.remove(sim_id).is_some() {
                     // Also remove msisdn mapping
                     self.msisdn_to_sim.write().await.retain(|_, v| v != sim_id);
                 }

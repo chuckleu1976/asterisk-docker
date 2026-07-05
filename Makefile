@@ -2,6 +2,7 @@ VENV_PYTHON = /home/ht/docker/pysim/venv/bin/python3
 
 .PHONY: setup setup-watch watch list \
         compose build-images \
+	verify-fix \
         logs-% exec-% \
         stop clean
 
@@ -26,6 +27,9 @@ compose:
 
 build-images:
 	./build-images.sh
+
+verify-fix:
+	cd sms-gateway && ./tools/verify-fix.sh
 
 stop:
 	docker compose stop

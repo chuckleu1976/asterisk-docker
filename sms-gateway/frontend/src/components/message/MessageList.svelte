@@ -16,6 +16,7 @@
   import MessageItem from "./MessageItem.svelte";
   import MessageInput from "./MessageInputOptimized.svelte";
   import LoadingSpinner from "../ui/LoadingSpinner.svelte";
+  import { simCards } from "../../stores/simcards";
 
   let { initialSimId = null } = $props();
 
@@ -34,6 +35,71 @@
   let messageContainer = $state(null);
   let isNewMessage = $state(false);
   const loadingDuration = 150;
+
+  function normalizePhone(phone) {
+    const raw = (phone || "").trim();
+    if (!raw) return "";
+    const digits = raw.replace(/\D/g, "");
+    return digits ? `+${digits}` : "";
+  }
+
+  function getSimPhone(simId) {
+    if (!simId) return "";
+    const sim = $simCards.find((s) => s.id === simId);
+    return normalizePhone(sim?.phone_number || "");
+  }
+
+  function extractPhoneLikeToken(text) {
+    if (!text) return "";
+    const matches = text.match(/\+?\d{10,}/g);
+    if (!matches || matches.length === 0) return "";
+    return normalizePhone(matches.sort((a, b) => b.length - a.length)[0]);
+  }
+
+  function inferSenderFromInbox(msg, sentByMessage) {
+    const byName = normalizePhone(msg?.contact_name || "");
+    if (byName) return byName;
+
+    const byId = normalizePhone(msg?.contact_id || "");
+    if (byId) return byId;
+
+    const receiver = getSimPhone(msg?.sim_id);
+    const key = `${(msg?.message || "").trim()}|${receiver}`;
+    const byPair = sentByMessage.get(key) || "";
+    if (byPair) return byPair;
+
+    return extractPhoneLikeToken(msg?.message || "");
+  }
+
+  async function loadByInferredSender(targetContactId) {
+    const target = normalizePhone(targetContactId);
+    if (!target) return [];
+
+    const [inboxRes, sentRes] = await Promise.all([
+      apiClient.getSmsByDirection("inbox"),
+      apiClient.getSmsByDirection("sent"),
+    ]);
+
+    const inbox = inboxRes.data?.data ?? [];
+    const sent = sentRes.data?.data ?? [];
+
+    const sentByMessage = new Map();
+    for (const row of sent) {
+      const key = (row?.message || "").trim();
+      if (!key) continue;
+      const receiver = normalizePhone(row?.contact_id || "");
+      if (!receiver) continue;
+      const mapKey = `${key}|${receiver}`;
+      const senderPhone = getSimPhone(row?.sim_id);
+      if (senderPhone && !sentByMessage.has(mapKey)) {
+        sentByMessage.set(mapKey, senderPhone);
+      }
+    }
+
+    return inbox
+      .filter((m) => inferSenderFromInbox(m, sentByMessage) === target)
+      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  }
 
   $effect(() => {
     if (!$conversationLoading) {
@@ -62,9 +128,22 @@
     if (!$currentContact.new) {
       apiClient
         .getSmsPaginated(page, pageSize, $currentContact.id)
-        .then((res) => {
+        .then(async (res) => {
           isNewMessage = false;
-          messages = res.data.data;
+          let loaded = res.data.data ?? [];
+          if (loaded.length === 0) {
+            loaded = await loadByInferredSender($currentContact.id);
+          }
+          messages = loaded;
+
+          // Ensure server-side unread state is cleared for this conversation key,
+          // including legacy inferred rows.
+          try {
+            await apiClient.markConversationAsReadAndGetLatest($currentContact.id);
+          } catch (e) {
+            console.error("Failed to mark conversation as read:", e);
+          }
+
           loading = false;
           if (page === 1) {
             markConversationAsRead($currentContact.id);

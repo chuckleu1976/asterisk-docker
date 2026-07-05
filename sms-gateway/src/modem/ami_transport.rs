@@ -20,10 +20,6 @@ use super::types::{NetworkRegistrationStatus, OperatorInfo, SmsType};
 use crate::db::ModemSMS;
 use crate::sim_inventory;
 
-/// Where MixMonitor writes WAV files inside the asterisk container.
-/// (Host path is `/home/ht/docker/logs/<N>/recordings/...` via volume mount.)
-const RECORDING_DIR: &str = "/logs/recordings";
-
 /// PJSIP endpoint/registration name configured in `config/<N>/asterisk/pjsip.conf`.
 const VOLTE_ENDPOINT: &str = "volte_ims";
 
@@ -50,9 +46,6 @@ pub struct AmiTransport {
     client: std::sync::Arc<AmiClient>,
     /// Optional handle to the supervisor shutdown channel.
     _shutdown_tx: mpsc::Sender<()>,
-    /// Outbound calls we've originated and are awaiting a Channel for.
-    /// Key = ChannelId we asked AMI to use; value = our internal call_id.
-    pending_originates: Arc<Mutex<HashMap<String, String>>>,
     /// Cached registration state, updated by RegistrationStatus AMI events.
     registration_state: Arc<RwLock<Option<NetworkRegistrationStatus>>>,
     /// Cached SIM identity, refreshed periodically from sim_inventory.db.
@@ -157,7 +150,6 @@ impl AmiTransport {
             cfg,
             client: client.clone(),
             _shutdown_tx: sd_tx,
-            pending_originates,
             registration_state,
             sim_info_cache,
             pending_phone,

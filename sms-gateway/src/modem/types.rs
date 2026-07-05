@@ -21,12 +21,6 @@ impl SmsType {
     }
 }
 
-#[derive(Debug, Clone)]
-pub enum ConnectionState {
-    Connected,
-    Disconnected,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetworkRegistrationStatus {
     pub status: String,

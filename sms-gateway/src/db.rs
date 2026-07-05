@@ -131,6 +131,7 @@ pub struct Call {
 }
 
 impl Call {
+    #[allow(dead_code)]
     pub async fn insert(sim_id: &str, phone: Option<&str>, direction: &str) -> Result<String> {
         let pool = get_pool()?;
         let id = Uuid::new_v4().to_string();
@@ -192,6 +193,7 @@ impl Call {
     }
 
     /// Update the phone number on an existing call record (e.g. when +CLIP: arrives after RING).
+    #[allow(dead_code)]
     pub async fn update_phone(id: &str, phone: &str) -> Result<()> {
         let pool = get_pool()?;
         sqlx::query(r#"UPDATE calls SET phone = ? WHERE id = ?"#)
@@ -295,6 +297,77 @@ impl Call {
 }
 
 impl Sms {
+    pub(crate) fn contact_name_expr_for_direction(send: bool) -> &'static str {
+        if send {
+            "COALESCE(c.name, s.contact_id)"
+        } else {
+            "s.contact_id"
+        }
+    }
+
+    pub(crate) fn extract_phone_like_token(text: &str) -> Option<String> {
+        let mut best = String::new();
+        let mut current = String::new();
+
+        for ch in text.chars() {
+            if ch.is_ascii_digit() || (ch == '+' && current.is_empty()) {
+                current.push(ch);
+            } else {
+                if current.len() >= 5 {
+                    // Keep the longest token found in the message.
+                    if current.len() > best.len() {
+                        best = current.clone();
+                    }
+                }
+                current.clear();
+            }
+        }
+
+        if current.len() >= 5 && current.len() > best.len() {
+            best = current;
+        }
+
+        if best.is_empty() {
+            None
+        } else {
+            Some(best)
+        }
+    }
+
+    async fn infer_sender_from_recent_sent(
+        pool: &SqlitePool,
+        inbox_sim_id: &str,
+        message: &str,
+        _timestamp: NaiveDateTime,
+    ) -> Result<Option<String>> {
+        let matched = sqlx::query_scalar::<_, String>(
+            r#"
+            SELECT
+                CASE
+                    WHEN sc.phone_number IS NULL OR TRIM(sc.phone_number) = '' THEN ''
+                    WHEN sc.phone_number LIKE '+%' THEN sc.phone_number
+                    ELSE '+' || sc.phone_number
+                END AS inferred_sender
+            FROM sms s
+            JOIN sim_cards recv ON recv.id = ?
+            LEFT JOIN sim_cards sc ON sc.id = s.sim_id
+            WHERE s.send = 1
+              AND TRIM(s.message) = TRIM(?)
+              AND REPLACE(s.contact_id, '+', '') = REPLACE(recv.phone_number, '+', '')
+              AND sc.phone_number IS NOT NULL
+              AND TRIM(sc.phone_number) != ''
+            ORDER BY s.id DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(inbox_sim_id)
+        .bind(message)
+        .fetch_optional(pool)
+        .await?;
+
+        Ok(matched)
+    }
+
     pub async fn count() -> Result<i64> {
         let pool = get_pool()?;
         let count = sqlx::query_scalar(
@@ -307,6 +380,7 @@ impl Sms {
         Ok(count)
     }
 
+    #[allow(dead_code)]
     pub async fn count_by_contact_id(contact_id: &str) -> Result<i64> {
         let pool = get_pool()?;
         let count = sqlx::query_scalar(
@@ -374,23 +448,62 @@ impl Sms {
         }
         let offset = (page - 1) * per_page;
         let pool = get_pool()?;
+        let normalized_target: String = contact_id.chars().filter(|c| c.is_ascii_digit()).collect();
 
         let mut tx = pool.begin().await?;
 
-        let sms_list = sqlx::query_as(
+        let mut sms_list: Vec<Self> = sqlx::query_as(
             r#"
             SELECT id, contact_id, timestamp, message, sim_id, send, status
             FROM sms 
             WHERE contact_id = ?
             ORDER BY timestamp DESC, id DESC
-            LIMIT ? OFFSET ?
             "#,
         )
         .bind(contact_id)
-        .bind(per_page as i32)
-        .bind(offset as i32)
         .fetch_all(&mut *tx)
         .await?;
+
+        if !normalized_target.is_empty() {
+            let mut inferred_rows: Vec<Self> = sqlx::query_as(
+                r#"
+                SELECT i.id, i.contact_id, i.timestamp, i.message, i.sim_id, i.send, i.status
+                FROM sms i
+                WHERE i.send = 0
+                  AND (i.contact_id IS NULL OR TRIM(i.contact_id) = '')
+                  AND EXISTS (
+                      SELECT 1
+                      FROM sms s
+                      JOIN sim_cards recv ON recv.id = i.sim_id
+                      JOIN sim_cards sc_send ON sc_send.id = s.sim_id
+                      WHERE s.send = 1
+                        AND TRIM(s.message) = TRIM(i.message)
+                        AND REPLACE(s.contact_id, '+', '') = REPLACE(recv.phone_number, '+', '')
+                        AND REPLACE(sc_send.phone_number, '+', '') = ?
+                  )
+                ORDER BY i.timestamp DESC, i.id DESC
+                "#,
+            )
+            .bind(&normalized_target)
+            .fetch_all(&mut *tx)
+            .await?;
+
+            sms_list.append(&mut inferred_rows);
+        }
+
+        sms_list.sort_by(|a, b| {
+            b.timestamp
+                .cmp(&a.timestamp)
+                .then_with(|| b.id.cmp(&a.id))
+        });
+        sms_list.dedup_by(|a, b| a.id == b.id);
+
+        let total = sms_list.len() as i64;
+        let paged_list: Vec<Self> = sms_list
+            .into_iter()
+            .skip(offset as usize)
+            .take(per_page as usize)
+            .collect();
 
         if page == 1 {
             sqlx::query(
@@ -405,13 +518,38 @@ impl Sms {
             .bind(SmsStatus::Unread as i32)
             .execute(&mut *tx)
             .await?;
+
+            if !normalized_target.is_empty() {
+                sqlx::query(
+                    r#"
+                    UPDATE sms
+                    SET status = ?
+                    WHERE send = 0
+                      AND (contact_id IS NULL OR TRIM(contact_id) = '')
+                      AND status = ?
+                      AND EXISTS (
+                          SELECT 1
+                          FROM sms s
+                          JOIN sim_cards recv ON recv.id = sms.sim_id
+                          JOIN sim_cards sc_send ON sc_send.id = s.sim_id
+                          WHERE s.send = 1
+                            AND TRIM(s.message) = TRIM(sms.message)
+                            AND REPLACE(s.contact_id, '+', '') = REPLACE(recv.phone_number, '+', '')
+                            AND REPLACE(sc_send.phone_number, '+', '') = ?
+                      )
+                    "#,
+                )
+                .bind(SmsStatus::Read as i32)
+                .bind(SmsStatus::Unread as i32)
+                .bind(&normalized_target)
+                .execute(&mut *tx)
+                .await?;
+            }
         }
 
         tx.commit().await?;
 
-        let total = Sms::count_by_contact_id(contact_id).await?;
-
-        Ok((sms_list, total))
+        Ok((paged_list, total))
     }
 
     /// Paginated inbox (send=false) or sent (send=true) view, with contact name resolved.
@@ -422,10 +560,13 @@ impl Sms {
         let offset = (page - 1) * per_page;
         let pool = get_pool()?;
 
-        let rows = sqlx::query_as::<_, SmsRow>(
+        // Inbox should show the raw sender id; sent keeps resolved contact name.
+        let contact_name_expr = Self::contact_name_expr_for_direction(send);
+
+        let query = format!(
             r#"
             SELECT s.id, s.contact_id,
-                   COALESCE(c.name, s.contact_id) AS contact_name,
+                   {} AS contact_name,
                    s.timestamp, s.message, s.sim_id, s.send, s.status
             FROM sms s
             LEFT JOIN contacts c ON s.contact_id = c.id
@@ -433,12 +574,58 @@ impl Sms {
             ORDER BY s.timestamp DESC, s.id DESC
             LIMIT ? OFFSET ?
             "#,
-        )
+            contact_name_expr
+        );
+
+        let mut rows = sqlx::query_as::<_, SmsRow>(&query)
         .bind(send)
         .bind(per_page as i64)
         .bind(offset as i64)
         .fetch_all(pool)
         .await?;
+
+        // Some legacy inbound rows may have an empty sender id; recover a
+        // phone-like token from message text so the inbox does not render blank.
+        if !send {
+            for row in &mut rows {
+                if row.contact_name.trim().is_empty() {
+                    let mut inferred_contact_id: Option<String> = None;
+
+                    if let Some(inferred) =
+                        Self::infer_sender_from_recent_sent(
+                            pool,
+                            &row.sim_id,
+                            &row.message,
+                            row.timestamp,
+                        )
+                            .await?
+                    {
+                        row.contact_name = inferred.clone();
+                        row.contact_id = inferred.clone();
+                        inferred_contact_id = Some(inferred);
+                    } else if let Some(inferred) = Self::extract_phone_like_token(&row.message) {
+                        row.contact_name = inferred.clone();
+                        row.contact_id = inferred.clone();
+                        inferred_contact_id = Some(inferred);
+                    }
+
+                    if let Some(contact_id) = inferred_contact_id {
+                        sqlx::query(
+                            r#"
+                            UPDATE sms
+                            SET contact_id = ?
+                            WHERE id = ?
+                              AND (contact_id IS NULL OR TRIM(contact_id) = '')
+                            "#,
+                        )
+                        .bind(contact_id)
+                        .bind(row.id)
+                        .execute(pool)
+                        .await?;
+                    }
+                }
+            }
+        }
 
         let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sms WHERE send = ?")
             .bind(send)
@@ -448,6 +635,7 @@ impl Sms {
         Ok((rows, total))
     }
 
+    #[allow(dead_code)]
     pub async fn insert(&self) -> Result<i64> {
         let pool = get_pool()?;
         let sms_id = sqlx::query_scalar::<_, i64>(
@@ -469,8 +657,9 @@ impl Sms {
     }
     pub async fn query_unread_by_contact_id(contact_id: &str) -> Result<Vec<Self>> {
         let pool = get_pool()?;
+        let normalized_target: String = contact_id.chars().filter(|c| c.is_ascii_digit()).collect();
         let mut tx = pool.begin().await?;
-        let sms_list = sqlx::query_as(
+        let mut sms_list: Vec<Self> = sqlx::query_as(
             r#"
             SELECT id, contact_id, timestamp, message, sim_id, send, status
             FROM sms 
@@ -482,6 +671,41 @@ impl Sms {
         .bind(SmsStatus::Unread as i32)
         .fetch_all(&mut *tx)
         .await?;
+
+        if !normalized_target.is_empty() {
+            let mut inferred_unread: Vec<Self> = sqlx::query_as(
+                r#"
+                SELECT i.id, i.contact_id, i.timestamp, i.message, i.sim_id, i.send, i.status
+                FROM sms i
+                WHERE i.send = 0
+                  AND (i.contact_id IS NULL OR TRIM(i.contact_id) = '')
+                  AND i.status = ?
+                  AND EXISTS (
+                      SELECT 1
+                      FROM sms s
+                      JOIN sim_cards recv ON recv.id = i.sim_id
+                      JOIN sim_cards sc_send ON sc_send.id = s.sim_id
+                      WHERE s.send = 1
+                        AND TRIM(s.message) = TRIM(i.message)
+                        AND REPLACE(s.contact_id, '+', '') = REPLACE(recv.phone_number, '+', '')
+                        AND REPLACE(sc_send.phone_number, '+', '') = ?
+                  )
+                ORDER BY i.timestamp DESC, i.id DESC
+                "#,
+            )
+            .bind(SmsStatus::Unread as i32)
+            .bind(&normalized_target)
+            .fetch_all(&mut *tx)
+            .await?;
+            sms_list.append(&mut inferred_unread);
+        }
+
+        sms_list.sort_by(|a, b| {
+            b.timestamp
+                .cmp(&a.timestamp)
+                .then_with(|| b.id.cmp(&a.id))
+        });
+        sms_list.dedup_by(|a, b| a.id == b.id);
 
         sqlx::query(
             r#"
@@ -495,6 +719,35 @@ impl Sms {
         .bind(SmsStatus::Unread as i32)
         .execute(&mut *tx)
         .await?;
+
+        if !normalized_target.is_empty() {
+            sqlx::query(
+                r#"
+                    UPDATE sms
+                    SET status = ?
+                    WHERE send = 0
+                      AND (contact_id IS NULL OR TRIM(contact_id) = '')
+                      AND status = ?
+                      AND EXISTS (
+                          SELECT 1
+                          FROM sms s
+                          JOIN sim_cards recv ON recv.id = sms.sim_id
+                          JOIN sim_cards sc_send ON sc_send.id = s.sim_id
+                          WHERE s.send = 1
+                            AND TRIM(s.message) = TRIM(sms.message)
+                            AND REPLACE(s.contact_id, '+', '') = REPLACE(recv.phone_number, '+', '')
+                            AND REPLACE(sc_send.phone_number, '+', '') = ?
+                      )
+                "#,
+            )
+            .bind(SmsStatus::Read as i32)
+            .bind(SmsStatus::Unread as i32)
+            .bind(&normalized_target)
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        tx.commit().await?;
 
         Ok(sms_list)
     }
@@ -516,6 +769,7 @@ impl Sms {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub async fn update_status_by_id(id: i64, status: SmsStatus) -> Result<()> {
         let pool = get_pool()?;
         sqlx::query(
