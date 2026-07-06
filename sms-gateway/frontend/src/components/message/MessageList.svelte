@@ -132,7 +132,11 @@
           isNewMessage = false;
           let loaded = res.data.data ?? [];
           if (loaded.length === 0) {
-            loaded = await loadByInferredSender($currentContact.id);
+            try {
+              loaded = await loadByInferredSender($currentContact.id);
+            } catch (e) {
+              console.error("loadByInferredSender failed:", e);
+            }
           }
           messages = loaded;
 
@@ -148,6 +152,11 @@
           if (page === 1) {
             markConversationAsRead($currentContact.id);
           }
+        })
+        .catch((err) => {
+          console.error("Failed to load messages for contact", $currentContact.id, err);
+          messages = [];
+          loading = false;
         });
     } else {
       isNewMessage = false;
@@ -311,34 +320,41 @@
   <div class="flex-1 overflow-hidden relative">
     <LoadingSpinner show={showLoading} duration={loadingDuration} />
     {#if !showLoading}
-      <div
-        class="h-full overflow-y-auto flex flex-col-reverse message-container z-9 absolute inset-0"
-        bind:this={messageContainer}
-        transition:fade={{ duration: loadingDuration }}
-      >
-        <div
-          class="flex flex-col-reverse gap-2 p-2 w-full mt-4 sm:mt-10 pb-24 sm:pb-24"
-          style="padding-bottom: calc(8rem + env(safe-area-inset-bottom, 0px));"
-        >
-          {#each messages as message, index (message.id)}
-            <MessageItem {message} {isNewMessage} />
-            {@const timeHeader = formatTimeRange(
-              message.timestamp,
-              index === messages.length - 1
-                ? null
-                : messages[index - 1]?.timestamp
-            )}
-            {#if timeHeader || index === messages.length - 1}
-              <div
-                class="flex justify-center text-xs text-gray-400 my-1"
-                in:fade={{ duration: 300, delay: 100 }}
-              >
-                {timeHeader || formatDate(message.timestamp)}
-              </div>
-            {/if}
-          {/each}
+      {#if messages.length === 0}
+        <div class="h-full flex flex-col items-center justify-center text-gray-400">
+          <p>No messages</p>
+          <p class="text-xs mt-1">Select a conversation or send a message</p>
         </div>
-      </div>
+      {:else}
+        <div
+          class="h-full overflow-y-auto flex flex-col-reverse message-container z-9 absolute inset-0"
+          bind:this={messageContainer}
+          transition:fade={{ duration: loadingDuration }}
+        >
+          <div
+            class="flex flex-col-reverse gap-2 p-2 w-full mt-4 sm:mt-10 pb-24 sm:pb-24"
+            style="padding-bottom: calc(8rem + env(safe-area-inset-bottom, 0px));"
+          >
+            {#each messages as message, index (message.id)}
+              <MessageItem {message} {isNewMessage} />
+              {@const timeHeader = formatTimeRange(
+                message.timestamp,
+                index === messages.length - 1
+                  ? null
+                  : messages[index - 1]?.timestamp
+              )}
+              {#if timeHeader || index === messages.length - 1}
+                <div
+                  class="flex justify-center text-xs text-gray-400 my-1"
+                  in:fade={{ duration: 300, delay: 100 }}
+                >
+                  {timeHeader || formatDate(message.timestamp)}
+                </div>
+              {/if}
+            {/each}
+          </div>
+        </div>
+      {/if}
     {/if}
   </div>
 

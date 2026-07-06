@@ -27,6 +27,27 @@ use super::types::{
     ModemInfo, NetworkRegistrationStatus, OperatorInfo, SmsType,
 };
 
+/// Carrier-generated delivery/status reports that should not be shown in the
+/// conversation inbox. Matches are case-insensitive and trim whitespace.
+const CARRIER_DELIVERY_REPORT_PATTERNS: &[&str] = &[
+    "DELAYED DELIVERY",
+    "DELIVERY REPORT",
+    "MESSAGE DELIVERED",
+    "MESSAGE FAILED",
+    "MESSAGE SENT",
+];
+
+fn is_carrier_delivery_report(body: &str) -> bool {
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let upper = trimmed.to_uppercase();
+    CARRIER_DELIVERY_REPORT_PATTERNS
+        .iter()
+        .any(|pat| upper.starts_with(pat))
+}
+
 /// Configuration for local whisper.cpp speech-to-text transcription.
 /// All three fields must be `Some` for transcription to be enabled.
 #[derive(Debug, Clone)]
@@ -791,6 +812,12 @@ async fn handle_modem_event(
             // Empty body is carrier noise (RP-ACK, silent SMS, status checks).
             if body.is_empty() {
                 log::debug!("[ami {}] SmsReceived dropped (empty body, from={})", sim_id, from);
+                return;
+            }
+            // Drop carrier-generated delivery/status reports so they don't
+            // pollute the inbox.
+            if is_carrier_delivery_report(&body) {
+                log::debug!("[ami {}] SmsReceived dropped (carrier delivery report, from={} body={})", sim_id, from, body);
                 return;
             }
             // Deduplicate: native MessageReceived and dialplan UserEvent SmsReceived
