@@ -493,11 +493,15 @@ def read_sim(reader_index, retries=1):
 # ─── Config file updaters ─────────────────────────────────────────────────────
 
 def update_ami_usim(path, sim):
+    imsi = sim.get("imsi")
+    if not imsi:
+        print("    [warn] Missing IMSI — ami_usim.ini not updated")
+        return
     txt = path.read_text()
     txt = re.sub(r'^(reader\s*=\s*imsi:).*$',
-                 rf'\g<1>{sim["imsi"]}', txt, flags=re.MULTILINE)
+                 rf'\g<1>{imsi}', txt, flags=re.MULTILINE)
     path.write_text(txt)
-    print(f"    ami_usim.ini  reader=imsi:{sim['imsi']}")
+    print(f"    ami_usim.ini  reader=imsi:{imsi}")
 
 
 def _pad_mnc(mnc):

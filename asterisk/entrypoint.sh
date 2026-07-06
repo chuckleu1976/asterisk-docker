@@ -22,6 +22,37 @@ charon {
 }
 LOGEOF
 
+# The asterisk containers share the PID namespace with pcscd. A container
+# restart reuses the same network namespace but does NOT reap strongSwan
+# processes from the previous run, so multiple charon/starter instances end
+# up competing for UDP 500/4500. Kill any charon/starter that belongs to
+# this container's network namespace, then flush stale xfrm state.
+echo "Cleaning up stale processes in this network namespace..."
+MY_NET=$(readlink /proc/self/ns/net)
+
+# Kill stale charon/starter (process name matches)
+for name in charon starter; do
+    for pid in $(pgrep -x "$name" 2>/dev/null || true); do
+        PID_NET=$(readlink /proc/$pid/ns/net 2>/dev/null || true)
+        if [ "$PID_NET" = "$MY_NET" ]; then
+            echo "  Killing stale $name pid=$pid"
+            kill -9 "$pid" 2>/dev/null || true
+        fi
+    done
+done
+
+# Kill stale ami_usim.py helpers (process name is python3, match by cmdline)
+for pid in $(pgrep -f '/usr/local/bin/ami_usim.py' 2>/dev/null || true); do
+    PID_NET=$(readlink /proc/$pid/ns/net 2>/dev/null || true)
+    if [ "$PID_NET" = "$MY_NET" ]; then
+        echo "  Killing stale ami_usim.py pid=$pid"
+        kill -9 "$pid" 2>/dev/null || true
+    fi
+done
+
+ip xfrm state flush 2>/dev/null || true
+ip xfrm policy flush 2>/dev/null || true
+
 ipsec start
 sleep 2
 swanctl --load-creds && swanctl --load-conns
