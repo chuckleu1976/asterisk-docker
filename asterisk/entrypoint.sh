@@ -2,6 +2,33 @@
 
 set -e
 
+# Graceful shutdown: kill all background children (charon, starter, ami_usim,
+# IKE watchdog) so that a container restart/replace does not leave orphaned
+# processes in the shared pcscd PID namespace.
+LOOP_PID=""
+AMI_PID=""
+ASTERISK_PID=""
+
+cleanup() {
+    echo "Shutting down container processes..."
+    if [ -n "$LOOP_PID" ]; then
+        kill -TERM "$LOOP_PID" 2>/dev/null || true
+        sleep 1
+    fi
+    if [ -n "$AMI_PID" ]; then
+        kill -TERM "$AMI_PID" 2>/dev/null || true
+        wait "$AMI_PID" 2>/dev/null || true
+    fi
+    ipsec stop 2>/dev/null || true
+    if [ -n "$ASTERISK_PID" ]; then
+        kill -TERM "$ASTERISK_PID" 2>/dev/null || true
+        wait "$ASTERISK_PID" 2>/dev/null || true
+    fi
+    exit 0
+}
+
+trap cleanup TERM INT
+
 sleep 3
 
 # Configure charon filelog at the correct strongSwan config path.
@@ -79,13 +106,18 @@ PYRESET
 
 # Initiate IKE in background — ims.updown writes /tmp/pcscf_ip when ready.
 swanctl --initiate --child ims &
-(backoff=4; while true; do
-     sleep 1;
-     if ! swanctl --list-sas|grep '^ims:' > /dev/null; then
-	 echo "Restarting ims, backoff=$backoff"
-	 swanctl --initiate --child ims && backoff=4 || { sleep $backoff; backoff=$((backoff*2+(RANDOM&1))); }
-     fi;
- done) &
+(
+    trap 'exit 0' TERM INT
+    backoff=4
+    while true; do
+        sleep 1
+        if ! swanctl --list-sas | grep '^ims:' > /dev/null; then
+            echo "Restarting ims, backoff=$backoff"
+            swanctl --initiate --child ims && backoff=4 || { sleep $backoff; backoff=$((backoff * 2 + (RANDOM & 1))); }
+        fi
+    done
+) &
+LOOP_PID=$!
 
 # Wait for ims.updown to signal P-CSCF is ready via /tmp/pcscf_ip file.
 # This is written by ims.updown after it receives the P-CSCF from strongSwan.
@@ -104,6 +136,7 @@ else
 fi
 
 python3 /usr/local/bin/ami_usim.py /usr/local/etc/ami_usim.ini &
+AMI_PID=$!
 
 # Rebuild res_pjsip_messaging.so from the already-patched source. The image
 # contains the rpack_fix.py patch in the source tree, but the pre-compiled
@@ -120,5 +153,9 @@ if [ -f /home/asterisk-build/asterisk/res/res_pjsip_messaging.c ]; then
     echo "Patched res_pjsip_messaging.so installed."
 fi
 
-asterisk -f
+asterisk -f &
+ASTERISK_PID=$!
+
+wait "$ASTERISK_PID" || true
+cleanup
 
