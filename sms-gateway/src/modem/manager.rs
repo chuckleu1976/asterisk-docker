@@ -35,6 +35,7 @@ const CARRIER_DELIVERY_REPORT_PATTERNS: &[&str] = &[
     "MESSAGE DELIVERED",
     "MESSAGE FAILED",
     "MESSAGE SENT",
+    "FREE MSG:",
 ];
 
 fn is_carrier_delivery_report(body: &str) -> bool {
@@ -46,6 +47,26 @@ fn is_carrier_delivery_report(body: &str) -> bool {
     CARRIER_DELIVERY_REPORT_PATTERNS
         .iter()
         .any(|pat| upper.starts_with(pat))
+}
+
+/// For carrier delivery reports like "Free Msg: Receiver 18165537217 unable
+/// to receive message - Message Blocking is active", extract the intended
+/// receiver MSISDN so the message can be routed to that conversation instead
+/// of showing up under the carrier's short code.
+fn extract_receiver_from_delivery_report(body: &str) -> Option<String> {
+    let upper = body.to_uppercase();
+    let pos = upper.find("RECEIVER")?;
+    let after_receiver = &body[pos + 8..];
+    let after_receiver = after_receiver.trim_start_matches(|c: char| c == ':' || c == ' ' || c == '-');
+    let phone: String = after_receiver
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    if !phone.is_empty() {
+        Some(phone)
+    } else {
+        None
+    }
 }
 
 /// Configuration for local whisper.cpp speech-to-text transcription.
@@ -808,15 +829,18 @@ async fn handle_modem_event(
     use super::ModemEvent;
     match ev {
         ModemEvent::SmsReceived { sim_id, from, body, timestamp } => {
-            let contact = extract_phone(&from);
             // Empty body is carrier noise (RP-ACK, silent SMS, status checks).
             if body.is_empty() {
                 log::debug!("[ami {}] SmsReceived dropped (empty body, from={})", sim_id, from);
                 return;
             }
-            // Drop carrier-generated delivery/status reports so they don't
-            // pollute the inbox.
-            if is_carrier_delivery_report(&body) {
+            // For carrier delivery reports (Free Msg: Receiver XXXX...), extract
+            // the intended receiver so the message routes to the correct
+            // conversation.
+            let receiver = extract_receiver_from_delivery_report(&body);
+            let contact = receiver.clone().unwrap_or_else(|| extract_phone(&from));
+            // Drop carrier delivery reports that we could not re-route.
+            if receiver.is_none() && is_carrier_delivery_report(&body) {
                 log::debug!("[ami {}] SmsReceived dropped (carrier delivery report, from={} body={})", sim_id, from, body);
                 return;
             }
