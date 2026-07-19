@@ -40,12 +40,24 @@ up-client-v6:)
         if [ -S /var/run/asterisk/asterisk.ctl ]; then
             sleep 1
             rasterisk -x "module reload res_pjsip.so" >/dev/null 2>&1
-            sleep 2
+            sleep 5
         else
             echo "Warning: asterisk socket not available after ${WAIT}s - skipping reload"
         fi
 
-        rasterisk -x "pjsip send register volte_ims"
+        # Retry registration up to 5 times if it doesn't succeed.
+        RETRY_REG=0
+        while [ $RETRY_REG -lt 5 ]; do
+            rasterisk -x "pjsip send register volte_ims" >/dev/null 2>&1
+            sleep 5
+            REG_STATUS=$(rasterisk -x "pjsip show registrations" 2>/dev/null | grep volte_ims | awk '{print $NF}')
+            if [ "$REG_STATUS" = "Registered" ]; then
+                echo "Registration succeeded (attempt $((RETRY_REG + 1)))"
+                break
+            fi
+            echo "Registration not yet Registered (attempt $((RETRY_REG + 1)), status=$REG_STATUS) - retrying"
+            RETRY_REG=$((RETRY_REG + 1))
+        done
         ;;
 down-client-v6:)
         ;;
