@@ -520,7 +520,8 @@ async fn translate_event(
         "MessageReceived" => {
             let callerid = pkt.get("calleridnum").unwrap_or("").to_string();
             let from = pkt.get("from").unwrap_or("").to_string();
-            let body = pkt.get("body").unwrap_or("").to_string();
+            let raw_body = pkt.get("body").unwrap_or("").to_string();
+            let body = sanitize_incoming_sms_body(&raw_body, sim_id, "MessageReceived");
             // Prefer calleridnum (Asterisk's parsed caller ID) over the raw
             // SIP From header — the IMS network may replace From with a trunk
             // identifier (e.g. "17530") while calleridnum holds the E.164 number.
@@ -609,7 +610,8 @@ fn translate_user_event(pkt: &AmiPacket, sim_id: &str) -> Option<ModemEvent> {
     match subtype {
         "SmsReceived" => {
             let from = pkt.get("from").unwrap_or("").to_string();
-            let body = pkt.get("body").unwrap_or("").to_string();
+            let raw_body = pkt.get("body").unwrap_or("").to_string();
+            let body = sanitize_incoming_sms_body(&raw_body, sim_id, "UserEvent/SmsReceived");
             if from.is_empty() && body.is_empty() {
                 return None;
             }
@@ -655,5 +657,152 @@ fn translate_user_event(pkt: &AmiPacket, sim_id: &str) -> Option<ModemEvent> {
             })
         }
         _ => None,
+    }
+}
+
+fn sanitize_incoming_sms_body(body: &str, sim_id: &str, source: &str) -> String {
+    if body.is_empty() {
+        return String::new();
+    }
+
+    if is_likely_binary_or_mojibake(body) {
+        warn!(
+            "[ami {}] {} body looks non-text; replacing with marker (len={}, utf8_hex={})",
+            sim_id,
+            source,
+            body.len(),
+            hex::encode(body.as_bytes())
+        );
+        return format!("[BINARY/UNSUPPORTED SMS] ({} bytes)", body.len());
+    }
+
+    body.to_string()
+}
+
+fn is_likely_binary_or_mojibake(body: &str) -> bool {
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    // Allow common non-Latin scripts to pass through untouched.
+    if contains_cjk(trimmed) {
+        return false;
+    }
+
+    let mut total = 0usize;
+    let mut suspicious = 0usize;
+    let mut controls = 0usize;
+    let mut question_marks = 0usize;
+    let mut ascii_word = 0usize;
+    let mut non_ascii = 0usize;
+
+    for ch in trimmed.chars() {
+        total += 1;
+        if ch == '?' {
+            question_marks += 1;
+        }
+        if ch.is_ascii_alphanumeric() {
+            ascii_word += 1;
+        } else {
+            non_ascii += 1;
+        }
+        if ch.is_control() && ch != '\n' && ch != '\r' && ch != '\t' {
+            controls += 1;
+            continue;
+        }
+        if ch == '\u{FFFD}' || is_gsm_mojibake_char(ch) {
+            suspicious += 1;
+        }
+    }
+
+    if controls > 0 {
+        return true;
+    }
+    if total < 8 {
+        return false;
+    }
+
+    let suspicious_ratio = suspicious as f32 / total as f32;
+    let question_ratio = question_marks as f32 / total as f32;
+    let non_ascii_ratio = non_ascii as f32 / total as f32;
+
+    (suspicious >= 4 && suspicious_ratio >= 0.18)
+        || (suspicious >= 3 && question_ratio >= 0.12 && ascii_word >= 3)
+        || (question_marks >= 2 && suspicious >= 2 && non_ascii_ratio >= 0.08 && ascii_word >= 4)
+}
+
+fn is_gsm_mojibake_char(ch: char) -> bool {
+    matches!(
+        ch as u32,
+        0x00A3
+            | 0x00A5
+            | 0x00A8
+            | 0x00A9
+            | 0x00AA
+            | 0x00B0
+            | 0x00C5
+            | 0x00C6
+            | 0x00C7
+            | 0x00C8
+            | 0x00D8
+            | 0x00DF
+            | 0x00E0
+            | 0x00E5
+            | 0x00E6
+            | 0x00E8
+            | 0x00E9
+            | 0x00EC
+            | 0x00F2
+            | 0x00F8
+            | 0x00F9
+            | 0x0393
+            | 0x0394
+            | 0x0398
+            | 0x039B
+            | 0x039E
+            | 0x03A0
+            | 0x03A3
+            | 0x03A6
+            | 0x03A8
+            | 0x03A9
+    )
+}
+
+fn contains_cjk(s: &str) -> bool {
+    s.chars().any(|c| {
+        let cp = c as u32;
+        (0x4E00..=0x9FFF).contains(&cp)
+            || (0x3400..=0x4DBF).contains(&cp)
+            || (0x3040..=0x30FF).contains(&cp)
+            || (0xAC00..=0xD7AF).contains(&cp)
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_likely_binary_or_mojibake, sanitize_incoming_sms_body};
+
+    #[test]
+    fn plain_ascii_sms_is_kept() {
+        let body = "Your OTP is 123456";
+        let out = sanitize_incoming_sms_body(body, "sim1", "test");
+        assert_eq!(out, body);
+    }
+
+    #[test]
+    fn cjk_sms_is_kept() {
+        let body = "\u{4F60}\u{597D}\u{4E16}\u{754C}";
+        let out = sanitize_incoming_sms_body(body, "sim1", "test");
+        assert_eq!(out, body);
+    }
+
+    #[test]
+    fn mojibake_like_sms_is_replaced() {
+        let body = "PayPaly\u{039E}??v Ax\u{00A3}f/0383320$??v Ax\u{00A3}\u{00F9}W";
+        assert!(is_likely_binary_or_mojibake(body));
+
+        let out = sanitize_incoming_sms_body(body, "sim1", "test");
+        assert!(out.starts_with("[BINARY/UNSUPPORTED SMS]"));
     }
 }
