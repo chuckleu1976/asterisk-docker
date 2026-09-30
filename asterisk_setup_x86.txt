@@ -1,19 +1,21 @@
 ================================================================================
-  asterisk-docker Ubuntu 24 x86 setup guide
+  asterisk-docker Ubuntu x86 setup guide
 ================================================================================
 
 This file is a clean-machine installation guide for the asterisk-docker SMS
-and VoLTE/VoWiFi gateway stack on Ubuntu 24.04 x86_64.
+and VoLTE/VoWiFi gateway stack on Ubuntu 24.04 or 26.04 x86_64.
 
-It assumes you want to run the stack with USB SIM readers and local SIM cards.
-If you use a remote SIM server instead, adjust the SIM_MODE and reader setup
-sections accordingly.
+It assumes USB SIM readers and local SIM cards. After the packages in
+sections 2 through 9 are in place, ./setup-x86.sh builds the images from
+the Dockerfiles in this repository and starts one container per inserted
+SIM. Remote SIM mode is described in section 6; do not use it for USB
+readers on this machine.
 
 ================================================================================
   1) Prerequisites
 ================================================================================
 
-- Ubuntu 24.04 LTS x86_64
+- Ubuntu 24.04 or 26.04 LTS x86_64
 - A machine with USB ports and one or more USB SIM card readers
 - At least one SIM card with VoLTE/VoWiFi support
 - Internet access for Docker images and package installation
@@ -35,8 +37,9 @@ Verify the PC/SC stack:
 
   pcsc_scan
 
-You should see the reader(s) detected. If not, reconnect the reader and check
-that pcscd is running.
+You should see the reader(s) detected. Section 6 stops this host pcscd
+before the containers start, because the container pcscd must own the
+USB readers.
 
 ================================================================================
   3) Install Docker Engine and Docker Compose plugin
@@ -54,7 +57,12 @@ Install Docker from the official repository:
       sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
 
   sudo apt update
-  sudo apt install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+  if ! sudo apt install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin; then
+      echo "docker-ce is not published for this Ubuntu release; using Ubuntu packages"
+      sudo rm -f /etc/apt/sources.list.d/docker.list
+      sudo apt update
+      sudo apt install -y docker.io docker-compose-v2
+  fi
 
 Start and enable Docker:
 
@@ -68,6 +76,15 @@ Log out and back in, then verify:
 
   docker --version
   docker compose version
+
+The group membership applies only to a new login. In the shell that just
+ran usermod, Docker still returns "permission denied" until you reconnect.
+To use Docker in that same shell without logging out:
+
+  sudo setfacl -m u:"$USER":rw /var/run/docker.sock
+
+That ACL is lost when the Docker service restarts. The lasting fix is a
+new login after usermod.
 
 ================================================================================
   4) Clone the project
@@ -88,17 +105,14 @@ The project files are now in:
 ================================================================================
 
 The host side uses Python to probe SIMs and manage container startup.
-Install the required Python package:
+Python 3.11 or newer is required (tomllib). Install the PC/SC binding:
 
   sudo apt install -y python3-pyscard
 
-If you are on Python 3.10 or older, also install:
+SIM reads run inside the Asterisk container, so a host pysim virtualenv
+is not required. Use the system python3:
 
-  python3 -m pip install --user tomli
-
-Verify the import:
-
-  python3 -c "from smartcard.System import readers; print('pyscard OK', len(readers()))"
+  python3 -c "import tomllib; print('python', tomllib.__name__)"
 
 ================================================================================
   6) PC/SC and SIM reader setup (customized for your hardware)
@@ -118,17 +132,19 @@ Choose one of these modes:
 
 - Remote SIM-server mode:
   - The SIM is served by a remote osmo-remsim bankd server.
-  - Use SIM_MODE=remote (default).
+  - Set SIM_MODE=remote before generating compose.yaml.
   - Edit the remsim reader configuration so the PC/SC stack points at your
     bankd host and port.
 
-A. Verify the host-side PC/SC stack
+A. Verify the host-side PC/SC stack, then release the readers
 
-Run these commands on the host before starting the containers:
+Install pcscd and libccid with the packages in section 2. Start it once
+to confirm the readers, then stop it. The compose stack runs its own
+pcscd and must be the only process holding the USB readers.
 
-  sudo systemctl enable --now pcscd
-  sudo systemctl restart pcscd
+  sudo systemctl start pcscd
   pcsc_scan
+  sudo systemctl disable --now pcscd
 
 If the reader is not detected, check:
 
@@ -277,94 +293,165 @@ Create the token file:
 If you want notifications, also set the correct chat ID in the dialplan.
 
 ================================================================================
-  10) Start the stack
+  10) Build the images and start the stack
 ================================================================================
 
-The recommended startup method is the automation script that probes the SIM
-readers first and starts only the instances that actually have a SIM card.
-For a local USB reader setup, use:
+Build from the Dockerfiles in this repository. Do not start the prebuilt
+phcodercat/asterisk-vowifi image by itself. That image is only a source
+stage inside asterisk/Dockerfile. The image that runs includes the local
+ami_usim, entrypoint, and strongSwan tree.
+
+From the repository root, with the SIM cards already inserted:
+
+  chmod +x setup-x86.sh build-images.sh
+  ./setup-x86.sh
+
+SIM_MODE=local is the default. The script:
+
+- writes compose.yaml from devices.toml
+- runs ./build-images.sh (docker compose build pcscd asterisk)
+- probes each reader and starts a container only where a SIM answers
+
+devices.toml maps P0 to asterisk (reader0) and P1 to asterisk2 (reader1).
+A host Asterisk process already listens on UDP 5060 and 127.0.0.1:5038,
+so the generated ports are:
+
+  reader0  SIP 15060/udp   AMI 127.0.0.1:15038
+  reader1  SIP 5062/udp    AMI 127.0.0.1:15039
+  reader N AMI 127.0.0.1:(15037+N)
+
+Inside each container, SIP is still 5060 and AMI is still 5038.
+
+The first Asterisk image build compiles Asterisk and strongSwan. Plan on
+a long run. Later builds reuse Docker cache.
+
+gitea.osmocom.org answers git clone with an Anubis page, so the Dockerfile
+copies the strongSwan tree out of the source image instead of cloning it.
+
+To watch for SIM hotplug after the first start:
 
   export SIM_MODE=local
-  python3 start_sim_container_config.py --setup --watch
-
-If you are using the simpler Docker Compose path, also enable local mode:
-
-  export SIM_MODE=local
-  docker compose up -d --build
-
-This will:
-- inspect your configured readers
-- read SIM data from the cards
-- generate configs for the matching instances
-- start only the containers that have a present SIM
-- keep watching for hotplug and SIM changes
-
-If you prefer the simpler Docker Compose path for a manual setup, use:
-
-  docker compose up -d --build
+  python3 start_sim_container_config.py --watch
 
 ================================================================================
   11) Verify the installation
 ================================================================================
 
-Check container status:
-
   docker compose ps
 
-Watch the logs:
+Reader0:
 
-  docker compose logs -f pcscd asterisk
+  docker compose exec asterisk asterisk -rx "pjsip show registrations"
 
-You should see the stack start, the PC/SC socket become available, and the
-Asterisk container begin the IMS/SIP registration flow.
+Reader1, after its container is running:
 
-If you used the automation script, look for messages that indicate the SIMs were
-successfully detected and the matching instances were started.
+  docker compose exec asterisk2 asterisk -rx "pjsip show registrations"
+
+Registered means the IMS registration is up. The container health check
+also requires the IPsec child SA to be ESTABLISHED.
+
+  docker compose exec asterisk swanctl --list-sas
 
 ================================================================================
-  12) Troubleshooting
+  12) SMS gateway
+================================================================================
+
+The gateway is an AMI client and a web UI. It is not part of ./setup-x86.sh.
+
+Copy the example and set one [[devices]] block per running container.
+ami_port must be the host port from compose.yaml (15038 and 15039), not
+5038. read_sms_frequency is required even though AMI delivers SMS as
+events. recordings_base_dir is the host logs directory (../logs from
+this repo).
+
+  cd sms-gateway
+  cp config.toml.example config.toml
+  # edit iccid, imsi, msisdn, ami_port, and the web password
+
+Build the UI, then the release binary. Node.js 22 and pnpm 9 are enough
+for the frontend. Rust/Cargo builds the server. The binary embeds
+frontend/dist, so build the UI first.
+
+  # if node is not installed, unpack the official linux-x64 tarball
+  # onto PATH, then: corepack enable && corepack prepare pnpm@9.15.4 --activate
+  cd frontend && pnpm install && pnpm run build && cd ..
+  cargo build --release
+
+Run it as a user service so it does not need root:
+
+  mkdir -p "$HOME/.config/systemd/user" logs data
+  cp contrib/systemd/sms-gateway.user.service \
+      "$HOME/.config/systemd/user/sms-gateway.service"
+  systemctl --user daemon-reload
+  systemctl --user enable --now sms-gateway.service
+
+The UI listens on port 8080. From the LAN:
+
+  http://<this-host>:8080
+
+Log lines should show "logged in" for each AMI port. To keep the user
+service running after reboot:
+
+  sudo loginctl enable-linger "$USER"
+
+================================================================================
+  13) Troubleshooting
 ================================================================================
 
 If no SIMs are detected:
-- confirm the reader is visible with pcsc_scan
-- ensure pcscd is running
-- reconnect the reader and try again
-- check that the USB device permissions allow access
+- stop the host pcscd (the container pcscd must own the readers)
+- reseat the card and run ./setup-x86.sh again
+- confirm lsusb shows the reader
 
-If the container does not start correctly:
-- check Docker logs with docker compose logs
-- verify your config files are not missing required values
-- ensure your carrier/domain values match your SIM and network profile
+If Docker says permission denied:
+- log in again after usermod -aG docker
+- or setfacl the socket as described in section 3
+
+If a container fails to bind 5060 or 5038:
+- a host Asterisk is still using those ports
+- reader0 must stay on 15060 and 15038
+- do not change those back while /usr/sbin/asterisk is running
+
+If the image build fails on an IPv6 address with "network is unreachable":
+- this host has no global IPv6 route
+- retry the build; Docker will use IPv4 when that route fails over
 
 If registration fails:
-- verify the IMSI, MSISDN, MCC/MNC, and SMSC values
-- verify the IMEI in devices.toml and pjsip.conf
-- make sure the SIM is inserted before startup
-- review the Asterisk logs for authentication and IMS errors
+- the SIM must be seated before the container starts
+- check pjsip show registrations and swanctl --list-sas
+- confirm devices.toml IMEI and the values written into config/<N>/
 
 ================================================================================
-  13) Useful commands
+  14) Useful commands
 ================================================================================
 
-Stop everything:
+Build only:
 
-  docker compose down
+  ./build-images.sh
 
-Restart the stack:
+Probe SIMs and start containers:
 
-  docker compose up -d --build
+  export SIM_MODE=local
+  python3 start_sim_container_config.py --setup
 
-Re-run the SIM-driven bootstrap:
-
-  python3 start_sim_container_config.py --setup --watch
-
-View the current reader list:
+List readers:
 
   python3 start_sim_container_config.py --list
+
+Stop the stack:
+
+  docker compose stop
+
+Tear down containers (generated config/1 .. config/8 are left in place):
+
+  docker compose down
 
 ================================================================================
   Notes
 ================================================================================
 
-This stack is intended for test and evaluation use. It is not a production
-phone system and may require carrier-specific tuning for your SIM and network.
+This stack is for test and evaluation. It is not a production phone system
+and may need carrier-specific tuning for your SIM.
+
+Work on the machine's LAN address. A VPN interface on the same host is not
+the address you configure or browse to.

@@ -1,0 +1,17 @@
+[Unit]
+Description=SMS Gateway (AMI/Asterisk)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/ht/sourcecode/asterisk-docker/sms-gateway
+ExecStart=/home/ht/sourcecode/asterisk-docker/sms-gateway/target/release/sms-gateway \
+    --config /home/ht/sourcecode/asterisk-docker/sms-gateway/config.toml \
+    --log /home/ht/sourcecode/asterisk-docker/sms-gateway/logs \
+    --log-level info
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=default.target

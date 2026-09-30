@@ -115,7 +115,7 @@ password = "your_secure_password"
 
 # Host path that maps to /logs/ inside each asterisk container.
 # Inbound call recordings land in {recordings_base_dir}/{instance}/recordings/<file>.wav.
-recordings_base_dir = "/home/ht/docker/logs"
+recordings_base_dir = "/home/ht/sourcecode/logs"
 
 # One [[devices]] block per asterisk container (= per SIM).
 [[devices]]

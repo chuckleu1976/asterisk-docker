@@ -14,6 +14,10 @@ password = "your_secure_password" # Web interface password
 # arrive as native AMI UserEvents from the dialplan).
 read_sms_frequency = 30
 
+# Host directory for per-instance call recordings.
+# This checkout mounts ../logs/<N> into each container, so:
+recordings_base_dir = "/home/ht/sourcecode/logs"
+
 # Speech-to-text via whisper.cpp (optional). Remove these lines to disable transcription.
 # Download multilingual model: https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin
 # ffmpeg_exe       = "/path/to/ffmpeg"
@@ -34,25 +38,27 @@ sms_storage = "MT"
 # You can define multiple devices using different approaches:
 
 # ── AMI mode (only mode supported since 0.3.4) ───────────────────────────────
-# One asterisk container per SIM; talks to AMI on 127.0.0.1:5037+instance.
+# One asterisk container per SIM. Match ami_port to the host port in compose.yaml.
+# Instance 1 is 15038 (the host Asterisk already owns 5038). Instance N is 15037+N.
 # Required: instance.  All other AMI fields default sensibly.
 [[devices]]
 instance        = 1                # Asterisk container number (1..8)
 ami_host        = "127.0.0.1"     # Defaults to 127.0.0.1
-ami_port        = 5038             # Defaults to 5037 + instance
+ami_port        = 15038            # Host port. Inside the container AMI stays on 5038.
 ami_user        = "jolly"          # Defaults to "jolly"
 ami_secret      = "geheim"         # Defaults to "geheim"; prefer ami_secret_file
 # ami_secret_file = "/etc/sms-gateway/ami_secret_1"
-iccid           = "8901240387150170144"   # Used as the sim_id key in the DB and API
-imsi            = "310240385017144"       # Optional; shown in the UI
-msisdn          = "+18165537405"          # Optional; shown in the UI
+iccid           = "8900000000000000000"   # Used as the sim_id key in the DB and API
+imsi            = "001010000000001"       # Optional; shown in the UI
+msisdn          = "+15550000001"          # Optional; shown in the UI
 
 [[devices]]
 instance        = 2
+ami_port        = 15039
 ami_secret      = "geheim"
-iccid           = "8901240387150170530"
-imsi            = "310240385017053"
-msisdn          = "+18165537217"
+iccid           = "8900000000000000001"
+imsi            = "001010000000002"
+msisdn          = "+15550000002"
 
 # Webhook configurations (optional)
 # Multiple webhooks can be configured to send SMS data to external services
