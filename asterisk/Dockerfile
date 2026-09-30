@@ -30,10 +30,12 @@ RUN cd asterisk && \
     python3 /tmp/rpack_fix.py && \
     make -j$(nproc) && \
     make install
-RUN git clone --depth=1 --branch jolly/work https://gitea.osmocom.org/ims-volte-vowifi/strongswan-epdg.git && \
-    cd strongswan-epdg && \
-    patch -i ../01_configure_gettext.patch -p1 && \
-    patch -i ../02_warnings.patch -p1 && \
+# gitea.osmocom.org answers git clones with an Anubis challenge page.
+# The upstream image already contains this branch, with both local patches applied.
+COPY --from=source /home/asterisk-build/strongswan-epdg /home/asterisk-build/strongswan-epdg
+RUN cd strongswan-epdg && \
+    patch -p1 --forward --batch -i ../01_configure_gettext.patch || true && \
+    patch -p1 --forward --batch -i ../02_warnings.patch || true && \
     autoreconf -if && \
     ./configure --enable-eap-sim-pcsc --enable-p-cscf --enable-save-keys --enable-eap-sim --enable-eap-aka --enable-kernel-libipsec && \
     make -j$(nproc) && \
@@ -55,7 +57,7 @@ COPY entrypoint.sh /entrypoint.sh
 # Fedora 44 pcsc-lite 2.4.1 ships libpcsclite.so.1 AND libpcsclite_real.so.1,
 # both with SONAME=libpcsclite.so.1 — ldconfig picks the newer real file and
 # overrides any symlink we create. Fix: replace both files directly, skip ldconfig.
-COPY --from=pcsc /usr/lib64/libpcsclite.so.1.0.0 /tmp/libpcsclite_1.9.9.so
+COPY --from=pcsc /usr/lib64/libpcsclite.so.1 /tmp/libpcsclite_1.9.9.so
 RUN ls -la /tmp/libpcsclite_1.9.9.so && \
     cp /tmp/libpcsclite_1.9.9.so /usr/lib64/libpcsclite.so.1 && \
     cp /tmp/libpcsclite_1.9.9.so /usr/lib64/libpcsclite_real.so.1 && \

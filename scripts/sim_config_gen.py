@@ -232,10 +232,12 @@ def generate_compose(devices):
         instance = idx + 1
         hostname = dev['hostname']
         svc = "asterisk" if instance == 1 else f"asterisk{instance}"
-        sip_port = 5060 + (instance - 1) * 2
+        # Host Asterisk already listens on UDP 5060.
+        sip_port = 15060 if instance == 1 else 5060 + (instance - 1) * 2
         rtp_s = 10000 + (instance - 1) * 10
         rtp_e = rtp_s + 9
-        ami_port = 5038 + (instance - 1)
+        # Host Asterisk already listens on 127.0.0.1:5038.
+        ami_port = 15038 + (instance - 1)
 
         lines += [
             f"  {svc}:",

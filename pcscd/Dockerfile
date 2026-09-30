@@ -1,4 +1,4 @@
-FROM ghcr.io/chuckleu1976/pcscd-sysmocom:latest
+FROM phcodercat/pcscd:latest
 
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
