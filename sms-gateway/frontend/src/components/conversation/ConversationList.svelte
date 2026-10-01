@@ -21,7 +21,6 @@
   let loading = $state(true);
   let searchValue = $state("");
   let searchFocused = $state(false);
-  let sentByMessage = $state(new Map());
 
   // Unread count from conversations store (for badge on Inbox tab)
   let unreadCount = $derived(
@@ -33,29 +32,7 @@
     loading = true;
     try {
       const res = await apiClient.getSmsByDirection(tab);
-      const data = res.data?.data ?? [];
-
-      if (tab === "inbox") {
-        // Build a sent-message lookup so inbound rows with blank sender can
-        // recover the real destination number from the paired outbound copy.
-        const sentRes = await apiClient.getSmsByDirection("sent");
-        const sent = sentRes.data?.data ?? [];
-        const next = new Map();
-        for (const row of sent) {
-          const key = (row?.message || "").trim();
-          if (!key) continue;
-          const receiver = normalizePhone((row?.contact_id || "").trim());
-          if (!receiver) continue;
-          const mapKey = `${key}|${receiver}`;
-          const label = getSimPhone(row?.sim_id);
-          if (label && !next.has(mapKey)) {
-            next.set(mapKey, label);
-          }
-        }
-        sentByMessage = next;
-      }
-
-      messages = data;
+      messages = res.data?.data ?? [];
     } catch (e) {
       console.error("Failed to load messages:", e);
       messages = [];
@@ -73,43 +50,13 @@
 
   // 鈹€鈹€ Filtered list 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
   let filtered = $derived(
-    (() => {
-      const scoped = messages
-        .filter(m => !filterSimId || m.sim_id === filterSimId)
-        .filter(m =>
-          searchValue.trim() === "" ||
-          senderLabel(m).toLowerCase().includes(searchValue.toLowerCase()) ||
-          m.message.toLowerCase().includes(searchValue.toLowerCase())
-        )
-        .slice()
-        .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-
-      // One list row per sender; keep latest message only.
-      const bySender = new Map();
-      for (const msg of scoped) {
-        const sender = senderLabel(msg);
-        const key = normalizePhone(sender) || sender;
-        if (!key) continue;
-
-        const existing = bySender.get(key);
-        const normalizedContactId = normalizePhone(msg.contact_id);
-
-        if (!existing) {
-          bySender.set(key, {
-            ...msg,
-            contact_id: normalizedContactId || (msg.contact_id || "").trim(),
-            contact_name: sender,
-          });
-          continue;
-        }
-
-        if ((!existing.contact_id || !existing.contact_id.trim()) && normalizedContactId) {
-          existing.contact_id = normalizedContactId;
-          bySender.set(key, existing);
-        }
-      }
-      return Array.from(bySender.values());
-    })()
+    messages
+      .filter(m => !filterSimId || m.sim_id === filterSimId)
+      .filter(m =>
+        searchValue.trim() === "" ||
+        m.contact_name.toLowerCase().includes(searchValue.toLowerCase()) ||
+        m.message.toLowerCase().includes(searchValue.toLowerCase())
+      )
   );
 
   // 鈹€鈹€ SIM display name 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
@@ -117,20 +64,6 @@
     if (!simId) return "";
     const sim = $simCards.find(s => s.id === simId);
     return sim?.alias || sim?.phone_number || simId.slice(-6);
-  }
-
-  function normalizePhone(phone) {
-    const raw = (phone || "").trim();
-    if (!raw) return "";
-    const digits = raw.replace(/\D/g, "");
-    if (!digits) return "";
-    return `+${digits}`;
-  }
-
-  function getSimPhone(simId) {
-    if (!simId) return "";
-    const sim = $simCards.find(s => s.id === simId);
-    return normalizePhone(sim?.phone_number || "");
   }
 
   // 鈹€鈹€ Avatar helpers 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
@@ -151,57 +84,9 @@
       : name.slice(0, 2).toUpperCase();
   }
 
-  function extractPhoneLikeToken(text) {
-    if (!text) return "";
-    // Avoid short fragments like "37045"; keep only likely full numbers.
-    const matches = text.match(/\+?\d{10,}/g);
-    if (!matches || matches.length === 0) return "";
-    return matches.sort((a, b) => b.length - a.length)[0] || "";
-  }
-
-  function senderLabel(msg) {
-    const byName = (msg?.contact_name || "").trim();
-    if (byName) return byName;
-
-    const byId = (msg?.contact_id || "").trim();
-    if (byId) return byId;
-
-    const receiver = getSimPhone(msg?.sim_id);
-    const key = `${(msg?.message || "").trim()}|${receiver}`;
-    const bySentPair = sentByMessage.get(key) || "";
-    if (bySentPair) return bySentPair;
-
-    const byText = extractPhoneLikeToken(msg?.message || "");
-    if (byText) return byText;
-
-    return "";
-  }
-
   // 鈹€鈹€ Open conversation 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
-  async function openMessage(msg) {
-    const resolvedName = senderLabel(msg);
-    const resolvedId = (msg.contact_id || "").trim() || normalizePhone(resolvedName);
-    const senderKey = normalizePhone(resolvedName) || resolvedName;
-
-    // Optimistically clear unread state for this sender thread in the inbox list.
-    messages = messages.map((m) => {
-      const key = normalizePhone(senderLabel(m)) || senderLabel(m);
-      if (activeTab === "inbox" && key === senderKey) {
-        return { ...m, status: 1 };
-      }
-      return m;
-    });
-
-    changeCurrentConversation({ id: resolvedId, name: resolvedName });
-
-    if (resolvedId) {
-      try {
-        await apiClient.markConversationAsReadAndGetLatest(resolvedId);
-      } catch (e) {
-        console.error("Failed to mark conversation as read:", e);
-      }
-    }
-
+  function openMessage(msg) {
+    changeCurrentConversation({ id: msg.contact_id, name: msg.contact_name });
     onConversationSelect();
   }
 
@@ -221,7 +106,19 @@
 
   <!-- 鈹€鈹€ Header 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€ -->
   <div class="flex items-center justify-between mb-3">
-    <h2 class="text-base font-semibold text-gray-800 dark:text-gray-200">{$t('messages')}</h2>
+    <div class="flex items-center gap-2">
+      <button
+        class="inline-flex items-center gap-1.5 h-9 px-2.5 rounded-full bg-blue-600 text-white
+               shadow-sm shadow-blue-600/30 hover:bg-blue-700 transition"
+        onclick={() => window.location.href = '/'}
+        aria-label="Back to Dashboard"
+        title="Back to Dashboard"
+      >
+        <Icon icon="carbon:arrow-left" class="w-4 h-4" />
+        <span class="text-xs font-semibold">{$t('btn_back')}</span>
+      </button>
+      <h2 class="text-base font-semibold text-gray-800 dark:text-gray-200">{$t('messages')}</h2>
+    </div>
     <button
       class="p-2 rounded-lg bg-gray-800 dark:bg-gray-200 text-gray-100 dark:text-gray-900
              hover:bg-gray-700 dark:hover:bg-gray-300 transition-all active:scale-95"
@@ -357,9 +254,9 @@
             onclick={() => openMessage(msg)}
           >
             <!-- Avatar -->
-            <div class="flex-shrink-0 w-9 h-9 rounded-full {avatarColor(senderLabel(msg))}
+            <div class="flex-shrink-0 w-9 h-9 rounded-full {avatarColor(msg.contact_name)}
                         flex items-center justify-center text-white text-xs font-semibold">
-              {initials(senderLabel(msg))}
+              {initials(msg.contact_name)}
             </div>
 
             <!-- Content -->
@@ -368,7 +265,7 @@
                 <span class="text-[13px] truncate
                              {isUnread ? 'font-semibold text-gray-900 dark:text-gray-100'
                                        : 'font-medium text-gray-700 dark:text-gray-300'}">
-                  {senderLabel(msg)}
+                  {msg.contact_name}
                 </span>
                 <span class="text-[11px] flex-shrink-0
                              {isUnread ? 'font-semibold text-blue-600 dark:text-blue-400'

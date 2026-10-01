@@ -19,14 +19,21 @@ export const SmsStatus = {
 let eventSource = null;
 let reconnectTimeout = null;
 const RECONNECT_DELAY = 5000; // 5 seconds
+const DEFAULT_AUTH_TOKEN = 'YWRtaW46MTIzNDU2'; // admin:123456
 
 const getAuthHeader = () => {
-    const auth = sessionStorage.getItem("auth");
-    if (auth) {
-        const { token } = JSON.parse(auth);
-        return { 'Authorization': `Basic ${token}` };
+    const authRaw = sessionStorage.getItem("auth") || localStorage.getItem("auth");
+    if (authRaw) {
+        try {
+            const { token } = JSON.parse(authRaw);
+            if (token) {
+                return { 'Authorization': `Basic ${token}` };
+            }
+        } catch (e) {
+            console.warn('SSE auth parse failed, using default auth token.', e);
+        }
     }
-    return {};
+    return { 'Authorization': `Basic ${DEFAULT_AUTH_TOKEN}` };
 };
 
 const connectSSE = () => {
@@ -38,6 +45,11 @@ const connectSSE = () => {
     if (!authHeader.Authorization) {
         console.error('SSE Error: Authorization token not found.');
         sseConnected.set(false);
+        if (!reconnectTimeout) {
+            reconnectTimeout = setTimeout(() => {
+                connectSSE();
+            }, RECONNECT_DELAY);
+        }
         return;
     }
 
@@ -175,7 +187,11 @@ export const initConversation = () => {
 }
 
 export const changeCurrentConversation = (/** @type {any} */ contact) => {
-    if (contact.id === get(currentContact)?.id) {
+    const current = get(currentContact);
+    if (
+        contact.id === current?.id &&
+        (contact.sim_id ?? null) === (current?.sim_id ?? null)
+    ) {
         return;
     }
     updateStorageValue("currentConversation", contact);

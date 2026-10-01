@@ -13,8 +13,13 @@ mod api;
 mod config;
 mod db;
 mod decode;
+mod firefox_api;
+mod firefox_poll;
+mod firefox_upload_retry;
+mod firefox_upload_retry_worker;
 mod modem;
 mod readers_db;
+mod service_control;
 mod sim_inventory;
 mod transcribe;
 #[cfg(test)]
@@ -102,6 +107,10 @@ async fn main() {
             transcribe_cfg.clone(),
         )
         .await;
+
+    tokio::spawn(firefox_poll::firefox_poll_worker(modem_manager.clone()));
+    tokio::spawn(firefox_poll::firefox_item_catalog_sync_worker());
+    firefox_upload_retry_worker::start_retry_worker();
 
     if let Ok(_) = api::run_api(
         modem_manager.clone(),

@@ -170,6 +170,7 @@ impl ModemManager {
                     } else {
                         SmsStatus::Unread
                     },
+                    ..Default::default()
                 };
                 let _ = sms.insert().await?;
             }
@@ -200,6 +201,7 @@ impl ModemManager {
             sim_id: sim_id.to_string(),
             send: true,
             status: SmsStatus::Read,
+            ..Default::default()
         };
 
         let sms_id = sms.insert().await?;

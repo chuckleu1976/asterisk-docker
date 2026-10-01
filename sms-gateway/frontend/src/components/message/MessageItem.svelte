@@ -1,5 +1,6 @@
 <script>
   import Icon from "@iconify/svelte";
+  import { t } from "../../js/i18n.js";
   import { SmsStatus } from "../../stores/conversation";
   import { quintOut } from "svelte/easing";
 
@@ -70,6 +71,54 @@
       },
     };
   }
+
+  function getOutgoingStatusMeta(msg) {
+    if (!msg?.send) return null;
+
+    if (msg.status_report_requested) {
+      if (msg.delivery_status === 1) {
+        return {
+          label: $t('sms_delivery_delivered'),
+          toneClass: 'text-emerald-600 dark:text-emerald-400',
+        };
+      }
+
+      if (msg.delivery_status === 2 || msg.status === SmsStatus.Failed) {
+        return {
+          label: $t('sms_delivery_failed'),
+          toneClass: 'text-red-600 dark:text-red-400',
+        };
+      }
+
+      return {
+        label: $t('sms_delivery_pending_report'),
+        toneClass: 'text-amber-600 dark:text-amber-400',
+      };
+    }
+
+    if (msg.status === SmsStatus.Loading) {
+      return {
+        label: $t('sms_delivery_sending'),
+        toneClass: 'text-gray-500 dark:text-gray-400',
+      };
+    }
+
+    if (msg.status === SmsStatus.Failed) {
+      return {
+        label: $t('sms_delivery_failed'),
+        toneClass: 'text-red-600 dark:text-red-400',
+      };
+    }
+
+    if (msg.status === SmsStatus.Read) {
+      return {
+        label: $t('sms_delivery_sent'),
+        toneClass: 'text-gray-500 dark:text-gray-400',
+      };
+    }
+
+    return null;
+  }
 </script>
 
 <div
@@ -111,6 +160,14 @@
         {@html formatMessage(message.message)}
       </p>
     </div>
+
+    {#if getOutgoingStatusMeta(message)}
+      <div class="mt-1 flex justify-end">
+        <span class="text-[11px] {getOutgoingStatusMeta(message)?.toneClass}">
+          {getOutgoingStatusMeta(message)?.label}
+        </span>
+      </div>
+    {/if}
   </div>
 </div>
 

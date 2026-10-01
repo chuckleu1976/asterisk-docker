@@ -4,7 +4,11 @@
   import { fly } from "svelte/transition";
   import { quintOut } from "svelte/easing";
 
-  let { selectedSim = $bindable(null), initialSimId = null } = $props();
+  let {
+    selectedSim = $bindable(null),
+    initialSimId = null,
+    preferredSimId = null,
+  } = $props();
 
   let showSimSelector = $state(false);
   let searchText = $state("");
@@ -23,6 +27,13 @@
 
   $effect(() => {
     if ($simCards.length === 0) return;
+    if (preferredSimId) {
+      const preferred = $simCards.find((sim) => sim.id === preferredSimId);
+      if (preferred) {
+        selectedSim = preferred;
+        return;
+      }
+    }
     // Explicit navigation from SimDashboard takes highest priority
     if (initialSimId) {
       const found = $simCards.find((sim) => sim.id === initialSimId);

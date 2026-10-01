@@ -16,7 +16,6 @@
   import MessageItem from "./MessageItem.svelte";
   import MessageInput from "./MessageInputOptimized.svelte";
   import LoadingSpinner from "../ui/LoadingSpinner.svelte";
-  import { simCards } from "../../stores/simcards";
 
   let { initialSimId = null } = $props();
 
@@ -28,6 +27,7 @@
   let sendMessageContent = $state("");
   let page = $state(1);
   let pageSize = $state(9999999);
+  let loadSeq = 0;
   let showLoading = $state(true);
   let loadingTimer = null;
   let messageInputComponent = $state(null);
@@ -36,69 +36,19 @@
   let isNewMessage = $state(false);
   const loadingDuration = 150;
 
-  function normalizePhone(phone) {
-    const raw = (phone || "").trim();
-    if (!raw) return "";
-    const digits = raw.replace(/\D/g, "");
-    return digits ? `+${digits}` : "";
-  }
-
-  function getSimPhone(simId) {
-    if (!simId) return "";
-    const sim = $simCards.find((s) => s.id === simId);
-    return normalizePhone(sim?.phone_number || "");
-  }
-
-  function extractPhoneLikeToken(text) {
-    if (!text) return "";
-    const matches = text.match(/\+?\d{10,}/g);
-    if (!matches || matches.length === 0) return "";
-    return normalizePhone(matches.sort((a, b) => b.length - a.length)[0]);
-  }
-
-  function inferSenderFromInbox(msg, sentByMessage) {
-    const byName = normalizePhone(msg?.contact_name || "");
-    if (byName) return byName;
-
-    const byId = normalizePhone(msg?.contact_id || "");
-    if (byId) return byId;
-
-    const receiver = getSimPhone(msg?.sim_id);
-    const key = `${(msg?.message || "").trim()}|${receiver}`;
-    const byPair = sentByMessage.get(key) || "";
-    if (byPair) return byPair;
-
-    return extractPhoneLikeToken(msg?.message || "");
-  }
-
-  async function loadByInferredSender(targetContactId) {
-    const target = normalizePhone(targetContactId);
-    if (!target) return [];
-
-    const [inboxRes, sentRes] = await Promise.all([
-      apiClient.getSmsByDirection("inbox"),
-      apiClient.getSmsByDirection("sent"),
-    ]);
-
-    const inbox = inboxRes.data?.data ?? [];
-    const sent = sentRes.data?.data ?? [];
-
-    const sentByMessage = new Map();
-    for (const row of sent) {
-      const key = (row?.message || "").trim();
-      if (!key) continue;
-      const receiver = normalizePhone(row?.contact_id || "");
-      if (!receiver) continue;
-      const mapKey = `${key}|${receiver}`;
-      const senderPhone = getSimPhone(row?.sim_id);
-      if (senderPhone && !sentByMessage.has(mapKey)) {
-        sentByMessage.set(mapKey, senderPhone);
-      }
+  let latestStatusReport = $derived.by(() => {
+    for (const msg of messages) {
+      if (!msg?.send || !msg?.status_report_requested) continue;
+      if (!msg?.delivery_report_raw) continue;
+      return msg;
     }
+    return null;
+  });
 
-    return inbox
-      .filter((m) => inferSenderFromInbox(m, sentByMessage) === target)
-      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  function statusReportLabel(deliveryStatus) {
+    if (deliveryStatus === 1) return "Delivered";
+    if (deliveryStatus === 2) return "Failed";
+    return "Pending";
   }
 
   $effect(() => {
@@ -122,40 +72,47 @@
 
     if ($currentContact.id === prevConversationId) return;
 
-    prevConversationId = $currentContact.id;
+    const contactSnapshot = { ...$currentContact };
+    const thisLoadSeq = ++loadSeq;
+
+    prevConversationId = contactSnapshot.id;
     loading = true;
 
-    if (!$currentContact.new) {
+    if (!contactSnapshot.new) {
       apiClient
-        .getSmsPaginated(page, pageSize, $currentContact.id)
+        .getSmsPaginated(page, pageSize, contactSnapshot.id)
         .then(async (res) => {
+          if (thisLoadSeq !== loadSeq) return;
+
           isNewMessage = false;
-          let loaded = res.data.data ?? [];
-          if (loaded.length === 0) {
+          let rows = Array.isArray(res?.data?.data) ? res.data.data : [];
+
+          // Fallback: if contact-id lookup is empty, try inbox rows filtered by contact name.
+          // This covers stale/merged contact-id edge cases while preserving normal behavior.
+          if (rows.length === 0 && contactSnapshot.name) {
             try {
-              loaded = await loadByInferredSender($currentContact.id);
-            } catch (e) {
-              console.error("loadByInferredSender failed:", e);
+              const inboxRes = await apiClient.getSmsByDirection("inbox", 1, 500);
+              const inboxRows = Array.isArray(inboxRes?.data?.data) ? inboxRes.data.data : [];
+              rows = inboxRows.filter(
+                (row) => (row?.contact_name ?? "") === contactSnapshot.name
+              );
+            } catch (fallbackErr) {
+              console.error("Fallback inbox query failed:", fallbackErr);
             }
           }
-          messages = loaded;
 
-          // Ensure server-side unread state is cleared for this conversation key,
-          // including legacy inferred rows.
-          try {
-            await apiClient.markConversationAsReadAndGetLatest($currentContact.id);
-          } catch (e) {
-            console.error("Failed to mark conversation as read:", e);
-          }
-
-          loading = false;
+          messages = rows;
           if (page === 1) {
-            markConversationAsRead($currentContact.id);
+            markConversationAsRead(contactSnapshot.id);
           }
         })
         .catch((err) => {
-          console.error("Failed to load messages for contact", $currentContact.id, err);
+          if (thisLoadSeq !== loadSeq) return;
+          console.error("Failed to load conversation messages:", err);
           messages = [];
+        })
+        .finally(() => {
+          if (thisLoadSeq !== loadSeq) return;
           loading = false;
         });
     } else {
@@ -203,7 +160,7 @@
     }
   }
 
-  function handleSendMessage(simId) {
+  function handleSendMessage(simId, smsFormat = 'pdu', statusReportEnabled = false) {
     if (sendMessageContent.trim() === "") {
       return;
     }
@@ -218,6 +175,8 @@
       send: true,
       timestamp: new Date(),
       status: SmsStatus.Loading,
+      status_report_requested: statusReportEnabled,
+      delivery_status: statusReportEnabled ? 0 : null,
     };
 
     // Add message to array
@@ -240,13 +199,28 @@
         : $currentContact;
 
     apiClient
-      .sendSms(simId, concat, newMessage.message, $currentContact.new ?? false)
+      .sendSms(
+        simId,
+        concat,
+        newMessage.message,
+        $currentContact.new ?? false,
+        smsFormat,
+        statusReportEnabled
+      )
       .then((res) => {
         isNewMessage = false;
         const messageId = res.data;
         messages = messages.map((msg) => {
           if (msg.id === -1 && msg.message === newMessage.message) {
-            return { ...msg, status: SmsStatus.Read, id: messageId.sms_id };
+            return {
+              ...msg,
+              // SMS is sent once backend accepts it; status report is a
+              // separate network callback that may arrive later (or never).
+              status: SmsStatus.Read,
+              id: messageId.sms_id,
+              status_report_requested: statusReportEnabled,
+              delivery_status: statusReportEnabled ? 0 : null,
+            };
           }
           return msg;
         });
@@ -284,15 +258,17 @@
       isNewMessage = false;
     }
 
-    // Remove duplicates to avoid repeated messages
-    const existingIds = new Set(messages.map((msg) => msg.id));
-    const uniqueNewMessages = newMessages.filter(
-      (msg) => !existingIds.has(msg.id)
-    );
+    // Merge by id so status-only updates (same id, new status) are reflected.
+    const incomingById = new Map(newMessages.map((msg) => [msg.id, msg]));
+    const mergedExisting = messages.map((msg) => {
+      const incoming = incomingById.get(msg.id);
+      return incoming ? { ...msg, ...incoming } : msg;
+    });
 
-    if (uniqueNewMessages.length > 0) {
-      messages = [...uniqueNewMessages, ...messages];
-    }
+    const mergedIds = new Set(mergedExisting.map((msg) => msg.id));
+    const onlyNew = newMessages.filter((msg) => !mergedIds.has(msg.id));
+
+    messages = onlyNew.length > 0 ? [...onlyNew, ...mergedExisting] : mergedExisting;
   }
 
   onMount(() => {
@@ -320,41 +296,34 @@
   <div class="flex-1 overflow-hidden relative">
     <LoadingSpinner show={showLoading} duration={loadingDuration} />
     {#if !showLoading}
-      {#if messages.length === 0}
-        <div class="h-full flex flex-col items-center justify-center text-gray-400">
-          <p>No messages</p>
-          <p class="text-xs mt-1">Select a conversation or send a message</p>
-        </div>
-      {:else}
+      <div
+        class="h-full overflow-y-auto flex flex-col-reverse message-container z-9 absolute inset-0"
+        bind:this={messageContainer}
+        transition:fade={{ duration: loadingDuration }}
+      >
         <div
-          class="h-full overflow-y-auto flex flex-col-reverse message-container z-9 absolute inset-0"
-          bind:this={messageContainer}
-          transition:fade={{ duration: loadingDuration }}
+          class="flex flex-col-reverse gap-2 p-2 w-full mt-4 sm:mt-10 pb-24 sm:pb-24"
+          style="padding-bottom: calc(8rem + env(safe-area-inset-bottom, 0px));"
         >
-          <div
-            class="flex flex-col-reverse gap-2 p-2 w-full mt-4 sm:mt-10 pb-24 sm:pb-24"
-            style="padding-bottom: calc(8rem + env(safe-area-inset-bottom, 0px));"
-          >
-            {#each messages as message, index (message.id)}
-              <MessageItem {message} {isNewMessage} />
-              {@const timeHeader = formatTimeRange(
-                message.timestamp,
-                index === messages.length - 1
-                  ? null
-                  : messages[index - 1]?.timestamp
-              )}
-              {#if timeHeader || index === messages.length - 1}
-                <div
-                  class="flex justify-center text-xs text-gray-400 my-1"
-                  in:fade={{ duration: 300, delay: 100 }}
-                >
-                  {timeHeader || formatDate(message.timestamp)}
-                </div>
-              {/if}
-            {/each}
-          </div>
+          {#each messages as message, index (message.id)}
+            <MessageItem {message} {isNewMessage} />
+            {@const timeHeader = formatTimeRange(
+              message.timestamp,
+              index === messages.length - 1
+                ? null
+                : messages[index - 1]?.timestamp
+            )}
+            {#if timeHeader || index === messages.length - 1}
+              <div
+                class="flex justify-center text-xs text-gray-400 my-1"
+                in:fade={{ duration: 300, delay: 100 }}
+              >
+                {timeHeader || formatDate(message.timestamp)}
+              </div>
+            {/if}
+          {/each}
         </div>
-      {/if}
+      </div>
     {/if}
   </div>
 
@@ -366,6 +335,20 @@
     bind:this={messageInputComponent}
     {initialSimId}
   />
+
+  {#if latestStatusReport}
+    <div class="absolute bottom-16 right-3 z-20 max-w-[min(92vw,560px)] rounded-lg border border-amber-300 bg-amber-50/95 px-3 py-2 text-xs text-amber-900 shadow-sm backdrop-blur dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-100">
+      <div class="mb-1 font-semibold">Last +CDS Debug</div>
+      <div class="mb-1 flex flex-wrap gap-x-3 gap-y-1">
+        <span>SIM: {latestStatusReport.sim_id || "-"}</span>
+        <span>MR: {latestStatusReport.submit_ref ?? "-"}</span>
+        <span>Status: {statusReportLabel(latestStatusReport.delivery_status)}</span>
+      </div>
+      <div class="break-all font-mono text-[11px] leading-4 opacity-90">
+        {latestStatusReport.delivery_report_raw}
+      </div>
+    </div>
+  {/if}
 
   
 </div>

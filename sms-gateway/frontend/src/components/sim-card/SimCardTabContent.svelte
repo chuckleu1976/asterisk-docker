@@ -10,6 +10,7 @@
     import SimCardTechnicalInfoSkeleton from "./SimCardTechnicalInfoSkeleton.svelte";
     import EmptyState from "./EmptyState.svelte";
     import { t } from "../../js/i18n.js";
+    import { getModuleLabel } from "../../js/modem.js";
 
     let {
         simCard = null,
@@ -144,7 +145,7 @@
                     <span
                         class="px-3 py-1.5 bg-gray-900 dark:bg-gray-100 text-gray-100 dark:text-gray-900 text-xs font-medium rounded-lg"
                     >
-                        {simInfo.model_info.model}
+                        {getModuleLabel(simInfo.model_info.model)}
                     </span>
                 {/if}
             </div>

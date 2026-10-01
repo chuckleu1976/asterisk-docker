@@ -2,120 +2,12 @@
   import { onMount, onDestroy } from 'svelte';
   import Icon from '@iconify/svelte';
   import { apiClient } from '../js/api.js';
-  import { logout } from '../stores/auth.js';
+  import pkg from '../../package.json';
+  import { displayPort, getModuleLabel } from '../js/modem.js';
   import { t, lang } from '../js/i18n.js';
+  import { getMccCountry } from '../js/country.js';
 
-  // ── MCC → Country map ─────────────────────────────────────────────────────
-  const mccMap = {
-    '460': { en: 'China',        zh: '中国' },
-    '461': { en: 'China',        zh: '中国' },
-    '466': { en: 'Taiwan',       zh: '台湾' },
-    '454': { en: 'Hong Kong',    zh: '香港' },
-    '455': { en: 'Macau',        zh: '澳门' },
-    '440': { en: 'Japan',        zh: '日本' },
-    '441': { en: 'Japan',        zh: '日本' },
-    '450': { en: 'Korea',        zh: '韩国' },
-    '452': { en: 'Vietnam',      zh: '越南' },
-    '456': { en: 'Cambodia',     zh: '柬埔寨' },
-    '457': { en: 'Laos',         zh: '老挝' },
-    '502': { en: 'Malaysia',     zh: '马来西亚' },
-    '510': { en: 'Indonesia',    zh: '印度尼西亚' },
-    '515': { en: 'Philippines',  zh: '菲律宾' },
-    '520': { en: 'Thailand',     zh: '泰国' },
-    '525': { en: 'Singapore',    zh: '新加坡' },
-    '404': { en: 'India',        zh: '印度' },
-    '405': { en: 'India',        zh: '印度' },
-    '406': { en: 'India',        zh: '印度' },
-    '410': { en: 'Pakistan',     zh: '巴基斯坦' },
-    '411': { en: 'Pakistan',     zh: '巴基斯坦' },
-    '470': { en: 'Bangladesh',   zh: '孟加拉国' },
-    '414': { en: 'Myanmar',      zh: '缅甸' },
-    '413': { en: 'Sri Lanka',    zh: '斯里兰卡' },
-    '429': { en: 'Nepal',        zh: '尼泊尔' },
-    '428': { en: 'Mongolia',     zh: '蒙古' },
-    '401': { en: 'Kazakhstan',   zh: '哈萨克斯坦' },
-    '434': { en: 'Uzbekistan',   zh: '乌兹别克斯坦' },
-    '432': { en: 'Iran',         zh: '伊朗' },
-    '418': { en: 'Iraq',         zh: '伊拉克' },
-    '425': { en: 'Israel',       zh: '以色列' },
-    '416': { en: 'Jordan',       zh: '约旦' },
-    '415': { en: 'Lebanon',      zh: '黎巴嫩' },
-    '419': { en: 'Kuwait',       zh: '科威特' },
-    '426': { en: 'Bahrain',      zh: '巴林' },
-    '427': { en: 'Qatar',        zh: '卡塔尔' },
-    '420': { en: 'Saudi Arabia', zh: '沙特阿拉伯' },
-    '424': { en: 'UAE',          zh: '阿联酋' },
-    '430': { en: 'UAE',          zh: '阿联酋' },
-    '431': { en: 'UAE',          zh: '阿联酋' },
-    '286': { en: 'Turkey',       zh: '土耳其' },
-    '250': { en: 'Russia',       zh: '俄罗斯' },
-    '255': { en: 'Ukraine',      zh: '乌克兰' },
-    '202': { en: 'Greece',       zh: '希腊' },
-    '204': { en: 'Netherlands',  zh: '荷兰' },
-    '206': { en: 'Belgium',      zh: '比利时' },
-    '208': { en: 'France',       zh: '法国' },
-    '214': { en: 'Spain',        zh: '西班牙' },
-    '216': { en: 'Hungary',      zh: '匈牙利' },
-    '218': { en: 'Bosnia',       zh: '波斯尼亚' },
-    '219': { en: 'Croatia',      zh: '克罗地亚' },
-    '220': { en: 'Serbia',       zh: '塞尔维亚' },
-    '222': { en: 'Italy',        zh: '意大利' },
-    '226': { en: 'Romania',      zh: '罗马尼亚' },
-    '228': { en: 'Switzerland',  zh: '瑞士' },
-    '230': { en: 'Czechia',      zh: '捷克' },
-    '231': { en: 'Slovakia',     zh: '斯洛伐克' },
-    '232': { en: 'Austria',      zh: '奥地利' },
-    '234': { en: 'UK',           zh: '英国' },
-    '235': { en: 'UK',           zh: '英国' },
-    '238': { en: 'Denmark',      zh: '丹麦' },
-    '240': { en: 'Sweden',       zh: '瑞典' },
-    '242': { en: 'Norway',       zh: '挪威' },
-    '244': { en: 'Finland',      zh: '芬兰' },
-    '246': { en: 'Lithuania',    zh: '立陶宛' },
-    '247': { en: 'Latvia',       zh: '拉脱维亚' },
-    '248': { en: 'Estonia',      zh: '爱沙尼亚' },
-    '260': { en: 'Poland',       zh: '波兰' },
-    '262': { en: 'Germany',      zh: '德国' },
-    '268': { en: 'Portugal',     zh: '葡萄牙' },
-    '272': { en: 'Ireland',      zh: '爱尔兰' },
-    '284': { en: 'Bulgaria',     zh: '保加利亚' },
-    '293': { en: 'Slovenia',     zh: '斯洛文尼亚' },
-    '302': { en: 'Canada',       zh: '加拿大' },
-    '310': { en: 'USA',          zh: '美国' },
-    '311': { en: 'USA',          zh: '美国' },
-    '312': { en: 'USA',          zh: '美国' },
-    '313': { en: 'USA',          zh: '美国' },
-    '314': { en: 'USA',          zh: '美国' },
-    '315': { en: 'USA',          zh: '美国' },
-    '316': { en: 'USA',          zh: '美国' },
-    '334': { en: 'Mexico',       zh: '墨西哥' },
-    '505': { en: 'Australia',    zh: '澳大利亚' },
-    '530': { en: 'New Zealand',  zh: '新西兰' },
-    '602': { en: 'Egypt',        zh: '埃及' },
-    '603': { en: 'Algeria',      zh: '阿尔及利亚' },
-    '604': { en: 'Morocco',      zh: '摩洛哥' },
-    '605': { en: 'Tunisia',      zh: '突尼斯' },
-    '620': { en: 'Ghana',        zh: '加纳' },
-    '621': { en: 'Nigeria',      zh: '尼日利亚' },
-    '636': { en: 'Ethiopia',     zh: '埃塞俄比亚' },
-    '639': { en: 'Kenya',        zh: '肯尼亚' },
-    '640': { en: 'Tanzania',     zh: '坦桑尼亚' },
-    '655': { en: 'South Africa', zh: '南非' },
-    '722': { en: 'Argentina',    zh: '阿根廷' },
-    '724': { en: 'Brazil',       zh: '巴西' },
-    '725': { en: 'Brazil',       zh: '巴西' },
-    '730': { en: 'Chile',        zh: '智利' },
-    '732': { en: 'Colombia',     zh: '哥伦比亚' },
-    '733': { en: 'Colombia',     zh: '哥伦比亚' },
-  };
-
-  function getMccCountry(imsi, langVal) {
-    if (!imsi || String(imsi).length < 3) return '—';
-    const mcc = String(imsi).slice(0, 3);
-    const entry = mccMap[mcc];
-    if (!entry) return mcc;
-    return entry[langVal] ?? entry.en;
-  }
+  const APP_VERSION = pkg?.version ?? '0.0.0';
 
   // ── State ──────────────────────────────────────────────────────────────────
   let simsInfo   = $state([]);   // from /api/sims/info  (live AT data)
@@ -123,8 +15,12 @@
   let simStats   = $state([]);   // from /api/sims/stats (SMS counts)
   let loading    = $state(true);
   let error      = $state('');
+  let isFetching = false;
   let selected   = $state(new Set());
+  let lastClickedRowIndex = $state(null);
   let hoveredRow = $state(null);
+  let showOperatorColumn = $state(true);
+  let visibleDataColumnCount = $derived(showOperatorColumn ? 12 : 11);
 
   // ── Network status map ────────────────────────────────────────────────────
   const netStatusKeys = {
@@ -144,6 +40,60 @@
   }
 
   // RSSI → dBm helper
+  function rssiToDbm(rssi) {
+    if (rssi == null) return '—';
+    if (rssi === 99) return 'N/A';
+    return `${-113 + rssi * 2} dBm`;
+  }
+
+  function normalizePhoneForDisplay(raw) {
+    if (!raw) return '';
+    const digits = String(raw).replace(/\D/g, '');
+    return digits.replace(/^0+/, '');
+  }
+
+  // Signal bar count (0-4)
+  function signalBars(rssi) {
+    if (rssi == null || rssi === 99) return 0;
+    if (rssi >= 20) return 4;
+    if (rssi >= 15) return 3;
+    if (rssi >= 10) return 2;
+    if (rssi >= 5)  return 1;
+    return 0;
+  }
+
+  function getSimStatusBadge(statusRaw) {
+    const status = String(statusRaw ?? '').trim().toUpperCase();
+    if (status === 'RECONNECTING') {
+      return {
+        label: $t('sim_reconnecting'),
+        cls: 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300'
+      };
+    }
+    if (status === 'DISCONNECTED') {
+      return {
+        label: $t('sim_disconnected'),
+        cls: 'bg-gray-100 dark:bg-zinc-700 text-gray-500 dark:text-gray-400'
+      };
+    }
+    if (status === 'SIM REMOVED') {
+      return {
+        label: $t('sim_removed'),
+        cls: 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400'
+      };
+    }
+    if (status === 'NO SIM') {
+      return {
+        label: $t('sim_removed'),
+        cls: 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400'
+      };
+    }
+    return {
+      label: statusRaw,
+      cls: 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400'
+    };
+  }
+
   // COM port sort key: "COM12" → 12
   function comPortNum(port) {
     const m = (port ?? '').match(/(\d+)$/);
@@ -165,6 +115,8 @@
 
   // ── Data fetching ─────────────────────────────────────────────────────────
   async function fetchData() {
+    if (isFetching) return;
+    isFetching = true;
     try {
       const [infoRes, cardsRes, statsRes] = await Promise.all([
         apiClient.getAllSimsInfo(),
@@ -177,37 +129,78 @@
     } catch (e) {
       error = e?.message ?? $t('err_load_sim');
     } finally {
+      isFetching = false;
       loading = false;
     }
   }
 
+  async function refreshAll() {
+    await fetchData();
+  }
+
   let pollTimer;
   onMount(async () => {
-    await fetchData();
+    await refreshAll();
     pollTimer = setInterval(fetchData, 4000);
   });
 
   onDestroy(() => clearInterval(pollTimer));
 
   // ── Selection ─────────────────────────────────────────────────────────────
-  function toggleRow(id) {
+  function getSelectedSimIds() {
+    return rows
+      .filter((r) => selected.has(r.info.com_port))
+      .map((r) => r.info.sim_id)
+      .filter((id) => !!id);
+  }
+
+  function getSingleSelectedSimId() {
+    const ids = getSelectedSimIds();
+    return ids.length === 1 ? ids[0] : null;
+  }
+
+  function handleRowSelection(event, port, index) {
+    const isShift = !!(event?.shiftKey);
     const next = new Set(selected);
-    next.has(id) ? next.delete(id) : next.add(id);
+
+    if (
+      isShift &&
+      lastClickedRowIndex !== null &&
+      lastClickedRowIndex >= 0 &&
+      lastClickedRowIndex < rows.length
+    ) {
+      const start = Math.min(lastClickedRowIndex, index);
+      const end = Math.max(lastClickedRowIndex, index);
+      for (const row of rows.slice(start, end + 1)) {
+        next.add(row.info.com_port);
+      }
+      selected = next;
+      lastClickedRowIndex = index;
+      return;
+    }
+
+    next.has(port) ? next.delete(port) : next.add(port);
     selected = next;
+    lastClickedRowIndex = index;
+  }
+
+  function areAllRowsSelected() {
+    return rows.length > 0 && rows.every(r => selected.has(r.info.com_port));
   }
 
   function toggleAll() {
-    if (selected.size === rows.length) {
+    if (areAllRowsSelected()) {
       selected = new Set();
     } else {
-      selected = new Set(rows.map(r => r.info.sim_id));
+      selected = new Set(rows.map(r => r.info.com_port));
     }
+    lastClickedRowIndex = null;
   }
 
   // ── Logout ────────────────────────────────────────────────────────────────
   // uses logout() imported from auth store
 
-  let { onNavigate = () => {}, onNavigateCall = () => {}, onNavigateSim = () => {} } = $props();
+  let { onNavigate = () => {}, onNavigateCall = () => {}, onNavigateSim = () => {}, onNavigatePlatform = () => {}, onNavigatePhoneNumber = () => {}, onNavigatePlatformStats = () => {}, onNavigateMoney = () => {}, onNavigateMms = () => {} } = $props();
 </script>
 
 <div class="flex flex-col h-dvh w-screen bg-gray-50 dark:bg-zinc-950 text-sm font-sans">
@@ -215,29 +208,78 @@
   <!-- ── Top bar ──────────────────────────────────────────────────────────── -->
   <header class="flex items-center justify-between px-6 py-3 bg-white dark:bg-zinc-900 border-b border-gray-200 dark:border-zinc-800 shadow-sm">
     <div class="flex items-center gap-3">
-      <Icon icon="carbon:sim-card" class="w-5 h-5 text-gray-500 dark:text-gray-400" />
+      <img src="/cow.png" alt="" class="w-6 h-6 object-contain" />
       <h1 class="text-base font-semibold text-gray-800 dark:text-gray-100">{$t('sim_dashboard_title')}</h1>
       {#if !loading}
         <span class="text-xs text-gray-400 dark:text-gray-500">
-          {rows.length === 1 ? $t('sim_count', { n: rows.length }) : $t('sim_count_plural', { n: rows.length })}
-          {#if selected.size > 0}· {$t('selected_count', { n: selected.size })}{/if}
+          v{APP_VERSION}
         </span>
       {/if}
     </div>
 
     <div class="flex items-center gap-2">
       <button
-        onclick={() => onNavigateSim(selected.size === 1 ? [...selected][0] : null)}
+        onclick={() => onNavigatePhoneNumber()}
         class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
                border border-gray-200 dark:border-zinc-700
                text-gray-600 dark:text-gray-300
                hover:bg-gray-50 dark:hover:bg-zinc-800 transition"
       >
-        <Icon icon="carbon:sim-card" class="w-4 h-4" />
-        {$t('sim_cards')}
+        <Icon icon="carbon:phone-voice" class="w-4 h-4" />
+        {$t('btn_phone_number')}
       </button>
       <button
-        onclick={() => onNavigateCall(selected.size === 1 ? [...selected][0] : null)}
+        onclick={() => onNavigatePlatform()}
+        class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
+               border border-gray-200 dark:border-zinc-700
+               text-gray-600 dark:text-gray-300
+               hover:bg-gray-50 dark:hover:bg-zinc-800 transition"
+      >
+        <Icon icon="carbon:cloud-upload" class="w-4 h-4" />
+        {$t('btn_connect_platform')}
+      </button>
+      <button
+        onclick={() => onNavigatePlatformStats()}
+        class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
+               border border-gray-200 dark:border-zinc-700
+               text-gray-600 dark:text-gray-300
+               hover:bg-gray-50 dark:hover:bg-zinc-800 transition"
+      >
+        <Icon icon="carbon:chart-column" class="w-4 h-4" />
+        {$t('btn_platform_stats')}
+      </button>
+      <button
+        onclick={() => onNavigateMoney()}
+        class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
+               border border-gray-200 dark:border-zinc-700
+               text-gray-600 dark:text-gray-300
+               hover:bg-gray-50 dark:hover:bg-zinc-800 transition"
+      >
+        <Icon icon="carbon:currency" class="w-4 h-4" />
+        {$t('btn_money')}
+      </button>
+      <button
+        onclick={() => onNavigateMms()}
+        class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
+               border border-gray-200 dark:border-zinc-700
+               text-gray-600 dark:text-gray-300
+               hover:bg-gray-50 dark:hover:bg-zinc-800 transition"
+      >
+        <Icon icon="carbon:image" class="w-4 h-4" />
+        {$t('btn_mms')}
+      </button>
+      <button
+        onclick={() => onNavigate(getSingleSelectedSimId())}
+        class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
+               border border-gray-200 dark:border-zinc-700
+               text-gray-600 dark:text-gray-300
+               hover:bg-gray-50 dark:hover:bg-zinc-800 transition"
+      >
+        <Icon icon="carbon:chat" class="w-4 h-4" />
+        {$t('col_sms')}
+      </button>
+      <button
+        onclick={() => onNavigateCall(getSingleSelectedSimId())}
         class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
                border border-gray-200 dark:border-zinc-700
                text-gray-600 dark:text-gray-300
@@ -245,16 +287,6 @@
       >
         <Icon icon="carbon:phone" class="w-4 h-4" />
         {$t('call_log')}
-      </button>
-      <button
-        onclick={() => onNavigate(selected.size === 1 ? [...selected][0] : null)}
-        class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
-               border border-gray-200 dark:border-zinc-700
-               text-gray-600 dark:text-gray-300
-               hover:bg-gray-50 dark:hover:bg-zinc-800 transition"
-      >
-        <Icon icon="carbon:chat" class="w-4 h-4" />
-        {$t('btn_messages')}
       </button>
       <button
         onclick={() => { loading = true; error = ''; fetchData(); }}
@@ -267,14 +299,15 @@
         {$t('btn_refresh')}
       </button>
       <button
-        onclick={logout}
+        onclick={() => { showOperatorColumn = !showOperatorColumn; }}
         class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
                border border-gray-200 dark:border-zinc-700
                text-gray-600 dark:text-gray-300
                hover:bg-gray-50 dark:hover:bg-zinc-800 transition"
+        title={showOperatorColumn ? $t('hide_operator_column') : $t('show_operator_column')}
       >
-        <Icon icon="carbon:logout" class="w-4 h-4" />
-        {$t('btn_logout')}
+        <Icon icon={showOperatorColumn ? 'carbon:chevron-left' : 'carbon:chevron-right'} class="w-4 h-4" />
+        {showOperatorColumn ? $t('hide_operator_column') : $t('show_operator_column')}
       </button>
     </div>
   </header>
@@ -289,7 +322,27 @@
         </div>
       </div>
     {:else}
-      <table class="w-full border-collapse text-xs">
+      <table
+        class="w-full border-collapse table-fixed text-xs [&_th]:overflow-hidden [&_td]:overflow-hidden"
+        style:min-width={showOperatorColumn ? '1450px' : '1330px'}
+      >
+        <colgroup>
+          <col style="width: 48px" />
+          <col style="width: 76px" />
+          <col style="width: 84px" />
+          <col style="width: 104px" />
+          <col style="width: 116px" />
+          <col style="width: 158px" />
+          {#if showOperatorColumn}
+            <col style="width: 120px" />
+          {/if}
+          <col style="width: 92px" />
+          <col style="width: 92px" />
+          <col style="width: 72px" />
+          <col style="width: 184px" />
+          <col style="width: 150px" />
+          <col style="width: 142px" />
+        </colgroup>
         <!-- ── Header ── -->
         <thead class="sticky top-0 z-10 bg-gray-100 dark:bg-zinc-800">
           <tr>
@@ -298,7 +351,7 @@
               {#if !loading && rows.length > 0}
                 <input
                   type="checkbox"
-                  checked={selected.size === rows.length && rows.length > 0}
+                  checked={areAllRowsSelected()}
                   onchange={toggleAll}
                   class="rounded cursor-pointer accent-blue-500"
                 />
@@ -306,7 +359,19 @@
                 <span class="text-gray-400 font-semibold">#</span>
               {/if}
             </th>
-            {#each [$t('col_com_port'),$t('col_module'),$t('col_network_status'),$t('col_phone_number'),$t('col_operator'),$t('col_country'),$t('col_sms'),'IMSI','ICCID','IMEI'] as col}
+            {#each [$t('col_com_port'),$t('col_module'),$t('col_signal'),$t('col_network_status'),$t('col_phone_number')] as col}
+              <th class="px-3 py-2.5 text-left font-semibold text-gray-600 dark:text-gray-300
+                         border-b border-gray-200 dark:border-zinc-700 whitespace-nowrap">
+                {col}
+              </th>
+            {/each}
+            {#if showOperatorColumn}
+              <th class="px-3 py-2.5 text-left font-semibold text-gray-600 dark:text-gray-300
+                         border-b border-gray-200 dark:border-zinc-700 whitespace-nowrap">
+                {$t('col_operator')}
+              </th>
+            {/if}
+            {#each [$t('col_country'),$t('col_platform'),$t('col_sms'),'ICCID','IMSI','IMEI'] as col}
               <th class="px-3 py-2.5 text-left font-semibold text-gray-600 dark:text-gray-300
                          border-b border-gray-200 dark:border-zinc-700 whitespace-nowrap">
                 {col}
@@ -324,7 +389,7 @@
                 <td class="px-3 py-2.5 text-center">
                   <div class="w-5 h-5 bg-gray-200 dark:bg-zinc-700 rounded mx-auto"></div>
                 </td>
-                {#each Array(10) as _}
+                {#each Array(visibleDataColumnCount) as _}
                   <td class="px-3 py-2.5">
                     <div class="h-3 bg-gray-200 dark:bg-zinc-700 rounded w-3/4"></div>
                   </td>
@@ -333,16 +398,19 @@
             {/each}
           {:else if rows.length === 0}
             <tr>
-              <td colspan="11" class="px-6 py-12 text-center text-gray-400">
+              <td colspan={visibleDataColumnCount + 1} class="px-6 py-12 text-center text-gray-400">
                 <Icon icon="carbon:sim-card" class="w-8 h-8 mx-auto mb-2 opacity-40" />
                 <p>{$t('no_sim_cards')}</p>
               </td>
             </tr>
           {:else}
             {#each rows as { info, card, stats }, i}
-              {@const isSelected = selected.has(info.sim_id)}
+              {@const isSelected = selected.has(info.com_port)}
               {@const net = getNetStatus(info.network_registration)}
+              {@const bars = signalBars(info.signal_quality?.rssi)}
               {@const hasSim = info.has_sim !== false}
+              {@const imsi = card.imsi || info.imsi || ''}
+              {@const mccSource = imsi || info.operator_info?.operator_id || ''}
               <tr
                 class="border-b border-gray-100 dark:border-zinc-800 cursor-pointer
                        transition-colors duration-100
@@ -350,17 +418,17 @@
                        {isSelected
                          ? 'bg-blue-50 dark:bg-blue-900/20'
                          : 'hover:bg-gray-50 dark:hover:bg-zinc-800/50'}"
-                onclick={() => toggleRow(info.sim_id)}
-                onmouseenter={() => hoveredRow = info.sim_id}
+                onclick={(e) => handleRowSelection(e, info.com_port, i)}
+                onmouseenter={() => hoveredRow = info.com_port}
                 onmouseleave={() => hoveredRow = null}
               >
                 <!-- # / checkbox -->
                 <td class="px-3 py-2.5 text-center text-gray-400 select-none">
-                  {#if isSelected || hoveredRow === info.sim_id}
+                  {#if isSelected || hoveredRow === info.com_port}
                     <input
                       type="checkbox"
                       checked={isSelected}
-                      onchange={() => toggleRow(info.sim_id)}
+                      onchange={(e) => handleRowSelection(e, info.com_port, i)}
                        onclick={(e) => e.stopPropagation()}
                       class="rounded cursor-pointer accent-blue-500"
                     />
@@ -371,58 +439,132 @@
 
                 <!-- COM Port -->
                 <td class="px-3 py-2.5 font-mono text-gray-700 dark:text-gray-200 whitespace-nowrap">
-                  {info.com_port ?? '—'}
+                  {displayPort(info.com_port) || '—'}
                 </td>
 
                 <!-- Module name -->
                 <td class="px-3 py-2.5 text-gray-700 dark:text-gray-200 whitespace-nowrap">
                   {#if info.available === false}
-                    <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400">
-                      {$t('unavailable')}
-                    </span>
+                    <span class="text-gray-400">—</span>
                   {:else}
-                    {info.model_info?.model ?? '—'}
+                    {getModuleLabel(info.model_info?.model)}
                   {/if}
                 </td>
 
-                
+                <!-- Signal -->
+                <td class="px-3 py-2.5 whitespace-nowrap">
+                  {#if hasSim}
+                  <div class="flex items-center gap-1.5">
+                    <!-- Signal bars -->
+                    <div class="flex items-end gap-px h-4">
+                      {#each [1,2,3,4] as b}
+                        <div
+                          class="w-1 rounded-sm transition-all {b <= bars
+                            ? bars >= 3 ? 'bg-green-500' : bars === 2 ? 'bg-yellow-400' : 'bg-red-400'
+                            : 'bg-gray-200 dark:bg-zinc-600'}"
+                          style="height: {b * 25}%"
+                        ></div>
+                      {/each}
+                    </div>
+                    <span class="text-gray-600 dark:text-gray-300 text-xs">
+                      {rssiToDbm(info.signal_quality?.rssi)}
+                    </span>
+                  </div>
+                  {:else if info.available === false}
+                    <span class="text-gray-400">—</span>
+                  {:else}
+                    <span class="text-gray-400">—</span>
+                  {/if}
+                </td>
+
                 <!-- Network Status -->
                 <td class="px-3 py-2.5 whitespace-nowrap font-medium">
                   {#if hasSim}
                     <span class="{net.cls}">{net.key ? $t(net.key, { n: net.codeN }) : '—'}</span>
+                  {:else if info.sim_status}
+                    {@const statusBadge = getSimStatusBadge(info.sim_status)}
+                    <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium {statusBadge.cls}">
+                      {statusBadge.label}
+                    </span>
+                  {:else if info.available === false}
+                    <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400">{$t('sim_removed')}</span>
                   {:else}
-                    <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs bg-gray-100 dark:bg-zinc-700 text-gray-500 dark:text-gray-400">{$t('no_sim')}</span>
+                    <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400">{$t('sim_removed')}</span>
                   {/if}
                 </td>
 
                 <!-- Phone Number -->
-                <td class="px-3 py-2.5 font-mono text-gray-700 dark:text-gray-200 whitespace-nowrap">
-                  {card.phone_number ?? info.phone_number ?? '—'}
+                <td class="px-3 py-2.5 whitespace-nowrap">
+                  <div class="flex items-center gap-2">
+                    <span class="font-mono text-gray-700 dark:text-gray-200">
+                      {#if info.available === false}
+                        —
+                      {:else}
+                        {normalizePhoneForDisplay(card.phone_number ?? info.phone_number) || '—'}
+                      {/if}
+                    </span>
+                  </div>
                 </td>
 
                 <!-- Operator -->
-                <td class="px-3 py-2.5 text-gray-700 dark:text-gray-200 whitespace-nowrap">
-                  {info.operator_info?.operator_name ?? '—'}
-                </td>
+                {#if showOperatorColumn}
+                  <td class="px-3 py-2.5 text-gray-700 dark:text-gray-200 whitespace-nowrap">
+                    {#if info.available === false}
+                      <span class="text-gray-400">—</span>
+                    {:else}
+                      {info.operator_info?.operator_name ?? '—'}
+                    {/if}
+                  </td>
+                {/if}
 
                 <!-- Country -->
                 <td class="px-3 py-2.5 text-gray-700 dark:text-gray-200 whitespace-nowrap">
-                  {getMccCountry(card.imsi ?? info.imsi, $lang)}
+                  {#if info.available === false}
+                    <span class="text-gray-400">—</span>
+                  {:else}
+                    {mccSource ? getMccCountry(mccSource, $lang) : '—'}
+                  {/if}
+                </td>
+
+                <!-- Platform status -->
+                <td class="px-3 py-2.5 whitespace-nowrap">
+                  {#if info.available === false}
+                    <span class="text-gray-400">—</span>
+                  {:else if card.country_code && ['1', '5'].includes(String(info.network_registration?.status ?? '').trim())}
+                    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400">
+                      <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                      {$t('platform_connected')}
+                    </span>
+                  {:else}
+                    <span class="text-gray-400 dark:text-gray-500 text-xs">{$t('platform_not_connected')}</span>
+                  {/if}
                 </td>
 
                 <!-- SMS recv / sent -->
                 <td class="px-3 py-2.5 text-center text-gray-700 dark:text-gray-200 whitespace-nowrap font-mono">
-                  <span class="text-green-600 dark:text-green-400">{stats.recv ?? 0}</span><span class="text-gray-400 dark:text-gray-500">/</span><span class="text-blue-500 dark:text-blue-400">{stats.sent ?? 0}</span>
-                </td>
-
-                <!-- IMSI -->
-                <td class="px-3 py-2.5 font-mono text-gray-500 dark:text-gray-400 whitespace-nowrap">
-                  {card.imsi ?? info.imsi ?? '—'}
+                  {#if info.available === false}
+                    <span class="text-gray-400">—</span>
+                  {:else}
+                    <span class="text-green-600 dark:text-green-400">{stats.recv ?? 0}</span><span class="text-gray-400 dark:text-gray-500">/</span><span class="text-blue-500 dark:text-blue-400">{stats.sent ?? 0}</span>
+                  {/if}
                 </td>
 
                 <!-- ICCID (= sim_id / card.id) -->
                 <td class="px-3 py-2.5 font-mono text-gray-500 dark:text-gray-400 whitespace-nowrap">
-                  {card.id ?? info.sim_id ?? '—'}
+                  {#if info.available === false}
+                    <span class="text-gray-400">—</span>
+                  {:else}
+                    {card.id ?? info.sim_id ?? '—'}
+                  {/if}
+                </td>
+
+                <!-- IMSI -->
+                <td class="px-3 py-2.5 font-mono text-gray-500 dark:text-gray-400 whitespace-nowrap">
+                  {#if info.available === false}
+                    <span class="text-gray-400">—</span>
+                  {:else}
+                    {imsi || '—'}
+                  {/if}
                 </td>
 
                 <!-- IMEI -->

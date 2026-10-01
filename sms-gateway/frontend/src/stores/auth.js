@@ -15,7 +15,12 @@ export async function initAuth() {
     
     try {
         const authData = await getStorageValue('auth');
-        const isValid = authData && await apiClient.checkAuth();
+        const isValid = authData
+            ? await Promise.race([
+                apiClient.checkAuth(),
+                new Promise((resolve) => setTimeout(() => resolve(false), 6000)),
+            ])
+            : false;
         
         isAuthenticated.set(!!isValid);
     } catch (error) {

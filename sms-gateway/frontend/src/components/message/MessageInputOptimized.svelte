@@ -3,6 +3,7 @@
   import SimSelector from "./SimSelector.svelte";
   import Modal from "../common/Modal.svelte";
   import { t } from "../../js/i18n.js";
+  import { currentContact } from "../../stores/conversation";
 
   let {
     sendMessageContent = $bindable(""),
@@ -14,8 +15,18 @@
 
   let isComposing = $state(false);
   let selectedSim = $state(null);
+  let smsFormat = $state('pdu');
+  let statusReportEnabled = $state(false);
   let showConfirmDialog = $state(false);
   let messageInputRef = $state(null);
+  let preferredSimId = $derived($currentContact?.sim_id ?? null);
+
+  const STATUS_REPORT_PREF_KEY = "smsStatusReportEnabled";
+
+  $effect(() => {
+    const saved = localStorage.getItem(STATUS_REPORT_PREF_KEY);
+    statusReportEnabled = saved === "1";
+  });
 
   // UCS2 encoding limits: 70 chars for single SMS, 67 per segment for multipart
   const UCS2_SINGLE_MAX = 70;
@@ -62,10 +73,15 @@
 
   function confirmSend() {
     if (selectedSim) {
-      onSend(selectedSim.id);
+      onSend(selectedSim.id, smsFormat, statusReportEnabled);
       showConfirmDialog = false;
       sendMessageContent = ""; // 清空输入框
     }
+  }
+
+  function toggleStatusReport() {
+    statusReportEnabled = !statusReportEnabled;
+    localStorage.setItem(STATUS_REPORT_PREF_KEY, statusReportEnabled ? "1" : "0");
   }
 
   function cancelSend() {
@@ -118,8 +134,39 @@
 
     <div class="flex flex-row items-stretch sm:items-center gap-3 w-full sm:w-auto">
       <div class="w-full flex-1 sm:flex-none sm:w-auto sm:min-w-[200px] sm:max-w-[320px]">
-        <SimSelector bind:selectedSim {initialSimId} />
+        <SimSelector bind:selectedSim {initialSimId} {preferredSimId} />
       </div>
+
+      <div class="inline-flex h-12 items-center rounded-lg border border-gray-300 bg-white p-1 dark:border-zinc-600 dark:bg-zinc-800">
+        <button
+          type="button"
+          onclick={() => (smsFormat = 'pdu')}
+          class="px-2.5 py-1.5 text-xs font-medium rounded-md transition-all duration-150 {smsFormat === 'pdu' ? 'bg-gray-800 text-white dark:bg-gray-100 dark:text-gray-900' : 'text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-zinc-700'}"
+          title={$t('sms_format_pdu')}
+        >
+          {$t('sms_format_pdu')}
+        </button>
+        <button
+          type="button"
+          onclick={() => (smsFormat = 'text')}
+          class="px-2.5 py-1.5 text-xs font-medium rounded-md transition-all duration-150 {smsFormat === 'text' ? 'bg-gray-800 text-white dark:bg-gray-100 dark:text-gray-900' : 'text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-zinc-700'}"
+          title={$t('sms_format_text')}
+        >
+          {$t('sms_format_text')}
+        </button>
+      </div>
+
+      <button
+        type="button"
+        onclick={toggleStatusReport}
+        class="inline-flex h-12 items-center gap-2 rounded-lg border px-3 text-xs font-medium transition-all duration-150 {statusReportEnabled
+          ? 'border-blue-500 bg-blue-50 text-blue-700 dark:border-blue-400 dark:bg-blue-900/30 dark:text-blue-300'
+          : 'border-gray-300 bg-white text-gray-600 dark:border-zinc-600 dark:bg-zinc-800 dark:text-gray-300'}"
+        title={$t('sms_status_report_toggle')}
+      >
+        <Icon icon={statusReportEnabled ? 'carbon:checkmark-filled' : 'carbon:circle-dash'} class="w-4 h-4" />
+        <span>{$t('sms_status_report_short')}</span>
+      </button>
       
       <button
         onclick={handleSendClick}
@@ -181,6 +228,28 @@
               <span class="text-xs text-gray-500 dark:text-gray-400">{$t('active_label')}</span>
             </div>
           </div>
+        </div>
+      </div>
+
+      <div class="mb-6">
+        <p class="text-xs text-gray-500 dark:text-gray-400 uppercase tracking-widest mb-3">
+          {$t('sms_format_label')}
+        </p>
+        <div class="bg-gray-50 dark:bg-zinc-800/50 rounded-lg p-4 border border-gray-200 dark:border-zinc-700">
+          <p class="text-sm font-medium text-gray-900 dark:text-gray-100">
+            {smsFormat === 'text' ? $t('sms_format_text') : $t('sms_format_pdu')}
+          </p>
+        </div>
+      </div>
+
+      <div class="mb-6">
+        <p class="text-xs text-gray-500 dark:text-gray-400 uppercase tracking-widest mb-3">
+          {$t('sms_status_report_label')}
+        </p>
+        <div class="bg-gray-50 dark:bg-zinc-800/50 rounded-lg p-4 border border-gray-200 dark:border-zinc-700">
+          <p class="text-sm font-medium text-gray-900 dark:text-gray-100">
+            {statusReportEnabled ? $t('enabled') : $t('disabled')}
+          </p>
         </div>
       </div>
 

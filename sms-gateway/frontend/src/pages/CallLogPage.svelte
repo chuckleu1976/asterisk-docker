@@ -20,11 +20,12 @@
   <header class="flex items-center gap-3 px-4 py-3 border-b border-gray-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-sm shrink-0">
     <button
       onclick={onBack}
-      class="inline-flex items-center justify-center w-9 h-9 rounded-lg border border-gray-200 dark:border-zinc-700
-             text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-zinc-800 transition"
+      class="inline-flex items-center gap-1.5 h-9 px-2.5 rounded-full bg-blue-600 text-white
+             shadow-sm shadow-blue-600/30 hover:bg-blue-700 transition"
       aria-label="Back"
     >
-      <Icon icon="carbon:arrow-left" class="w-5 h-5" />
+      <Icon icon="carbon:arrow-left" class="w-4 h-4" />
+      <span class="text-xs font-semibold">{$t('btn_back')}</span>
     </button>
     <div class="flex items-center gap-2">
       <Icon icon="carbon:phone" class="w-5 h-5 text-gray-500 dark:text-gray-400" />

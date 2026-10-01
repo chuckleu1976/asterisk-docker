@@ -1,0 +1,46 @@
+# Merge sms-gateway into asterisk-docker
+
+The host gateway in this repo stays the base. It already talks to each Asterisk
+container over AMI. The standalone tree at `/home/ht/sourcecode/sms-gateway` is
+the source for UI and for features that do not need a serial modem.
+
+## Keep
+
+- `sms-gateway/src/modem/ami_transport.rs` and `sms-gateway/src/modem/transport.rs`
+- `sms-gateway/src/readers_db.rs` and `sms-gateway/src/sim_inventory.rs`
+- `sim_inventory.db` for readers and SIMs (`scripts/sim_db.py`)
+- Gateway SQLite for messages, calls, Firefox, barcode scans, and MMS rows
+- Host process on AMI `127.0.0.1` ports (not a compose service)
+- SMS inbox, call log, and SIM dashboard, refreshed from the newer Svelte UI
+- Firefox upload, stats, and money (HTTP client + SQLite). Incoming SMS is
+  already stored by AMI, so the poll worker reads the gateway database.
+- Barcode submit, list, clear, file scan, and import into `sim_cards.phone_number`
+- MMS list, detail, inbox, and profile read/write
+- eSIM and MMS send pages, with those actions returning HTTP 501
+
+## Drop
+
+- Serial AT stack: `modem/core.rs`, `pdu.rs`, `ftp_uploader.rs`, `vendor/`
+- `POST /api/at/{com_port}`
+- USSD, call-exchange, SMS-exchange (`POST` returns 501)
+- Write-MSISDN-to-SIM (`POST /api/sims/{sim_id}/phone` returns 501)
+- Force-register, re-register, port restart, `AT+CPMS` storage
+- `mms_worker`, `mms_retrieve`, `mms_wap`, and `src/esim/` (lpac / modem session)
+- Migrations `20260716000001_esim.sql` and `20260818000001_ftp_apn.sql`
+- `SimSetPhonePage` and the dashboard controls that only exist for AT modems
+
+## File map
+
+| From `/home/ht/sourcecode/sms-gateway` | Into this repo |
+| --- | --- |
+| `src/firefox_api.rs`, `firefox_upload_retry.rs`, `firefox_upload_retry_worker.rs` | `sms-gateway/src/` |
+| `src/service_control.rs` | `sms-gateway/src/` |
+| Firefox poll + catalog sync from `src/main.rs` | `sms-gateway/src/firefox_poll.rs` (DB read, not modem poll) |
+| Firefox / phone / MMS handlers from `src/api/mod.rs` | `sms-gateway/src/api/{firefox,phone,mms}.rs` |
+| eSIM route list | `sms-gateway/src/api/esim.rs` stubs (501) |
+| Firefox, MMS, barcode migrations | `sms-gateway/migrations/` |
+| Matching queries | `sms-gateway/src/db.rs` |
+| Svelte pages and `frontend/src/js/{api,i18n,country,modem}.js` | `sms-gateway/frontend/` |
+
+`GET /api/sims/info` stays the AMI payload. Signal, operator, and registration
+stay empty when the transport cannot answer them.

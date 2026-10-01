@@ -89,7 +89,10 @@ fn format_memory_status(memory_status: &str) -> String {
     memory_status.to_string()
 }
 
-mod auth;
+mod esim;
+mod firefox;
+mod mms;
+mod phone;
 pub(crate) mod sse_manager;
 
 use rust_embed::RustEmbed;
@@ -102,8 +105,8 @@ pub async fn run_api(
     modem_manager: ModemManagerRef,
     server_host: &str,
     server_port: &u16,
-    username: &str,
-    password: &str,
+    _username: &str,
+    _password: &str,
     sse_manager: Arc<SseManager>,
 ) -> anyhow::Result<()> {
     let api = Router::new()
@@ -188,11 +191,12 @@ pub async fn run_api(
         .route(
             "/calls/{id}/transcript",
             get(get_call_transcript),
-        )
-        .layer(axum::middleware::from_fn_with_state(
-            (username.to_string(), password.to_string()),
-            auth::basic_auth,
-        ));
+        );
+    let api = api
+        .merge(firefox::routes(modem_manager.clone()))
+        .merge(phone::routes(modem_manager.clone()))
+        .merge(mms::routes())
+        .merge(esim::routes());
 
     let app = Router::new()
         .nest_service("/api", api)
