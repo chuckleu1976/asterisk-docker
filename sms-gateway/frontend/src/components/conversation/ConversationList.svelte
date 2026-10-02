@@ -10,10 +10,15 @@
     conversationLoading,
   } from "../../stores/conversation";
   import { apiClient } from "../../js/api";
-  import { simCards } from "../../stores/simcards";
+  import { onMount } from "svelte";
+  import { simCards, simCardActions } from "../../stores/simcards";
   import { generateUUID } from "../../js/uuid";
 
   let { onConversationSelect = () => {}, filterSimId = null } = $props();
+
+  onMount(() => {
+    simCardActions.loadAll();
+  });
 
   // 鈹€鈹€ Tab state 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
   let activeTab = $state("inbox");   // "inbox" | "sent"

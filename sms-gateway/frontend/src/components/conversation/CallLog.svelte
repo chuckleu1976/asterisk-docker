@@ -93,7 +93,10 @@
   <div class="px-4 py-3 border-b border-gray-200/70 dark:border-zinc-800 shrink-0">
     <h2 class="text-base font-semibold text-gray-900 dark:text-white">{$t('call_log_title')}</h2>
     {#if filterSimId}
-      <p class="text-xs text-blue-600 dark:text-blue-400 mt-0.5">SIM: {filterSimId.slice(0, 12)}…</p>
+      {@const selected = sims.find((sim) => sim.id === filterSimId)}
+      <p class="text-xs text-blue-600 dark:text-blue-400 mt-0.5">
+        {selected?.phone_number || filterSimId.slice(-6)}
+      </p>
     {/if}
     <p class="text-xs text-gray-500 dark:text-zinc-500 mt-0.5">
       SSE: <span class={$callSseConnected ? 'text-green-500' : 'text-red-400'}>

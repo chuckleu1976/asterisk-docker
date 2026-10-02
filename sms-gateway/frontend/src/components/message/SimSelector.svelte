@@ -1,6 +1,7 @@
 <script>
   import Icon from "@iconify/svelte";
-  import { simCards } from "../../stores/simcards";
+  import { onMount } from "svelte";
+  import { simCards, simCardActions } from "../../stores/simcards";
   import { fly } from "svelte/transition";
   import { quintOut } from "svelte/easing";
 
@@ -9,6 +10,10 @@
     initialSimId = null,
     preferredSimId = null,
   } = $props();
+
+  onMount(() => {
+    simCardActions.loadAll();
+  });
 
   let showSimSelector = $state(false);
   let searchText = $state("");
