@@ -233,13 +233,74 @@ Each command writes a `sessions/<name>.session` file. That file is a logged-in T
 - Expect roughly 20–40 ms extra delay from the resample, plus Telegram's own jitter buffer.
 - Video is out of scope. Leave `VIDEO_SOURCE_URL` empty.
 
+## Web management page
+
+Operators should not edit `tg2sip1.env` or `config.yaml` by hand after the first install. Add one page to the existing sms-gateway Svelte app, next to Phone number, Platform, and Call log on `SimDashboard`.
+
+New page: `sms-gateway/frontend/src/pages/TelegramPage.svelte`, reached as `currentPage === 'telegram'` from `App.svelte`. It lists the two lines that exist today, `asterisk` and `asterisk2`. Each card is one gateway.
+
+### What the page shows
+
+| Block | Content |
+|---|---|
+| Line | Hostname, MSISDN already known to sms-gateway, gateway container name |
+| Telegram session | `not logged in`, `logged in`, or `login needs a code` |
+| SIP trunk | `registered` or `down`, from `pjsip show endpoint tg2sip` on that Asterisk |
+| Call | `idle` or `busy`. foobar26/tg2sip handles one call per process, so this is a single lamp, not a queue |
+| Inbound target | The Telegram user who receives calls that arrive on this SIM. Stored as `TG_FORWARD_USER_ID`, or as `+E.164` / `@username` |
+| Outbound routes | Table of who may call this gateway account, and which phone number Asterisk then dials |
+
+The page does not display the Telegram api hash, the SIP password, or the session file.
+
+### What the operator can change
+
+- Inbound target for that line. Saving it rewrites that gateway's forward setting and restarts only that container.
+- Outbound routes. One row is a Telegram caller (numeric user id, `@username`, or `+E.164`) and a destination phone number in E.164. Saving rewrites `telegram.inbound_routes` for that gateway. A caller who is not in the table is declined, which is already how tg2sip works.
+- Start or stop that gateway container.
+- A login action when the session file is missing. The page asks for the gateway phone number, then the code Telegram sends, then the 2FA password if that account has one. Those values are sent once to the gateway's existing `python -m src.auth` flow and are not stored in the sms-gateway database.
+
+First-time api id and api hash stay in the env file on the host. Putting those fields on a page that many operators open is a larger secret than this page needs.
+
+### API
+
+sms-gateway already fronts the other management pages, so the new routes live there and the page calls them through the existing API client. Suggested routes:
+
+| Method | Path | Effect |
+|---|---|---|
+| `GET` | `/tg2sip` | Both lines: session, SIP registration, idle/busy, forward target, routes |
+| `PUT` | `/tg2sip/{instance}/forward` | Set who receives inbound SIM calls |
+| `PUT` | `/tg2sip/{instance}/routes` | Replace the outbound route table |
+| `POST` | `/tg2sip/{instance}/session` | Submit phone, then code, then optional 2FA password |
+| `POST` | `/tg2sip/{instance}/power` | `start` or `stop` the container |
+
+`{instance}` is `1` or `2`. Status reads are Asterisk CLI over the existing AMI/docker path plus `docker inspect` of `tg2sip1` / `tg2sip2`. Writes go to that gateway's config file, then `docker compose restart` of that one service. A write must not restart the other line, and must not restart `pcscd`.
+
+### Page layout
+
+```
+Telegram bridge
+┌─ asterisk1 · +86… ──────── SIP registered · idle ─┐
+│  Inbound calls ring:  [@alice            ] [Save] │
+│  Who may call out                                      │
+│  123456789     →  +8613800138000          [Remove]    │
+│  [Add caller]  [Add number]                [Save]     │
+│  [Stop gateway]                                        │
+└────────────────────────────────────────────────────────┘
+┌─ asterisk2 · +86… ─────── session missing · down ─┐
+│  [Log in this Telegram account]                        │
+└────────────────────────────────────────────────────────┘
+```
+
+The login control opens a short dialog: phone number, then code, then 2FA only if the gateway asks for it. While a call is `busy`, Save and Stop stay disabled so a config restart cannot cut the live bridge.
+
 ## Work breakdown
 
 1. Add the `tg2sip` endpoint, auth, and AOR to instance 1 and 2, and to the generator in `scripts/sim_config_gen.py`.
 2. Change `volte_ims` to `Dial` the gateway instead of `Wait(60)`. Add context `from-tg2sip`.
 3. Add `tg2sip1` and `tg2sip2` to `scripts/sim_config_gen.py` so `compose.yaml` is regenerated with them.
 4. Create the two Telegram gateway accounts, api id/hash, sessions, and `inbound_routes`.
-5. Reload PJSIP and the dialplan, start the gateways, then run the tests below.
+5. Add `GET/PUT/POST /tg2sip` on sms-gateway and the `TelegramPage` described above.
+6. Reload PJSIP and the dialplan, start the gateways, then run the tests below.
 
 Do not `module reload res_pjsip.so`. Restart the Asterisk container, or use `dialplan reload` only when the change is dialplan-only.
 
@@ -325,7 +386,16 @@ A Telegram account that is not in `inbound_routes` must be declined. No INVITE s
 | Telegram → phone never leaves Asterisk | Route value is not E.164 with `+`, or context `from-tg2sip` is not the endpoint's `context`. |
 | `AUTH_KEY_UNREGISTERED` | Delete that gateway's session file and run `python -m src.auth` again. |
 
-### 6. Stop
+### 6. Management page
+
+Open the sms-gateway UI, go to the Telegram bridge page, and confirm both cards match the CLI:
+
+- Instance 1 shows SIP `registered` after section 2, and the forward target you configured.
+- Add a route, save, and place the Telegram → phone call from section 4. The dialed number must be the one just saved, not a value left in the yaml from an earlier edit.
+- Remove that caller from the table, save, and call again. The gateway must decline the call and Asterisk must show no new INVITE.
+- While a call is up, the card shows `busy` and Save is disabled. After hangup it returns to `idle`.
+
+### 7. Stop
 
 ```bash
 docker compose stop tg2sip1 tg2sip2
