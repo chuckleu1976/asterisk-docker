@@ -1,3 +1,0 @@
-FRIENDLYNAME "osmo-remsim-client"
-DEVICENAME   1:0:192.168.31.68:9998
-LIBPATH      /usr/lib64/pcsc/drivers/serial/libifd_remsim_client.so

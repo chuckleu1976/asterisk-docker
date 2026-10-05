@@ -361,6 +361,9 @@ def _is_service_running(svc):
 
 
 def start_probe():
+    from scripts.remsim_slotmap import apply_slotmaps
+
+    apply_slotmaps()
     print("Starting pcscd + asterisk-1 (SIM probe)...")
     r = docker_compose("up", "-d", "pcscd", READ_CONTAINER)
     if r.returncode != 0:
