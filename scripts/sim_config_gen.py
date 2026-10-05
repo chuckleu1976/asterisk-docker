@@ -1,6 +1,8 @@
 import shutil
 from pathlib import Path
 
+from scripts.tg2sip_ctl import compose_service_lines, gateway_password, pjsip_tg2sip_block
+
 SCRIPT_DIR = Path(__file__).resolve().parent.parent
 CONFIG_DIR = SCRIPT_DIR / "config"
 EXAMPLE_DIR = CONFIG_DIR / "example"
@@ -30,6 +32,7 @@ def generate_config(instance, device):
     )
 
     hostname = device['hostname']
+    tg_password = gateway_password(instance)
 
     (dest / "epdg.conf").write_text(
         "connections {\n"
@@ -110,6 +113,7 @@ def generate_config(instance, device):
         "\n"
         "[6000](aor-normal-sip)\n"
         "\n"
+        f"{pjsip_tg2sip_block(tg_password)}"
         ";===============VoLTE\n"
         "\n"
         "[volte_ims]\n"
@@ -280,6 +284,11 @@ def generate_compose(devices):
             f"      start_period: 120s",
             f"    restart: always",
         ]
+
+    present = {dev["reader"] + 1 for dev in devices}
+    for instance in (1, 2):
+        if instance in present:
+            lines += compose_service_lines(instance)
 
     lines += ["", "volumes:", "  pcsc-sock:", ""]
     COMPOSE_FILE.write_text('\n'.join(lines))

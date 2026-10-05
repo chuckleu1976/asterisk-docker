@@ -332,5 +332,33 @@ services:
       start_period: 120s
     restart: always
 
+  tg2sip1:
+    build: ../tg2sip
+    env_file: ../tg2sip/tg2sip1.env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - CONFIG_PATH=/app/config/config.yaml
+      - SESSION_DIR=/app/sessions
+      - SIP_BIND_ADDRESS=0.0.0.0
+    volumes:
+      - ../tg2sip/config1:/app/config:ro
+      - ../tg2sip/sessions1:/app/sessions
+    restart: unless-stopped
+    depends_on: [asterisk]
+
+  tg2sip2:
+    build: ../tg2sip
+    env_file: ../tg2sip/tg2sip2.env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - CONFIG_PATH=/app/config/config.yaml
+      - SESSION_DIR=/app/sessions
+      - SIP_BIND_ADDRESS=0.0.0.0
+    volumes:
+      - ../tg2sip/config2:/app/config:ro
+      - ../tg2sip/sessions2:/app/sessions
+    restart: unless-stopped
+    depends_on: [asterisk2]
+
 volumes:
   pcsc-sock:

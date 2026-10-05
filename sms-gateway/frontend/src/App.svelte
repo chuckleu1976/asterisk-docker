@@ -13,8 +13,9 @@
   import MoneyPage from "./pages/MoneyPage.svelte";
   import MmsPage from "./pages/MmsPage.svelte";
   import EsimPage from "./pages/EsimPage.svelte";
+  import TelegramPage from "./pages/TelegramPage.svelte";
 
-  /** @type {'sim' | 'messages' | 'calllog' | 'simcards' | 'platform' | 'phonenumber' | 'platform-stats' | 'money' | 'mms' | 'esim'} */
+  /** @type {'sim' | 'messages' | 'calllog' | 'simcards' | 'platform' | 'phonenumber' | 'platform-stats' | 'money' | 'mms' | 'esim' | 'telegram'} */
   let currentPage = $state('sim');
   let filterSimId = $state(null);
 
@@ -63,6 +64,10 @@
     currentPage = 'esim';
   }
 
+  function goToTelegram() {
+    currentPage = 'telegram';
+  }
+
   function backFromEsim() {
     currentPage = 'phonenumber';
   }
@@ -91,6 +96,7 @@
           onNavigatePlatformStats={goToPlatformStats}
           onNavigateMoney={goToMoney}
           onNavigateMms={goToMms}
+          onNavigateTelegram={goToTelegram}
         />
       </div>
 
@@ -137,6 +143,11 @@
     {:else if currentPage === 'esim'}
       <div in:fly={{ x: 40, duration: 350, easing: quartOut }} out:fly={{ x: 40, duration: 250, easing: quartOut }}>
         <EsimPage onBack={backFromEsim} />
+      </div>
+
+    {:else if currentPage === 'telegram'}
+      <div in:fly={{ x: 40, duration: 350, easing: quartOut }} out:fly={{ x: 40, duration: 250, easing: quartOut }}>
+        <TelegramPage onBack={goToSim} />
       </div>
     {/if}
 

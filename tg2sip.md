@@ -5,7 +5,7 @@ This document plans how [foobar26/tg2sip](https://github.com/foobar26/tg2sip) si
 - a call that arrives on the VoWiFi line is bridged to a Telegram voice call
 - a call that arrives on the gateway's Telegram account is placed out on that same VoWiFi line to a phone number
 
-Nothing in this file is deployed yet. It is the design and the test procedure for that work.
+The dialplan, PJSIP endpoint, Compose services, and sms-gateway page below are in the tree. Telegram api id, api hash, and the first `python -m src.auth` login are still entered by the operator. This file is the design and the test procedure.
 
 ## What tg2sip does
 

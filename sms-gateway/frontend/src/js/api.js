@@ -597,6 +597,28 @@ class ApiClient {
     async esimCancelBatch() {
         return FetchApi.post('/api/esim/batch/cancel');
     }
+
+    // ── Telegram bridge ─────────────────────────────────────────────────────
+
+    async getTg2sip() {
+        return FetchApi.get('/api/tg2sip');
+    }
+
+    async setTg2sipForward(instance, target) {
+        return FetchApi.put(`/api/tg2sip/${instance}/forward`, { target });
+    }
+
+    async setTg2sipRoutes(instance, routes) {
+        return FetchApi.put(`/api/tg2sip/${instance}/routes`, { routes });
+    }
+
+    async submitTg2sipSession(instance, body) {
+        return FetchApi.post(`/api/tg2sip/${instance}/session`, body);
+    }
+
+    async setTg2sipPower(instance, action) {
+        return FetchApi.post(`/api/tg2sip/${instance}/power`, { action });
+    }
 }
 
 // Export as a singleton

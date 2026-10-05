@@ -93,6 +93,7 @@ mod esim;
 mod firefox;
 mod mms;
 mod phone;
+mod tg2sip;
 pub(crate) mod sse_manager;
 
 use rust_embed::RustEmbed;
@@ -196,7 +197,8 @@ pub async fn run_api(
         .merge(firefox::routes(modem_manager.clone()))
         .merge(phone::routes(modem_manager.clone()))
         .merge(mms::routes())
-        .merge(esim::routes());
+        .merge(esim::routes())
+        .merge(tg2sip::routes());
 
     let app = Router::new()
         .nest_service("/api", api)
