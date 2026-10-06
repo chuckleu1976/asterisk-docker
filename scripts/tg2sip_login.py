@@ -13,9 +13,12 @@ from __future__ import annotations
 import json
 import os
 import pty
+import re
 import select
 import signal
 import socket
+import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -78,9 +81,11 @@ class Login:
         self.error = ""
         if op == "phone":
             self._restart()
-            kind, _new = self._drive(180)
+            kind, new = self._drive(180)
             if kind != "phone":
-                return self._fail("Telegram login did not ask for a phone number")
+                redacted = re.sub(r"\d", "0", new.replace("\r", "\n"))
+                print(f"login prompt kind={kind} buf={redacted[-800:]}", file=sys.stderr, flush=True)
+                return self._fail(_phone_prompt_failure(kind, new))
             self._write(value)
             kind, new = self._drive(90)
         elif op == "code":
@@ -140,9 +145,22 @@ class Login:
             except OSError:
                 pass
             self.fd = None
+        self._remove_run_containers()
+
+    def _remove_run_containers(self) -> None:
+        listed = subprocess.run(
+            ["docker", "ps", "-aq", "--filter", f"name={self.service}-run"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        ids = [line for line in listed.stdout.split() if line]
+        if ids:
+            subprocess.run(["docker", "rm", "-f", *ids], capture_output=True, text=True, check=False)
 
     def _restart(self) -> None:
         self.close()
+        self._remove_run_containers()
         self._buf = ""
         self.phase = "phone"
         pid, fd = pty.fork()
@@ -235,6 +253,31 @@ def _session_label(phase: str) -> str:
     return "not logged in"
 
 
+def _public_tail(text: str) -> str:
+    lines = []
+    for line in text.replace("\r", "\n").splitlines():
+        line = line.strip()
+        if not line or any(ch.isdigit() for ch in line):
+            continue
+        lines.append(line[:160])
+    return lines[-1] if lines else ""
+
+
+def _phone_prompt_failure(kind: str, text: str) -> str:
+    if kind == "timeout":
+        detail = "Timed out waiting for Telegram to ask for the phone number"
+    elif kind == "eof":
+        detail = "The login process ended before asking for a phone number"
+    elif kind == "error":
+        detail = _error_text(text)
+    else:
+        detail = "Telegram login did not ask for a phone number"
+    tail = _public_tail(text)
+    if tail and tail not in detail:
+        return f"{detail}: {tail}"
+    return detail
+
+
 def _error_text(text: str) -> str:
     for marker in ERRORS:
         if marker in text:
@@ -271,11 +314,19 @@ def serve(instance: int) -> None:
                     if login.error and login.phase in ("code_invalid", "password_invalid"):
                         resp["error"] = login.error
                 elif op == "shutdown":
-                    conn.sendall(b'{"ok": true}\n')
+                    try:
+                        conn.sendall(b'{"ok": true}\n')
+                    except OSError:
+                        pass
                     break
                 else:
                     resp = login.submit(op, str(req.get("value", "")))
-                conn.sendall((json.dumps(resp) + "\n").encode())
+                try:
+                    conn.sendall((json.dumps(resp) + "\n").encode())
+                except OSError:
+                    continue
+            except (json.JSONDecodeError, UnicodeError):
+                continue
             finally:
                 conn.close()
     finally:

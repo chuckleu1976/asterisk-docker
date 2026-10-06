@@ -11,6 +11,7 @@ import os
 import re
 import secrets
 import socket
+import sqlite3
 import subprocess
 import sys
 import time
@@ -89,9 +90,11 @@ def compose_service_lines(instance: int) -> list[str]:
         "      - CONFIG_PATH=/app/config/config.yaml",
         "      - SESSION_DIR=/app/sessions",
         "      - SIP_BIND_ADDRESS=0.0.0.0",
+        "    command: [python, /app/wait_for_session.py]",
         "    volumes:",
         f"      - ../tg2sip/config{instance}:/app/config:ro",
         f"      - ../tg2sip/sessions{instance}:/app/sessions",
+        "      - ../tg2sip/wait_for_session.py:/app/wait_for_session.py:ro",
         "    restart: unless-stopped",
         f"    depends_on: [{spec['service']}]",
     ]
@@ -224,17 +227,36 @@ def _docker(args: list[str], timeout: float = 30) -> subprocess.CompletedProcess
 
 def _service_states() -> dict[str, str]:
     try:
-        result = _docker(["ps", "--all", "--format", "{{.Service}} {{.State}}"])
+        result = _docker(["ps", "--all", "--format", "{{.Service}} {{.Name}} {{.State}}"])
     except (OSError, subprocess.TimeoutExpired):
         return {}
     states: dict[str, str] = {}
     if result.returncode != 0:
         return states
     for line in result.stdout.splitlines():
-        parts = line.split(None, 1)
-        if len(parts) == 2:
-            states[parts[0]] = parts[1]
+        parts = line.split(None, 2)
+        if len(parts) != 3:
+            continue
+        service, name, state = parts
+        if "-run-" in name:
+            continue
+        states[service] = state
     return states
+
+
+def _remove_login_runs(instance: int) -> None:
+    """Drop one-off login containers. A live one holds the session file."""
+    gateway = _line(instance)["gateway"]
+    listed = subprocess.run(
+        ["docker", "ps", "-aq", "--filter", f"name={gateway}-run"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    ids = [line for line in listed.stdout.split() if line]
+    if not ids:
+        return
+    subprocess.run(["docker", "rm", "-f", *ids], capture_output=True, text=True, check=False)
 
 
 def _asterisk_rx(service: str, command: str) -> str:
@@ -262,13 +284,33 @@ def _call_status(service: str) -> str:
         if "tg2sip" in line or "from-tg2sip" in line:
             return "busy"
     endpoint = _asterisk_rx(service, "pjsip show endpoint tg2sip")
-    if re.search(r"(?m)^ +Channel:", endpoint):
-        return "busy"
+    for line in endpoint.splitlines():
+        match = re.match(r" +Channel: +(\S+)", line)
+        if match and not match.group(1).startswith("<"):
+            return "busy"
     return "idle"
 
 
 def _session_file(instance: int) -> Path:
     return TG2SIP_ROOT / f"sessions{instance}" / "gateway.session"
+
+
+def _session_state(instance: int) -> str:
+    """A Pyrogram file exists before login. Only a stored user id means signed in."""
+    path = _session_file(instance)
+    if not path.exists():
+        return "not logged in"
+    try:
+        con = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=1)
+        try:
+            row = con.execute("SELECT user_id FROM sessions").fetchone()
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return "not logged in"
+    if row and row[0]:
+        return "logged in"
+    return "not logged in"
 
 
 def _login_request(instance: int, payload: dict[str, str], timeout: float) -> dict[str, str]:
@@ -442,7 +484,7 @@ def status() -> dict[str, object]:
             forward = _forward_target(env)
             routes = _read_routes(instance)
             setup_error = ""
-        session = "logged in" if _session_file(instance).exists() else "not logged in"
+        session = _session_state(instance)
         sock = RUNTIME / f"{instance}.sock"
         if _login_alive(sock):
             try:
@@ -549,10 +591,30 @@ def submit_session(instance: int, step: str, value: str) -> dict[str, str]:
         raise CtlError(
             f"Set TG_API_ID and TG_API_HASH in {spec['gateway']}.env before logging in"
         )
-    if _service_states().get(spec["gateway"], "").startswith("running"):
-        _require_idle(instance)
-        _docker(["stop", spec["gateway"]], timeout=60)
+    if step == "phone":
+        _remove_login_runs(instance)
+        _stop_for_login(instance)
     return _login_request(instance, {"op": step, "value": value}, 200)
+
+
+def _stop_for_login(instance: int) -> None:
+    """Stop the gateway even while Docker is restarting it after a crashed login."""
+    gateway = _line(instance)["gateway"]
+    state = _service_states().get(gateway, "")
+    if not state or state.startswith("exit") or state == "dead":
+        return
+    _require_idle(instance)
+    result = _docker(["stop", gateway], timeout=60)
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip()
+        raise CtlError(detail or f"failed to stop {gateway}")
+    deadline = time.time() + 20
+    while time.time() < deadline:
+        state = _service_states().get(gateway, "")
+        if not state or state.startswith("exit") or state == "dead":
+            return
+        time.sleep(0.4)
+    raise CtlError(f"{gateway} did not stop")
 
 
 def _extract_context(text: str, name: str) -> str:

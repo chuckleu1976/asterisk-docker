@@ -340,9 +340,11 @@ services:
       - CONFIG_PATH=/app/config/config.yaml
       - SESSION_DIR=/app/sessions
       - SIP_BIND_ADDRESS=0.0.0.0
+    command: [python, /app/wait_for_session.py]
     volumes:
       - ../tg2sip/config1:/app/config:ro
       - ../tg2sip/sessions1:/app/sessions
+      - ../tg2sip/wait_for_session.py:/app/wait_for_session.py:ro
     restart: unless-stopped
     depends_on: [asterisk]
 
@@ -354,9 +356,11 @@ services:
       - CONFIG_PATH=/app/config/config.yaml
       - SESSION_DIR=/app/sessions
       - SIP_BIND_ADDRESS=0.0.0.0
+    command: [python, /app/wait_for_session.py]
     volumes:
       - ../tg2sip/config2:/app/config:ro
       - ../tg2sip/sessions2:/app/sessions
+      - ../tg2sip/wait_for_session.py:/app/wait_for_session.py:ro
     restart: unless-stopped
     depends_on: [asterisk2]
 
