@@ -106,18 +106,6 @@ PYRESET
 
 # Initiate IKE in background — ims.updown writes /tmp/pcscf_ip when ready.
 swanctl --initiate --child ims &
-(
-    trap 'exit 0' TERM INT
-    backoff=4
-    while true; do
-        sleep 1
-        if ! swanctl --list-sas | grep '^ims:' > /dev/null; then
-            echo "Restarting ims, backoff=$backoff"
-            swanctl --initiate --child ims && backoff=4 || { sleep $backoff; backoff=$((backoff * 2 + (RANDOM & 1))); }
-        fi
-    done
-) &
-LOOP_PID=$!
 
 # Wait for ims.updown to signal P-CSCF is ready via /tmp/pcscf_ip file.
 # This is written by ims.updown after it receives the P-CSCF from strongSwan.
@@ -134,6 +122,39 @@ else
     PCSCF=$(cat /tmp/pcscf_ip)
     echo "P-CSCF ready after ${WAIT}s: $PCSCF, starting asterisk"
 fi
+
+# Watchdog starts only after bring-up. swanctl --list-sas can hang on vici;
+# ipsec status is short and may not include ESTABLISHED. Treat command
+# timeouts as unknown (do not re-initiate). Require a few clear misses
+# before restarting so we do not thrash a live SA.
+(
+    trap 'exit 0' TERM INT
+    backoff=4
+    fails=0
+    while true; do
+        sleep 10
+        if ! status=$(timeout -k 1 5 ipsec statusall 2>/dev/null); then
+            continue
+        fi
+        if echo "$status" | grep -q ESTABLISHED; then
+            fails=0
+            continue
+        fi
+        fails=$((fails + 1))
+        if [ "$fails" -lt 3 ]; then
+            continue
+        fi
+        echo "Restarting ims after ${fails} failed checks, backoff=$backoff"
+        if timeout -k 2 30 swanctl --initiate --child ims; then
+            backoff=4
+            fails=0
+        else
+            sleep $backoff
+            backoff=$((backoff * 2 + (RANDOM & 1)))
+        fi
+    done
+) &
+LOOP_PID=$!
 
 python3 /usr/local/bin/ami_usim.py /usr/local/etc/ami_usim.ini &
 AMI_PID=$!

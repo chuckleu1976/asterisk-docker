@@ -49,10 +49,11 @@ services:
       - ../logs/1:/logs:Z
       - ./sim_inventory.db:/data/sim_inventory.db:Z
       - pcsc-sock:/run/pcscd
+      - ./asterisk/entrypoint.sh:/entrypoint.sh:ro
     pid: service:pcscd
     depends_on: [pcscd]
     healthcheck:
-      test: ["CMD-SHELL", "swanctl --list-sas 2>/dev/null | grep -q ESTABLISHED || exit 1"]
+      test: ["CMD-SHELL", "timeout -k 1 5 ipsec statusall 2>/dev/null | grep -q ESTABLISHED || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 6
@@ -88,10 +89,11 @@ services:
       - ../logs/2:/logs:Z
       - ./sim_inventory.db:/data/sim_inventory.db:Z
       - pcsc-sock:/run/pcscd
+      - ./asterisk/entrypoint.sh:/entrypoint.sh:ro
     pid: service:pcscd
     depends_on: [pcscd]
     healthcheck:
-      test: ["CMD-SHELL", "swanctl --list-sas 2>/dev/null | grep -q ESTABLISHED || exit 1"]
+      test: ["CMD-SHELL", "timeout -k 1 5 ipsec statusall 2>/dev/null | grep -q ESTABLISHED || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 6
@@ -127,10 +129,11 @@ services:
       - ../logs/3:/logs:Z
       - ./sim_inventory.db:/data/sim_inventory.db:Z
       - pcsc-sock:/run/pcscd
+      - ./asterisk/entrypoint.sh:/entrypoint.sh:ro
     pid: service:pcscd
     depends_on: [pcscd]
     healthcheck:
-      test: ["CMD-SHELL", "swanctl --list-sas 2>/dev/null | grep -q ESTABLISHED || exit 1"]
+      test: ["CMD-SHELL", "timeout -k 1 5 ipsec statusall 2>/dev/null | grep -q ESTABLISHED || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 6
@@ -166,10 +169,11 @@ services:
       - ../logs/4:/logs:Z
       - ./sim_inventory.db:/data/sim_inventory.db:Z
       - pcsc-sock:/run/pcscd
+      - ./asterisk/entrypoint.sh:/entrypoint.sh:ro
     pid: service:pcscd
     depends_on: [pcscd]
     healthcheck:
-      test: ["CMD-SHELL", "swanctl --list-sas 2>/dev/null | grep -q ESTABLISHED || exit 1"]
+      test: ["CMD-SHELL", "timeout -k 1 5 ipsec statusall 2>/dev/null | grep -q ESTABLISHED || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 6
@@ -205,10 +209,11 @@ services:
       - ../logs/5:/logs:Z
       - ./sim_inventory.db:/data/sim_inventory.db:Z
       - pcsc-sock:/run/pcscd
+      - ./asterisk/entrypoint.sh:/entrypoint.sh:ro
     pid: service:pcscd
     depends_on: [pcscd]
     healthcheck:
-      test: ["CMD-SHELL", "swanctl --list-sas 2>/dev/null | grep -q ESTABLISHED || exit 1"]
+      test: ["CMD-SHELL", "timeout -k 1 5 ipsec statusall 2>/dev/null | grep -q ESTABLISHED || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 6
@@ -244,10 +249,11 @@ services:
       - ../logs/6:/logs:Z
       - ./sim_inventory.db:/data/sim_inventory.db:Z
       - pcsc-sock:/run/pcscd
+      - ./asterisk/entrypoint.sh:/entrypoint.sh:ro
     pid: service:pcscd
     depends_on: [pcscd]
     healthcheck:
-      test: ["CMD-SHELL", "swanctl --list-sas 2>/dev/null | grep -q ESTABLISHED || exit 1"]
+      test: ["CMD-SHELL", "timeout -k 1 5 ipsec statusall 2>/dev/null | grep -q ESTABLISHED || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 6
@@ -283,10 +289,11 @@ services:
       - ../logs/7:/logs:Z
       - ./sim_inventory.db:/data/sim_inventory.db:Z
       - pcsc-sock:/run/pcscd
+      - ./asterisk/entrypoint.sh:/entrypoint.sh:ro
     pid: service:pcscd
     depends_on: [pcscd]
     healthcheck:
-      test: ["CMD-SHELL", "swanctl --list-sas 2>/dev/null | grep -q ESTABLISHED || exit 1"]
+      test: ["CMD-SHELL", "timeout -k 1 5 ipsec statusall 2>/dev/null | grep -q ESTABLISHED || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 6
@@ -322,10 +329,11 @@ services:
       - ../logs/8:/logs:Z
       - ./sim_inventory.db:/data/sim_inventory.db:Z
       - pcsc-sock:/run/pcscd
+      - ./asterisk/entrypoint.sh:/entrypoint.sh:ro
     pid: service:pcscd
     depends_on: [pcscd]
     healthcheck:
-      test: ["CMD-SHELL", "swanctl --list-sas 2>/dev/null | grep -q ESTABLISHED || exit 1"]
+      test: ["CMD-SHELL", "timeout -k 1 5 ipsec statusall 2>/dev/null | grep -q ESTABLISHED || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 6
