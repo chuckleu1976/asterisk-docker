@@ -151,7 +151,7 @@ def generate_config(instance, device):
         "context=volte_ims\n"
         "message_context=volte_ims_msg\n"
         "disallow=all\n"
-        "allow=amr\n"
+        "allow=amrwb,amr\n"
         "bw_value=41\n"
         "outbound_auth=volte_ims\n"
         "aors=volte_ims\n"

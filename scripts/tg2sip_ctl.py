@@ -57,7 +57,7 @@ def pjsip_tg2sip_block(password: str) -> str:
         "transport=transport-udp-sip\n"
         "context=from-tg2sip\n"
         "disallow=all\n"
-        "allow=ulaw,alaw\n"
+        "allow=g722,ulaw,alaw\n"
         "media_encryption=no\n"
         "auth=tg2sip-auth\n"
         "aors=tg2sip\n"
