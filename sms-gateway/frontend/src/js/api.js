@@ -3,6 +3,18 @@ import FetchApi from './request';
 
 const DEFAULT_AUTH_TOKEN = 'YWRtaW46MTIzNDU2'; // admin:123456
 
+function operationBody(body = {}) {
+    if (body.request_id) return body;
+    const bytes = crypto.getRandomValues(new Uint8Array(16));
+    bytes[6] = (bytes[6] & 15) | 64;
+    bytes[8] = (bytes[8] & 63) | 128;
+    const hex = Array.from(bytes, value => value.toString(16).padStart(2, '0')).join('');
+    const request_id = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+    sessionStorage.setItem('remote_esim_request_id', request_id);
+    window.dispatchEvent(new CustomEvent('remote-esim-operation', { detail: request_id }));
+    return { ...body, request_id };
+}
+
 function buildBasicAuthHeader() {
     const auth = sessionStorage.getItem('auth') || localStorage.getItem('auth');
     if (!auth) {
@@ -501,6 +513,18 @@ class ApiClient {
         return FetchApi.get('/api/esim/ports');
     }
 
+    async remoteSimTargets() {
+        return FetchApi.get('/api/sim-mappings');
+    }
+
+    async esimWriteMsisdn(com, iccid, phone_number) {
+        return FetchApi.post(`/api/esim/${encodeURIComponent(com)}/msisdn`, operationBody({ iccid, phone_number }));
+    }
+
+    async esimOperationStatus(id) {
+        return FetchApi.get(`/api/esim/operations/${encodeURIComponent(id)}`, {}, undefined, buildBasicAuthHeader());
+    }
+
     /** Enter eSIM-management mode on a port (acquires the machine-wide lock). */
     async esimEnter(com) {
         return FetchApi.post(`/api/esim/${com}/session/enter`);
@@ -532,23 +556,23 @@ class ApiClient {
      * @param {{smdp?:string, matching_id?:string, confirmation_code?:string, imei?:string, activation_code?:string}} body
      */
     async esimDownload(com, body) {
-        return FetchApi.post(`/api/esim/${com}/profiles/download`, body);
+        return FetchApi.post(`/api/esim/${com}/profiles/download`, operationBody(body));
     }
 
     async esimEnable(com, iccid, refreshFlag = true) {
-        return FetchApi.post(`/api/esim/${com}/profiles/enable`, { iccid, refresh_flag: refreshFlag });
+        return FetchApi.post(`/api/esim/${com}/profiles/enable`, operationBody({ iccid, refresh_flag: refreshFlag }));
     }
 
     async esimDisable(com, iccid, refreshFlag = true) {
-        return FetchApi.post(`/api/esim/${com}/profiles/disable`, { iccid, refresh_flag: refreshFlag });
+        return FetchApi.post(`/api/esim/${com}/profiles/disable`, operationBody({ iccid, refresh_flag: refreshFlag }));
     }
 
     async esimDelete(com, iccid) {
-        return FetchApi.post(`/api/esim/${com}/profiles/delete`, { iccid });
+        return FetchApi.post(`/api/esim/${com}/profiles/delete`, operationBody({ iccid }));
     }
 
     async esimNickname(com, iccid, nickname) {
-        return FetchApi.post(`/api/esim/${com}/profiles/nickname`, { iccid, nickname });
+        return FetchApi.post(`/api/esim/${com}/profiles/nickname`, operationBody({ iccid, nickname }));
     }
 
     async esimNotifications(com) {
@@ -556,12 +580,12 @@ class ApiClient {
     }
 
     async esimNotificationProcess(com, seq, remove = false) {
-        return FetchApi.post(`/api/esim/${com}/notifications/process`, { seq, remove });
+        return FetchApi.post(`/api/esim/${com}/notifications/process`, operationBody({ seq, remove }));
     }
 
     /** One-shot enter → download → enable → notify → exit flow. */
     async esimProvision(com, body) {
-        return FetchApi.post(`/api/esim/${com}/provision`, body);
+        return FetchApi.post(`/api/esim/${com}/provision`, operationBody(body));
     }
 
     /** Scan the server's eSIM source folder for QR/text activation codes. */

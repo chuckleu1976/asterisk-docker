@@ -19,9 +19,15 @@
   let activePort = $state(null);
   let chip = $state(null);
   let profiles = $state([]);
+  let msisdn = $state('');
+  let cardResult = $state(null);
+  let operationId = $state(sessionStorage.getItem('remote_esim_request_id') ?? '');
+  let operationStatus = $state('');
+  let operationResult = $state(null);
+  const activeTarget = $derived(ports.find(port => port.com_port === activePort));
 
   // Download form
-  let dl = $state({ smdp: '', matching_id: '', confirmation_code: '', imei: '', activation_code: '' });
+  let dl = $state({ smdp: '', matching_id: '', confirmation_code: '', imei: '', activation_code: '', phone_number: '' });
 
   // ── Batch selection / filtering ──────────────────────────────────────────
   let selected = $state(new Set());
@@ -35,7 +41,7 @@
   let pairing = $state({}); // com_port -> index into `sources`
   let pasteText = $state('');
   let batchPhoneNumber = $state('');
-  let batchOptions = $state({ auto_enable: true, replace_existing: true, stop_on_error: false });
+  let batchOptions = $state({ auto_enable: false, replace_existing: false, stop_on_error: true });
   let job = $state(null); // JobSnapshot
   let batchBusy = $state(false);
   let sseConn = null;
@@ -48,7 +54,7 @@
       if (filterHasSim && !p.sim_id) return false;
       const q = filterText.trim().toLowerCase();
       if (q) {
-        const hay = `${displayPort(p.com_port)} ${p.sim_id ?? ''}`.toLowerCase();
+        const hay = `${displayPort(p.com_port)} ${p.slot_label ?? ''} ${p.mapping_label ?? ''} ${p.sim_id ?? ''}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
@@ -58,9 +64,17 @@
   const selectedList = $derived(
     [...selected].sort((a, b) => (comNum(a) ?? 0) - (comNum(b) ?? 0))
   );
+  const downloadReady = $derived(
+    selectedList.length > 0 && selectedList.every((com) => {
+      const idx = pairing[com];
+      const code = idx != null ? sources[idx] : null;
+      const phone = sourcePhone(code);
+      return Boolean(code?.raw_lpa || code?.activation_code) && (!phone || normalizePhoneLabel(phone));
+    })
+  );
   const allFilteredSelected = $derived(
-    filteredPorts.filter((p) => p.esim_capable).length > 0 &&
-      filteredPorts.filter((p) => p.esim_capable).every((p) => selected.has(p.com_port))
+    filteredPorts.filter((p) => p.writable).length > 0 &&
+      filteredPorts.filter((p) => p.writable).every((p) => selected.has(p.com_port))
   );
 
   function comNum(com) {
@@ -206,6 +220,9 @@
     setPortStatus(com, 'running', 'enter');
     try {
       await apiClient.esimEnter(com);
+      cardResult = null;
+      msisdn = '';
+      dl = { smdp: '', matching_id: '', confirmation_code: '', imei: '', activation_code: '', phone_number: '' };
       activePort = com;
       await loadPorts();
       await refreshSession(com);
@@ -264,14 +281,12 @@
 
   async function refreshSession(com) {
     try {
-      const [chipRes, profRes] = await Promise.allSettled([
-        apiClient.esimChip(com),
-        apiClient.esimProfiles(com),
-      ]);
-      chip = chipRes.status === 'fulfilled' ? (unwrapPayload(chipRes.value) ?? null) : null;
-      const p = profRes.status === 'fulfilled' ? (unwrapPayload(profRes.value) ?? []) : [];
+      chip = unwrapPayload(await apiClient.esimChip(com)) ?? null;
+      const p = unwrapPayload(await apiClient.esimProfiles(com)) ?? [];
       profiles = Array.isArray(p) ? p : [];
     } catch (e) {
+      chip = null;
+      profiles = [];
       fail(e);
     }
   }
@@ -362,7 +377,7 @@
         const phone = normalizePhoneLabel(matched?.label ?? null);
         if (phone) body.phone_number = phone;
       }
-      await apiClient.esimDownload(com, body);
+      cardResult = unwrapPayload(await apiClient.esimDownload(com, body));
       await refreshSession(com);
       setPortStatus(com, 'ok', 'download');
       flash($t('esim_op_ok'));
@@ -376,6 +391,36 @@
 
   function iccidOf(p) {
     return p.iccid ?? p.ICCID ?? '';
+  }
+
+  async function provision(com) {
+    busy = true;
+    error = '';
+    cardResult = null;
+    try {
+      cardResult = unwrapPayload(await apiClient.esimProvision(com, dl));
+      await refreshSession(com);
+      if (cardResult?.partial) error = cardResult.warning ?? cardResult.notification_warning ?? 'Provisioning completed partially';
+      else flash('Profile installation and readback completed');
+    } catch (caught) {
+      error = describeError(caught);
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function writeMsisdn(com, iccid) {
+    busy = true;
+    error = '';
+    cardResult = null;
+    try {
+      cardResult = unwrapPayload(await apiClient.esimWriteMsisdn(com, iccid, msisdn));
+      flash('MSISDN verified on card');
+    } catch (caught) {
+      error = describeError(caught);
+    } finally {
+      busy = false;
+    }
   }
   function providerOf(p) {
     return p.serviceProviderName ?? p.provider ?? '';
@@ -396,7 +441,7 @@
   }
   function toggleSelectAll() {
     const s = new Set(selected);
-    const capable = filteredPorts.filter((p) => p.esim_capable);
+    const capable = filteredPorts.filter((p) => p.writable);
     if (allFilteredSelected) {
       capable.forEach((p) => s.delete(p.com_port));
     } else {
@@ -493,8 +538,27 @@
 
   function normalizePhoneLabel(label) {
     if (!label) return null;
-    const digits = String(label).replace(/\D/g, '').replace(/^0+/, '');
-    return digits || null;
+    const phone = String(label).trim();
+    return /^\+?[0-9]{1,20}$/.test(phone) ? phone : null;
+  }
+
+  function sourcePhone(code) {
+    return code?.phone_number ?? normalizePhoneLabel(code?.label) ?? '';
+  }
+
+  function setSourcePhone(com, phone) {
+    const index = pairing[com];
+    if (index == null || !sources[index]) return;
+    sources = sources.map((source, sourceIndex) => sourceIndex === index
+      ? { ...source, phone_number: phone, phone_status: 'edited' }
+      : source);
+  }
+
+  function phoneStatus(code) {
+    if (!code || code.phone_status === 'edited') return '';
+    if (code.phone_status === 'recognized') return $t('esim_msisdn_recognized');
+    if (code.phone_status === 'unavailable') return $t('esim_msisdn_unavailable');
+    return $t('esim_msisdn_not_found');
   }
 
   // ── Batch dialog + run ───────────────────────────────────────────────────
@@ -518,15 +582,17 @@
   }
 
   async function startDownload() {
+    if (!downloadReady) return;
     const items = selectedList.map((com) => {
       const idx = pairing[com];
       const code = idx != null && sources[idx] ? sources[idx] : null;
       return {
         com_port: com,
-        activation_code: code?.raw_lpa ?? null,
-        phone_number: normalizePhoneLabel(code?.label ?? batchPhoneNumber),
+        activation_code: code.raw_lpa || code.activation_code,
+        phone_number: normalizePhoneLabel(sourcePhone(code)) ?? normalizePhoneLabel(batchPhoneNumber),
       };
     });
+    closeBatch();
     await runBatch('download', items);
   }
 
@@ -574,23 +640,23 @@
         const snap = JSON.parse(e.data);
         job = snap;
         if (snap && (snap.status === 'done' || snap.status === 'cancelled')) {
+          if (sseConn) sseConn.close();
+          sseConn = null;
           loadPorts();
         }
       } catch (_) {}
     });
-    sseConn.onerror = () => {
-      if (sseConn) {
-        sseConn.close();
-        sseConn = null;
-      }
-    };
+    sseConn.onerror = () => pollBatchOnce();
   }
 
   async function pollBatchOnce() {
     try {
       const res = await apiClient.esimGetBatch();
       const snap = unwrapPayload(res);
-      if (snap) job = snap;
+      if (snap) {
+        job = snap;
+        if (snap.status === 'running' && !sseConn) connectBatchSse();
+      }
     } catch (_) {}
   }
 
@@ -618,13 +684,50 @@
     }
   }
 
-  onMount(loadPorts);
+  async function inspectOperation() {
+    try {
+      const result = unwrapPayload(await apiClient.esimOperationStatus(operationId));
+      operationStatus = result.status;
+      operationResult = result;
+      if (result.result && result.target === activeTarget?.id) cardResult = result.result;
+    } catch (e) {
+      fail(e);
+    }
+  }
+
+  onMount(() => {
+    loadPorts();
+    pollBatchOnce();
+    const operationChanged = (event) => {
+      operationId = event.detail;
+      operationStatus = '';
+      operationResult = null;
+    };
+    window.addEventListener('remote-esim-operation', operationChanged);
+    return () => window.removeEventListener('remote-esim-operation', operationChanged);
+  });
   onDestroy(() => {
     if (sseConn) sseConn.close();
   });
 </script>
 
 <div class="flex flex-col h-dvh w-screen bg-gray-50 dark:bg-zinc-950 text-sm font-sans">
+  {#if operationId}
+    <div class="flex flex-wrap items-center gap-2 px-4 py-2 border-b border-gray-200 dark:border-zinc-800">
+      <span class="text-xs">Operation</span>
+      <span class="font-mono text-xs break-all">{operationId}</span>
+      <span class="text-xs">{operationStatus}</span>
+      {#if operationResult}
+        <span class="text-xs break-all">{operationResult.target} / {operationResult.action}</span>
+        {#if operationResult.result?.iccid}
+          <span class="text-xs font-mono break-all">ICCID: {operationResult.result.iccid}</span>
+        {/if}
+      {/if}
+      <button onclick={inspectOperation} title="Inspect operation status" aria-label="Inspect operation status" class="p-2 hover:bg-gray-200 dark:hover:bg-zinc-800 rounded">
+        <Icon icon="carbon:renew" class="w-4 h-4" />
+      </button>
+    </div>
+  {/if}
   <header class="flex items-center justify-between gap-3 px-4 py-3 bg-white dark:bg-zinc-900 border-b border-gray-200 dark:border-zinc-800 shadow-sm shrink-0">
     <div class="flex items-center gap-3">
       <button
@@ -707,7 +810,7 @@
     {:else if ports.length === 0}
       <p class="rounded-lg bg-white p-6 text-center text-slate-500">{$t('esim_no_ports')}</p>
     {:else}
-      <div class="overflow-hidden rounded-lg border border-slate-200 bg-white">
+      <div class="overflow-x-auto border border-slate-200 bg-white">
         <table class="w-full text-sm">
           <thead class="bg-slate-100 text-left text-slate-600">
             <tr>
@@ -715,6 +818,8 @@
                 <input type="checkbox" checked={allFilteredSelected} onchange={toggleSelectAll} aria-label="select all" />
               </th>
               <th class="px-4 py-2">{$t('esim_col_port')}</th>
+              <th class="px-4 py-2 whitespace-nowrap">SIM Slot</th>
+              <th class="px-4 py-2">Mapping</th>
               <th class="px-4 py-2">{$t('esim_col_capable')}</th>
               <th class="px-4 py-2">{$t('esim_col_mode')}</th>
               <th class="px-4 py-2">{$t('esim_col_status')}</th>
@@ -730,12 +835,17 @@
                   <input
                     type="checkbox"
                     checked={selected.has(p.com_port)}
-                    disabled={!p.esim_capable}
+                    disabled={!p.writable}
                     onchange={() => toggleSelect(p.com_port)}
                     aria-label={`select ${displayPort(p.com_port) || p.com_port}`}
                   />
                 </td>
                 <td class="px-4 py-2 font-medium text-slate-800">{displayPort(p.com_port) || '—'}</td>
+                <td class="px-4 py-2 whitespace-nowrap">{p.slot_label}</td>
+                <td class="px-4 py-2 whitespace-nowrap">
+                  <div class="font-mono text-xs">{p.mapping_label}</div>
+                  <div class="text-xs text-slate-500" title={p.error ?? ''}>{p.state}{p.protected ? ' / Protected' : ''}</div>
+                </td>
                 <td class="px-4 py-2">{p.esim_capable ? $t('esim_capable_yes') : $t('esim_capable_no')}</td>
                 <td class="px-4 py-2">
                   <span class="rounded-full px-2 py-0.5 text-xs {p.esim_mode ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600'}">
@@ -750,6 +860,10 @@
                 </td>
                 <td class="px-4 py-2 text-slate-500">{p.sim_id ?? '—'}</td>
                 <td class="px-4 py-2">
+                  <button class="mr-2 inline-flex items-center gap-1 rounded border px-2 py-1 text-xs disabled:opacity-50"
+                    onclick={() => enter(p.com_port)} disabled={!p.esim_capable || busy || batchBusy || (!!sessionPort && sessionPort !== p.com_port)}>
+                    <Icon icon="carbon:sim-card" class="h-4 w-4" /> Manage
+                  </button>
                   <button
                     class="rounded bg-slate-500 px-2 py-1 text-xs text-white hover:bg-slate-400 disabled:opacity-50"
                     onclick={() => reset(p.com_port)}
@@ -764,7 +878,76 @@
         </table>
       </div>
 
-      <p class="mt-2 text-xs text-amber-600">{$t('esim_warn_sms_paused')}</p>
+    {/if}
+
+    {#if activePort}
+      <section class="mt-6 border-t border-slate-200 pt-4">
+        <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <h2 class="text-base font-semibold">{activeTarget?.slot_label ?? activePort}</h2>
+          <button class="inline-flex items-center gap-1 rounded border px-2 py-1" onclick={() => refreshSession(activePort)} disabled={busy}>
+            <Icon icon="carbon:renew" class="h-4 w-4" /> Refresh
+          </button>
+        </div>
+        <dl class="mb-4 grid gap-1 text-xs sm:grid-cols-[5rem_1fr]">
+          <dt class="text-slate-500">EID</dt><dd class="break-all font-mono">{chip?.eidValue ?? 'Unknown'}</dd>
+          <dt class="text-slate-500">Mapping</dt><dd class="font-mono">{activeTarget?.mapping_label}</dd>
+        </dl>
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-xs">
+            <thead class="bg-slate-100"><tr><th class="p-2">ICCID</th><th class="p-2">Profile</th><th class="p-2">State</th><th class="p-2">Actions</th></tr></thead>
+            <tbody>
+              {#each profiles as profile (iccidOf(profile))}
+                <tr class="border-b border-slate-100">
+                  <td class="p-2 font-mono">{iccidOf(profile)}</td>
+                  <td class="p-2">{nameOf(profile)}<div class="text-slate-500">{providerOf(profile)}</div></td>
+                  <td class="p-2">{stateOf(profile)}</td>
+                  <td class="flex flex-wrap gap-2 p-2">
+                    <button class="rounded border px-2 py-1" onclick={() => enableProfile(activePort, iccidOf(profile))} disabled={busy || !activeTarget?.writable || stateOf(profile) === 'enabled'}>Enable</button>
+                    <button class="rounded border px-2 py-1" onclick={() => disableProfile(activePort, iccidOf(profile))} disabled={busy || !activeTarget?.writable || stateOf(profile) !== 'enabled'}>Disable</button>
+                    <button class="rounded border px-2 py-1" onclick={() => nicknameProfile(activePort, iccidOf(profile))} disabled={busy || !activeTarget?.writable}>Rename</button>
+                    <button class="rounded border px-2 py-1 text-red-700" onclick={() => deleteProfile(activePort, iccidOf(profile))} disabled={busy || !activeTarget?.writable || stateOf(profile) === 'enabled'}>Delete</button>
+                    <button class="rounded border px-2 py-1" onclick={() => writeMsisdn(activePort, iccidOf(profile))} disabled={busy || !activeTarget?.writable || !msisdn || stateOf(profile) !== 'enabled'}>Write MSISDN</button>
+                  </td>
+                </tr>
+              {:else}
+                <tr><td colspan="4" class="p-4 text-slate-500">No installed profiles</td></tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+        <label class="mt-3 flex flex-wrap items-center gap-2">MSISDN
+          <input class="rounded border px-2 py-1" inputmode="tel" bind:value={msisdn} aria-label="MSISDN to write to enabled profile" />
+        </label>
+        <form class="mt-4 grid gap-3 sm:grid-cols-2" onsubmit={(event) => { event.preventDefault(); provision(activePort); }}>
+          <label class="grid gap-1 sm:col-span-2">Activation Code<input class="w-full rounded border px-2 py-1 font-mono text-xs" autocomplete="off" type="password" bind:value={dl.activation_code} /></label>
+          <label class="grid gap-1">MSISDN<input class="rounded border px-2 py-1" inputmode="tel" bind:value={dl.phone_number} /></label>
+          <label class="grid gap-1">Confirmation Code<input class="rounded border px-2 py-1" type="password" autocomplete="off" bind:value={dl.confirmation_code} /></label>
+          <div class="flex flex-wrap gap-2 sm:col-span-2">
+            <button type="button" class="inline-flex items-center gap-1 rounded border px-3 py-1.5 disabled:opacity-50" onclick={() => download(activePort)} disabled={busy || !activeTarget?.writable || !dl.activation_code}>
+              <Icon icon="carbon:download" class="h-4 w-4" /> Download Only
+            </button>
+            <button type="submit" class="inline-flex items-center gap-1 rounded bg-green-700 px-3 py-1.5 text-white disabled:opacity-50" disabled={busy || !activeTarget?.writable || !dl.activation_code}>
+              <Icon icon="carbon:checkmark" class="h-4 w-4" /> Download and Enable
+            </button>
+          </div>
+        </form>
+        {#if cardResult}
+          <div class="mt-3 text-xs">
+            <span>ICCID: {cardResult.iccid ?? cardResult.identity?.iccid ?? 'Unknown'}</span>
+            <span class="ml-3">MSISDN on card: {cardResult.msisdn_on_card ?? cardResult.msisdn?.msisdn_on_card ?? 'Not written'}</span>
+            {#if cardResult.partial}
+              <p class="mt-2 text-amber-800">Partial: {cardResult.warning ?? cardResult.notification_warning ?? 'Not all stages completed'}</p>
+            {/if}
+            {#if cardResult.stages}
+              <dl class="mt-2 grid grid-cols-[minmax(0,10rem)_1fr] gap-1">
+                {#each Object.entries(cardResult.stages) as [stage, status]}
+                  <dt class="break-words">{stage}</dt><dd class="break-words">{status}</dd>
+                {/each}
+              </dl>
+            {/if}
+          </div>
+        {/if}
+      </section>
     {/if}
 
     <!-- Batch progress panel -->
@@ -837,7 +1020,9 @@
         <div class="mb-2">
           <input
             class="w-full rounded border border-slate-300 px-2 py-1 text-xs"
-            placeholder="Optional fallback phone number (used when source label is missing)"
+            type="tel"
+            aria-label={$t('esim_msisdn_fallback')}
+            placeholder={$t('esim_msisdn_fallback')}
             bind:value={batchPhoneNumber}
           />
         </div>
@@ -850,22 +1035,24 @@
       <!-- Options -->
       <div class="mb-3 flex flex-wrap gap-4 text-xs text-slate-600">
         <label class="flex items-center gap-1"><input type="checkbox" bind:checked={batchOptions.auto_enable} /> {$t('esim_opt_auto_enable')}</label>
-        <label class="flex items-center gap-1"><input type="checkbox" bind:checked={batchOptions.replace_existing} /> {$t('esim_opt_replace')}</label>
         <label class="flex items-center gap-1"><input type="checkbox" bind:checked={batchOptions.stop_on_error} /> {$t('esim_opt_stop_on_error')}</label>
       </div>
 
       <!-- Pairing table -->
-      <table class="w-full text-sm">
+      <div class="overflow-x-auto">
+      <table class="w-full min-w-[36rem] table-fixed text-sm">
         <thead class="bg-slate-100 text-left text-slate-600">
           <tr>
-            <th class="px-3 py-2">{$t('esim_col_port')}</th>
+            <th class="w-24 px-3 py-2">{$t('esim_col_port')}</th>
             <th class="px-3 py-2">{$t('esim_batch_assigned_code')}</th>
+            <th class="w-44 px-3 py-2">MSISDN</th>
           </tr>
         </thead>
         <tbody>
           {#each selectedList as com (com)}
+            {@const source = pairing[com] != null ? sources[pairing[com]] : null}
             <tr class="border-t border-slate-100">
-              <td class="px-3 py-2 font-medium text-slate-800">{com}</td>
+              <td class="px-3 py-2 font-medium text-slate-800">{displayPort(com)}</td>
               <td class="px-3 py-2">
                 <select class="w-full rounded border border-slate-300 px-2 py-1 text-xs" value={pairing[com] ?? ''} onchange={(e) => setPair(com, e.target.value)}>
                   <option value="">{$t('esim_batch_no_code')}</option>
@@ -874,14 +1061,31 @@
                   {/each}
                 </select>
               </td>
+              <td class="px-3 py-2 align-top">
+                <input
+                  class="w-full rounded border border-slate-300 px-2 py-1 text-xs"
+                  type="tel"
+                  aria-label={`${displayPort(com)} MSISDN`}
+                  value={sourcePhone(source)}
+                  oninput={(event) => setSourcePhone(com, event.currentTarget.value)}
+                  disabled={!source}
+                  aria-invalid={Boolean(sourcePhone(source) && !normalizePhoneLabel(sourcePhone(source)))}
+                />
+                {#if sourcePhone(source) && !normalizePhoneLabel(sourcePhone(source))}
+                  <p class="mt-1 text-xs text-red-600">{$t('esim_msisdn_invalid')}</p>
+                {:else if phoneStatus(source)}
+                  <p class="mt-1 text-xs text-slate-500">{phoneStatus(source)}</p>
+                {/if}
+              </td>
             </tr>
           {/each}
         </tbody>
       </table>
+      </div>
 
       <div class="mt-4 flex justify-end gap-2">
         <button class="rounded bg-slate-100 px-4 py-2 text-sm hover:bg-slate-200" onclick={closeBatch}>{$t('esim_batch_cancel')}</button>
-        <button class="rounded bg-indigo-600 px-4 py-2 text-sm text-white hover:bg-indigo-500 disabled:opacity-50" onclick={() => { closeBatch(); startDownload(); }} disabled={batchBusy}>{$t('esim_batch_start_download')}</button>
+        <button class="rounded bg-indigo-600 px-4 py-2 text-sm text-white hover:bg-indigo-500 disabled:opacity-50" onclick={startDownload} disabled={batchBusy || !downloadReady}>{$t('esim_batch_start_download')}</button>
       </div>
     </div>
   </div>

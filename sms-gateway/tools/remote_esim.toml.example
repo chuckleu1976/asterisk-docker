@@ -1,0 +1,45 @@
+[worker]
+host = "127.0.0.1"
+port = 8091
+state_db = "/var/lib/remote-esim/state.sqlite3"
+slotmaps_url = "http://127.0.0.1:19997/api/backend/v1/slotmaps"
+lpac_exe = "/opt/lpac/bin/lpac"
+ocr_command = ["tesseract"]
+ca_file = "/opt/remote-esim/gsma-live-ci-bundle.pem"
+mutations_enabled = false
+
+[[targets]]
+id = "bank1-slot0"
+com_port = "asterisk1"
+bank_id = 1
+slot_nr = 0
+client_id = 0
+client_slot_nr = 0
+reader = "osmo-remsim-0 00 00"
+expected_eid = ""
+maintenance = false
+protected = true
+
+[[targets]]
+id = "bank1-slot1"
+com_port = "asterisk2"
+bank_id = 1
+slot_nr = 1
+client_id = 1
+client_slot_nr = 0
+reader = "osmo-remsim-1 00 00"
+expected_eid = ""
+maintenance = false
+protected = true
+
+[[targets]]
+id = "bank1-slot2"
+com_port = "asterisk3"
+bank_id = 1
+slot_nr = 2
+client_id = 2
+client_slot_nr = 0
+reader = "osmo-remsim-2 00 00"
+expected_eid = ""
+maintenance = false
+protected = true

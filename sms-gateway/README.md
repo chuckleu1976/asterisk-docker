@@ -177,3 +177,8 @@ The unit assumes the release binary lives at
 ## 📝 License
 
 This project is licensed under the MIT License - see the [LICENSE](./LICENSE) file for details.
+
+## Remote eSIM
+
+Linux remote-PC/SC setup, safety gates, and current deployment limitations are
+documented in [Remote SIM eSIM Worker](doc/REMOTE_ESIM.md).

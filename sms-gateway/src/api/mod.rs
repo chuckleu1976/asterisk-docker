@@ -197,7 +197,7 @@ pub async fn run_api(
         .merge(firefox::routes(modem_manager.clone()))
         .merge(phone::routes(modem_manager.clone()))
         .merge(mms::routes())
-        .merge(esim::routes())
+        .merge(esim::routes(_username, _password)?)
         .merge(tg2sip::routes());
 
     let app = Router::new()

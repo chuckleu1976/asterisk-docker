@@ -118,12 +118,16 @@
     if (isFetching) return;
     isFetching = true;
     try {
-      const [infoRes, cardsRes, statsRes] = await Promise.all([
+      const [infoRes, cardsRes, statsRes, targetsRes] = await Promise.all([
         apiClient.getAllSimsInfo(),
         apiClient.getAllSimCards(),
         apiClient.getSimStats(),
+        apiClient.remoteSimTargets().catch(() => null),
       ]);
-      simsInfo  = Array.isArray(infoRes)  ? infoRes  : (infoRes?.data  ?? []);
+      const targets = targetsRes?.data?.data ?? [];
+      const byPort = new Map(targets.map(target => [target.com_port, target]));
+      simsInfo = (Array.isArray(infoRes) ? infoRes : (infoRes?.data ?? []))
+        .map(info => ({ ...info, remote_sim: byPort.get(info.com_port) }));
       simCards  = Array.isArray(cardsRes) ? cardsRes : (cardsRes?.data ?? []);
       simStats  = Array.isArray(statsRes) ? statsRes : (statsRes?.data ?? []);
     } catch (e) {
@@ -339,8 +343,8 @@
         <colgroup>
           <col style="width: 48px" />
           <col style="width: 76px" />
-          <col style="width: 84px" />
-          <col style="width: 104px" />
+          <col style="width: 140px" />
+          <col style="width: 160px" />
           <col style="width: 116px" />
           <col style="width: 158px" />
           {#if showOperatorColumn}
@@ -369,7 +373,7 @@
                 <span class="text-gray-400 font-semibold">#</span>
               {/if}
             </th>
-            {#each [$t('col_com_port'),$t('col_module'),$t('col_signal'),$t('col_network_status'),$t('col_phone_number')] as col}
+            {#each [$t('col_com_port'),'SIM Slot','Mapping',$t('col_network_status'),$t('col_phone_number')] as col}
               <th class="px-3 py-2.5 text-left font-semibold text-gray-600 dark:text-gray-300
                          border-b border-gray-200 dark:border-zinc-700 whitespace-nowrap">
                 {col}
@@ -417,7 +421,6 @@
             {#each rows as { info, card, stats }, i}
               {@const isSelected = selected.has(info.com_port)}
               {@const net = getNetStatus(info.network_registration)}
-              {@const bars = signalBars(info.signal_quality?.rssi)}
               {@const hasSim = info.has_sim !== false}
               {@const imsi = card.imsi || info.imsi || ''}
               {@const mccSource = imsi || info.operator_info?.operator_id || ''}
@@ -452,39 +455,18 @@
                   {displayPort(info.com_port) || '—'}
                 </td>
 
-                <!-- Module name -->
                 <td class="px-3 py-2.5 text-gray-700 dark:text-gray-200 whitespace-nowrap">
-                  {#if info.available === false}
-                    <span class="text-gray-400">—</span>
-                  {:else}
-                    {getModuleLabel(info.model_info?.model)}
-                  {/if}
+                  {info.remote_sim?.slot_label ?? 'Unknown'}
                 </td>
 
-                <!-- Signal -->
                 <td class="px-3 py-2.5 whitespace-nowrap">
-                  {#if hasSim}
-                  <div class="flex items-center gap-1.5">
-                    <!-- Signal bars -->
-                    <div class="flex items-end gap-px h-4">
-                      {#each [1,2,3,4] as b}
-                        <div
-                          class="w-1 rounded-sm transition-all {b <= bars
-                            ? bars >= 3 ? 'bg-green-500' : bars === 2 ? 'bg-yellow-400' : 'bg-red-400'
-                            : 'bg-gray-200 dark:bg-zinc-600'}"
-                          style="height: {b * 25}%"
-                        ></div>
-                      {/each}
-                    </div>
-                    <span class="text-gray-600 dark:text-gray-300 text-xs">
-                      {rssiToDbm(info.signal_quality?.rssi)}
-                    </span>
+                  <div class="font-mono text-xs text-gray-700 dark:text-gray-200">
+                    {info.remote_sim?.mapping_label ?? 'Unknown'}
                   </div>
-                  {:else if info.available === false}
-                    <span class="text-gray-400">—</span>
-                  {:else}
-                    <span class="text-gray-400">—</span>
-                  {/if}
+                  <div class:text-green-600={info.remote_sim?.state === 'ACTIVE'}
+                    class="text-xs text-gray-500" title={info.remote_sim?.error ?? ''}>
+                    {info.remote_sim?.state ?? 'Unknown'}
+                  </div>
                 </td>
 
                 <!-- Network Status -->
