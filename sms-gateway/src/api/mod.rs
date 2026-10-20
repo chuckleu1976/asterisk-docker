@@ -90,6 +90,7 @@ fn format_memory_status(memory_status: &str) -> String {
 }
 
 mod esim;
+mod access;
 mod firefox;
 mod mms;
 mod phone;
@@ -110,6 +111,7 @@ pub async fn run_api(
     _password: &str,
     sse_manager: Arc<SseManager>,
 ) -> anyhow::Result<()> {
+    let access = access::Access::configured()?;
     let api = Router::new()
         .route("/check", get(check))
         .route("/sms", get(get_sms_paginated))
@@ -198,7 +200,9 @@ pub async fn run_api(
         .merge(phone::routes(modem_manager.clone()))
         .merge(mms::routes())
         .merge(esim::routes(_username, _password)?)
-        .merge(tg2sip::routes());
+        .merge(tg2sip::routes())
+        .merge(access::routes(access.clone()))
+        .layer(axum::middleware::from_fn_with_state(access, access::guard));
 
     let app = Router::new()
         .nest_service("/api", api)

@@ -5,6 +5,8 @@
   import { apiClient } from '../js/api.js';
   import { t } from '../js/i18n.js';
   import { displayPort } from '../js/modem.js';
+  import { user } from '../stores/auth.js';
+  import MsisdnEditor from '../components/MsisdnEditor.svelte';
 
   let { onBack = () => {} } = $props();
 
@@ -19,12 +21,20 @@
   let activePort = $state(null);
   let chip = $state(null);
   let profiles = $state([]);
-  let msisdn = $state('');
   let cardResult = $state(null);
   let operationId = $state(sessionStorage.getItem('remote_esim_request_id') ?? '');
   let operationStatus = $state('');
   let operationResult = $state(null);
   const activeTarget = $derived(ports.find(port => port.com_port === activePort));
+  const activeRental = $derived($user?.rentals?.find(rental => rental.com_port === activePort));
+
+  function allowed(com, permission) {
+    return ports.find(port => port.com_port === com)?.permissions?.includes(permission) ?? false;
+  }
+
+  function batchAllowed(permission) {
+    return selectedList.every(com => allowed(com, permission));
+  }
 
   // Download form
   let dl = $state({ smdp: '', matching_id: '', confirmation_code: '', imei: '', activation_code: '', phone_number: '' });
@@ -221,7 +231,6 @@
     try {
       await apiClient.esimEnter(com);
       cardResult = null;
-      msisdn = '';
       dl = { smdp: '', matching_id: '', confirmation_code: '', imei: '', activation_code: '', phone_number: '' };
       activePort = com;
       await loadPorts();
@@ -414,7 +423,7 @@
     error = '';
     cardResult = null;
     try {
-      cardResult = unwrapPayload(await apiClient.esimWriteMsisdn(com, iccid, msisdn));
+      cardResult = unwrapPayload(await apiClient.esimWriteMsisdn(com, iccid, dl.phone_number));
       flash('MSISDN verified on card');
     } catch (caught) {
       error = describeError(caught);
@@ -619,14 +628,7 @@
   }
 
   function authHeader() {
-    const a = sessionStorage.getItem('auth') || localStorage.getItem('auth');
-    if (a) {
-      try {
-        const { token } = JSON.parse(a);
-        if (token) return { Authorization: `Basic ${token}` };
-      } catch (_) {}
-    }
-    return { Authorization: 'Basic YWRtaW46MTIzNDU2' };
+    return {};
   }
 
   function connectBatchSse() {
@@ -796,10 +798,10 @@
       {#if selected.size > 0}
         <div class="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2">
           <span class="text-sm font-medium text-indigo-800">{$t('esim_batch_bar', { n: selected.size })}</span>
-          <button class="rounded bg-indigo-600 px-3 py-1 text-xs text-white hover:bg-indigo-500 disabled:opacity-50" onclick={() => openBatch('download')} disabled={busy || batchBusy || !!sessionPort}>{$t('esim_batch_download')}</button>
-          <button class="rounded bg-green-600 px-3 py-1 text-xs text-white hover:bg-green-500 disabled:opacity-50" onclick={() => startSimpleBatch('activate')} disabled={busy || batchBusy || !!sessionPort}>{$t('esim_batch_activate')}</button>
-          <button class="rounded bg-slate-500 px-3 py-1 text-xs text-white hover:bg-slate-400 disabled:opacity-50" onclick={() => startSimpleBatch('deactivate')} disabled={busy || batchBusy || !!sessionPort}>{$t('esim_batch_deactivate')}</button>
-          <button class="rounded bg-red-500 px-3 py-1 text-xs text-white hover:bg-red-400 disabled:opacity-50" onclick={() => startSimpleBatch('delete')} disabled={busy || batchBusy || !!sessionPort}>{$t('esim_batch_delete')}</button>
+          <button class="rounded bg-indigo-600 px-3 py-1 text-xs text-white hover:bg-indigo-500 disabled:opacity-50" onclick={() => openBatch('download')} disabled={busy || batchBusy || !!sessionPort || !batchAllowed('esim:download')}>{$t('esim_batch_download')}</button>
+          <button class="rounded bg-green-600 px-3 py-1 text-xs text-white hover:bg-green-500 disabled:opacity-50" onclick={() => startSimpleBatch('activate')} disabled={busy || batchBusy || !!sessionPort || !batchAllowed('esim:enable')}>{$t('esim_batch_activate')}</button>
+          <button class="rounded bg-slate-500 px-3 py-1 text-xs text-white hover:bg-slate-400 disabled:opacity-50" onclick={() => startSimpleBatch('deactivate')} disabled={busy || batchBusy || !!sessionPort || !batchAllowed('esim:disable')}>{$t('esim_batch_deactivate')}</button>
+          <button class="rounded bg-red-500 px-3 py-1 text-xs text-white hover:bg-red-400 disabled:opacity-50" onclick={() => startSimpleBatch('delete')} disabled={busy || batchBusy || !!sessionPort || !batchAllowed('esim:delete')}>{$t('esim_batch_delete')}</button>
           <button class="ml-auto rounded bg-white px-3 py-1 text-xs text-slate-600 hover:bg-slate-100" onclick={clearSelection}>{$t('esim_batch_clear')}</button>
         </div>
       {/if}
@@ -902,11 +904,11 @@
                   <td class="p-2">{nameOf(profile)}<div class="text-slate-500">{providerOf(profile)}</div></td>
                   <td class="p-2">{stateOf(profile)}</td>
                   <td class="flex flex-wrap gap-2 p-2">
-                    <button class="rounded border px-2 py-1" onclick={() => enableProfile(activePort, iccidOf(profile))} disabled={busy || !activeTarget?.writable || stateOf(profile) === 'enabled'}>Enable</button>
-                    <button class="rounded border px-2 py-1" onclick={() => disableProfile(activePort, iccidOf(profile))} disabled={busy || !activeTarget?.writable || stateOf(profile) !== 'enabled'}>Disable</button>
-                    <button class="rounded border px-2 py-1" onclick={() => nicknameProfile(activePort, iccidOf(profile))} disabled={busy || !activeTarget?.writable}>Rename</button>
-                    <button class="rounded border px-2 py-1 text-red-700" onclick={() => deleteProfile(activePort, iccidOf(profile))} disabled={busy || !activeTarget?.writable || stateOf(profile) === 'enabled'}>Delete</button>
-                    <button class="rounded border px-2 py-1" onclick={() => writeMsisdn(activePort, iccidOf(profile))} disabled={busy || !activeTarget?.writable || !msisdn || stateOf(profile) !== 'enabled'}>Write MSISDN</button>
+                    <button class="rounded border px-2 py-1" onclick={() => enableProfile(activePort, iccidOf(profile))} disabled={busy || !activeTarget?.writable || !allowed(activePort, 'esim:enable') || stateOf(profile) === 'enabled'}>Enable</button>
+                    <button class="rounded border px-2 py-1" onclick={() => disableProfile(activePort, iccidOf(profile))} disabled={busy || !activeTarget?.writable || !allowed(activePort, 'esim:disable') || stateOf(profile) !== 'enabled'}>Disable</button>
+                    {#if $user?.is_admin}<button class="rounded border px-2 py-1" onclick={() => nicknameProfile(activePort, iccidOf(profile))} disabled={busy || !activeTarget?.writable || !allowed(activePort, 'esim:enable')}>Rename</button>{/if}
+                    <button class="rounded border px-2 py-1 text-red-700" onclick={() => deleteProfile(activePort, iccidOf(profile))} disabled={busy || !activeTarget?.writable || !allowed(activePort, 'esim:delete') || stateOf(profile) === 'enabled'}>Delete</button>
+                    <button class="rounded border px-2 py-1" title="Update EF.MSISDN on the SIM; issuer authentication may be required" onclick={() => writeMsisdn(activePort, iccidOf(profile))} disabled={busy || !activeTarget?.writable || !allowed(activePort, 'esim:msisdn') || !dl.phone_number || stateOf(profile) !== 'enabled'}>Write to SIM</button>
                   </td>
                 </tr>
               {:else}
@@ -915,18 +917,19 @@
             </tbody>
           </table>
         </div>
-        <label class="mt-3 flex flex-wrap items-center gap-2">MSISDN
-          <input class="rounded border px-2 py-1" inputmode="tel" bind:value={msisdn} aria-label="MSISDN to write to enabled profile" />
-        </label>
         <form class="mt-4 grid gap-3 sm:grid-cols-2" onsubmit={(event) => { event.preventDefault(); provision(activePort); }}>
           <label class="grid gap-1 sm:col-span-2">Activation Code<input class="w-full rounded border px-2 py-1 font-mono text-xs" autocomplete="off" type="password" bind:value={dl.activation_code} /></label>
-          <label class="grid gap-1">MSISDN<input class="rounded border px-2 py-1" inputmode="tel" bind:value={dl.phone_number} /></label>
+          {#if activeRental}
+            <MsisdnEditor rental={activeRental} bind:value={dl.phone_number} />
+          {:else}
+            <label class="grid gap-1">MSISDN<input class="rounded border px-2 py-1" inputmode="tel" bind:value={dl.phone_number} /></label>
+          {/if}
           <label class="grid gap-1">Confirmation Code<input class="rounded border px-2 py-1" type="password" autocomplete="off" bind:value={dl.confirmation_code} /></label>
           <div class="flex flex-wrap gap-2 sm:col-span-2">
-            <button type="button" class="inline-flex items-center gap-1 rounded border px-3 py-1.5 disabled:opacity-50" onclick={() => download(activePort)} disabled={busy || !activeTarget?.writable || !dl.activation_code}>
+            <button type="button" class="inline-flex items-center gap-1 rounded border px-3 py-1.5 disabled:opacity-50" onclick={() => download(activePort)} disabled={busy || !activeTarget?.writable || !allowed(activePort, 'esim:download') || !dl.activation_code}>
               <Icon icon="carbon:download" class="h-4 w-4" /> Download Only
             </button>
-            <button type="submit" class="inline-flex items-center gap-1 rounded bg-green-700 px-3 py-1.5 text-white disabled:opacity-50" disabled={busy || !activeTarget?.writable || !dl.activation_code}>
+            <button type="submit" class="inline-flex items-center gap-1 rounded bg-green-700 px-3 py-1.5 text-white disabled:opacity-50" disabled={busy || !activeTarget?.writable || !allowed(activePort, 'esim:download') || !allowed(activePort, 'esim:enable') || (dl.phone_number && !allowed(activePort, 'esim:msisdn')) || !dl.activation_code}>
               <Icon icon="carbon:checkmark" class="h-4 w-4" /> Download and Enable
             </button>
           </div>

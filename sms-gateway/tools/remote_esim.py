@@ -3,6 +3,7 @@
 
 import argparse
 from contextlib import contextmanager, redirect_stdout
+from contextvars import ContextVar, copy_context
 from dataclasses import dataclass
 from email.parser import BytesParser
 from email.policy import default as email_policy
@@ -31,6 +32,43 @@ from urllib.request import urlopen
 import uuid
 from urllib.error import HTTPError, URLError
 from urllib.request import build_opener, HTTPRedirectHandler, HTTPSHandler, ProxyHandler, Request
+
+ACTOR = ContextVar("gateway_actor", default=None)
+ACTIVE_OPERATION = ContextVar("rental_operation", default=None)
+
+
+class RentalHardware:
+    def __init__(self, worker, runner):
+        self.worker, self.runner = worker, runner
+
+    def check(self):
+        operation = ACTIVE_OPERATION.get()
+        if operation:
+            target, action, request_id = operation
+            rental = self.worker.authorize(target, action)
+            self.worker.management("POST", f"/{rental['id']}/reserve", {"request_id": request_id, "action": action})
+
+    def lpac(self, target, arguments, body):
+        self.check()
+        return self.runner.lpac(target, arguments, body)
+
+    def card(self, target, action, body):
+        self.check()
+        report = None
+        if ACTOR.get() is not None and (self.worker.settings.get("management_api_url") or os.environ.get("MANAGEMENT_API_URL")):
+            report = {"gateway_id": self.worker.settings.get("gateway_id") or os.environ.get("GATEWAY_ID", "asterisk-lan"),
+                      "com_port": target.com_port, "bank_id": target.bank_id, "bank_slot": target.slot_nr,
+                      "client_id": target.client_id, "client_slot": target.client_slot_nr}
+            report.update(self.worker.management("POST", "/inventory/context", report))
+        result = self.runner.card(target, action, body)
+        if report is not None:
+            try:
+                self.worker.management("POST", "/inventory", {**report, "identity": result})
+                result["inventory_sync"] = "updated"
+            except OperationError:
+                result["inventory_sync"] = "failed"
+                result["warning"] = "Card readback succeeded, but management inventory refresh failed; do not repeat the card write"
+        return result
 
 
 class OperationError(Exception):
@@ -135,13 +173,16 @@ class Worker:
             if len(values) != len(set(values)):
                 raise ValueError("Targets must not alias a bank or client slot")
         self.runner = runner or Hardware(self.settings)
+        self.runner = RentalHardware(self, self.runner)
         self.lock = threading.Lock()
         self.session_lock = threading.Lock()
         self.session = None
+        self.session_owner = None
         self.session_until = 0
         self.db_lock = threading.Lock()
         self.database = sqlite3.connect(self.settings.get("state_db", "remote-esim.sqlite3"), check_same_thread=False)
         self.database.execute("CREATE TABLE IF NOT EXISTS operations (id TEXT PRIMARY KEY, target TEXT, action TEXT, status TEXT, result TEXT)")
+        self.database.execute("CREATE TABLE IF NOT EXISTS operation_owners (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, rental_id TEXT NOT NULL)")
         self.database.execute("CREATE TABLE IF NOT EXISTS download_attempts (fingerprint TEXT, operation_id TEXT, PRIMARY KEY (fingerprint, operation_id))")
         primary_key = [column[1] for column in self.database.execute("PRAGMA table_info(download_attempts)") if column[5]]
         if primary_key == ["fingerprint"]:
@@ -159,8 +200,71 @@ class Worker:
         self.job_lock = threading.Lock()
         self.job_changed = threading.Condition(self.job_lock)
         self.job = None
+        self.job_owner = None
+        self.job_rentals = set()
         self.batch_thread = None
         self.cancel = threading.Event()
+
+    def management(self, method, path, body=None, credential=None):
+        base = self.settings.get("management_api_url") or os.environ.get("MANAGEMENT_API_URL")
+        if not base:
+            raise OperationError("Rental authority is not configured", 503)
+        actor = ACTOR.get()
+        credential = credential or (actor and actor["credential"])
+        if not credential:
+            raise OperationError("Gateway credential required", 401)
+        request = Request(base.rstrip("/") + "/rentals" + path,
+                          data=json.dumps(body).encode() if body is not None else None,
+                          headers={"Authorization": "Bearer " + credential, "Content-Type": "application/json",
+                                   "X-Worker-Token": os.environ.get("REMOTE_ESIM_WORKER_TOKEN", "")}, method=method)
+        try:
+            with build_opener(ProxyHandler({}), NoRedirect()).open(request, timeout=5) as response:
+                raw = response.read(262145)
+            if len(raw) > 262144:
+                raise OperationError("Rental authority response too large", 502)
+            return json.loads(raw) if raw else None
+        except HTTPError as error:
+            raise OperationError("Rental access denied", error.code if error.code in (401, 403, 404, 409) else 503) from None
+        except (URLError, OSError, ValueError):
+            raise OperationError("Rental authority unavailable", 503) from None
+
+    def identity(self, credential):
+        configured = self.settings.get("management_api_url") or os.environ.get("MANAGEMENT_API_URL")
+        if not configured:
+            return None
+        gateway = self.settings.get("gateway_id") or os.environ.get("GATEWAY_ID", "asterisk-lan")
+        if not re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", gateway):
+            raise OperationError("Invalid Gateway identity", 503)
+        context = self.management("GET", "/context?gateway_id=" + gateway, credential=credential)
+        if not isinstance(context, dict) or not context.get("user_id") or not isinstance(context.get("rentals"), list):
+            raise OperationError("Invalid rental identity", 502)
+        return {"credential": credential, "context": context}
+
+    def authorize(self, target, action):
+        actor = ACTOR.get()
+        if actor is None:
+            return None
+        identity = self.identity(actor["credential"])
+        if identity is None:
+            raise OperationError("Rental authority unavailable", 503)
+        for rental in identity["context"]["rentals"]:
+            if (rental["com_port"], rental["bank_id"], rental["bank_slot"], rental["client_id"], rental["client_slot"]) == (
+                    target.com_port, target.bank_id, target.slot_nr, target.client_id, target.client_slot_nr):
+                if action not in rental["permissions"]:
+                    raise OperationError("Operation is not permitted by this rental or API token", 403)
+                return rental
+        raise OperationError("Remote SIM target not found in active rentals", 404)
+
+    def permission(self, action, body):
+        permissions = {"profiles/download": "esim:download", "profiles/enable": "esim:enable",
+                       "profiles/disable": "esim:disable", "profiles/delete": "esim:delete", "msisdn": "esim:msisdn"}
+        if action == "provision":
+            return "esim:download"
+        if action in ("profiles/nickname", "notifications/process", "notifications/remove"):
+            if ACTOR.get()["context"].get("is_admin"):
+                return "esim:enable"
+            raise OperationError("This operation requires administrative maintenance", 403)
+        return permissions.get(action, "esim:read")
 
     def target(self, identifier):
         found = [target for target in self.targets if identifier in (target.id, target.com_port)]
@@ -209,7 +313,23 @@ class Worker:
             mappings, error = self.mappings(), None
         except Exception:
             mappings, error = [], "Live mapping service unavailable"
-        return [self.describe(target, mappings, error) for target in self.targets]
+        rows = []
+        for target in self.targets:
+            rental = None
+            try:
+                rental = self.authorize(target, "esim:read")
+            except OperationError as denied:
+                if denied.status in (403, 404):
+                    if ACTOR.get() is None or not ACTOR.get()["context"].get("is_admin"):
+                        continue
+                else:
+                    raise
+            row = self.describe(target, mappings, error)
+            if ACTOR.get() is not None:
+                row.pop("reader", None)
+                row["permissions"] = rental["permissions"] if rental else []
+            rows.append(row)
+        return rows
 
     def guard(self, target, write=False):
         try:
@@ -229,22 +349,70 @@ class Worker:
         return state
 
     def enter(self, target):
+        rental = self.authorize(target, "esim:read")
+        if self.lock.locked():
+            raise OperationError("A card operation is running")
         self.guard(target)
         with self.session_lock:
             if self.session and self.session != target.id and self.session_until > time.monotonic():
                 raise OperationError("Another remote SIM session is active")
             self.session, self.session_until = target.id, time.monotonic() + 900
+            self.session_owner = (ACTOR.get()["context"]["user_id"], rental["id"]) if rental else None
         return {"com_port": target.com_port, "esim_mode": True}
 
     def exit(self, target):
+        rental = self.authorize(target, "esim:read")
         if self.lock.locked():
             raise OperationError("A card operation is running; wait for its result")
         with self.session_lock:
+            if rental and self.session_owner != (ACTOR.get()["context"]["user_id"], rental["id"]):
+                raise OperationError("Session not found", 404)
             if self.session == target.id:
                 self.session = None
+                self.session_owner = None
         return {"com_port": target.com_port, "esim_mode": False}
 
     def operation(self, target, action, body):
+        actor = ACTOR.get()
+        if actor is None:
+            return self._operation(target, action, body)
+        permission = self.permission(action, body)
+        rental = self.authorize(target, permission)
+        if action == "provision":
+            self.authorize(target, "esim:enable")
+            if body.get("phone_number"):
+                self.authorize(target, "esim:msisdn")
+        request_id = body.get("request_id")
+        if request_id:
+            self.owned_operation(request_id, rental)
+        reservation = str(uuid.uuid4())
+        self.management("POST", f"/{rental['id']}/reserve", {"request_id": reservation, "action": permission})
+        marker = ACTIVE_OPERATION.set((target, permission, reservation))
+        try:
+            return self._operation(target, action, body)
+        finally:
+            ACTIVE_OPERATION.reset(marker)
+            try:
+                self.management("DELETE", f"/{rental['id']}/reserve/{reservation}")
+            except OperationError:
+                pass
+
+    def owned_operation(self, request_id, rental=None):
+        actor = ACTOR.get()
+        if actor is None:
+            return
+        with self.db_lock:
+            owner = self.database.execute("SELECT user_id, rental_id FROM operation_owners WHERE id=?", (request_id,)).fetchone()
+            exists = self.database.execute("SELECT 1 FROM operations WHERE id=?", (request_id,)).fetchone()
+        if exists:
+            current = self.identity(actor["credential"])["context"]["rentals"]
+            if not owner or owner[0] != actor["context"]["user_id"] or not any(row["id"] == owner[1] for row in current):
+                raise OperationError("Unknown operation", 404)
+            if rental and rental["id"] != owner[1]:
+                raise OperationError("Unknown operation", 404)
+
+    def _operation(self, target, action, body):
+        rental = self.authorize(target, self.permission(action, body)) if ACTOR.get() is not None else None
         write = action not in ("chip", "profiles", "notifications", "identity")
         request_id = body.get("request_id")
         if write:
@@ -279,6 +447,9 @@ class Worker:
                         fingerprint = hmac.new(self.fingerprint_key, activation.encode(), hashlib.sha256).hexdigest()
                         self.database.execute("INSERT INTO download_attempts VALUES (?, ?)", (fingerprint, request_id))
                     self.database.execute("INSERT INTO operations VALUES (?, ?, ?, 'running', NULL)", (request_id, target.id, action))
+                    if ACTOR.get() is not None:
+                        self.database.execute("INSERT INTO operation_owners VALUES (?, ?, ?)",
+                                              (request_id, ACTOR.get()["context"]["user_id"], rental["id"]))
                     self.database.commit()
                     recorded = True
             result = self.perform(target, action, body)
@@ -415,10 +586,12 @@ class Worker:
         return self.runner.card(target, action, body)
 
     def operation_status(self, request_id):
+        self.owned_operation(request_id)
         with self.db_lock:
             row = self.database.execute("SELECT target, action, status, result FROM operations WHERE id=?", (request_id,)).fetchone()
         if not row:
             raise OperationError("Unknown operation", 404)
+        self.authorize(self.target(row[0]), "esim:read")
         return {"request_id": request_id, "target": row[0], "action": row[1], "status": row[2],
                 "result": json.loads(row[3]) if row[3] else None}
 
@@ -430,6 +603,16 @@ class Worker:
         if operation not in ("download", "activate", "deactivate", "delete") or not isinstance(items, list) or not 1 <= len(items) <= 64:
             raise OperationError("Invalid batch request", 400)
         targets = [self.target(item.get("com_port")) for item in items]
+        permission = {"download": "esim:download", "activate": "esim:enable", "deactivate": "esim:disable", "delete": "esim:delete"}[operation]
+        rentals = []
+        for target, item in zip(targets, items):
+            rental = self.authorize(target, permission)
+            if rental:
+                rentals.append(rental["id"])
+            if operation == "download" and body.get("auto_enable"):
+                self.authorize(target, "esim:enable")
+                if item.get("phone_number"):
+                    self.authorize(target, "esim:msisdn")
         if len({target.id for target in targets}) != len(targets):
             raise OperationError("Duplicate batch targets", 400)
         if operation == "download":
@@ -442,12 +625,14 @@ class Worker:
             if self.lock.locked():
                 raise OperationError("A card operation is already running")
             self.cancel.clear()
+            self.job_owner = ACTOR.get()["context"]["user_id"] if ACTOR.get() else None
+            self.job_rentals = set(rentals)
             self.job = {"id": str(uuid.uuid4()), "op": operation, "status": "running",
                         "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "finished_at": None,
                         "items": [{"com_port": target.com_port, "status": "pending", "message": None, "iccid": None}
                                   for target in targets]}
             snapshot = json.loads(json.dumps(self.job))
-            self.batch_thread = threading.Thread(target=self.run_batch, args=(body, targets), daemon=True)
+            self.batch_thread = threading.Thread(target=copy_context().run, args=(self.run_batch, body, targets), daemon=True)
         self.batch_thread.start()
         return snapshot
 
@@ -489,10 +674,18 @@ class Worker:
             self.job_changed.notify_all()
 
     def snapshot(self):
+        actor = ACTOR.get()
+        context = self.identity(actor["credential"])["context"] if actor is not None else None
         with self.job_lock:
+            if context is not None:
+                readable = {row["id"] for row in context["rentals"] if "esim:read" in row["permissions"]}
+                if self.job_owner != context["user_id"] or not self.job_rentals <= readable:
+                    return None
             return json.loads(json.dumps(self.job))
 
     def sources(self):
+        if ACTOR.get() is not None and not ACTOR.get()["context"].get("is_admin"):
+            return []
         directory = self.settings.get("source_dir")
         if not directory:
             return []
@@ -754,6 +947,33 @@ def msisdn_record(record, size, phone):
                                     "dialing_nr": digits}, 1, total_len=size)
 
 
+def msisdn_access(commands, path):
+    from pySim.ts_102_221 import CardProfileUICC, EF_ARR
+
+    result = {"update": "unknown"}
+    try:
+        fcp = CardProfileUICC.decode_select_response(commands.select_file(path)[0])
+        reference = fcp.get("security_attrib_referenced")
+        if not reference:
+            return result
+        file_id = reference["ef_arr_file_id"]
+        file_id = file_id.hex() if isinstance(file_id, bytes) else str(file_id)
+        record_nr = reference["ef_arr_record_nr"]
+        result.update(arr_file=file_id, arr_record=record_nr)
+        if not re.fullmatch(r"6f[0-9a-fA-F]{2}", file_id):
+            return result
+        raw = commands.read_record(file_id, record_nr)[0]
+        rules = EF_ARR.flatten(EF_ARR().decode_record_hex(raw, record_nr))
+        rule = rules.get("update_record", rules.get("update_erase", "unknown"))
+        result["update"] = rule if isinstance(rule, str) else "conditional"
+    except Exception as error:
+        result["error"] = "Access rules could not be read"
+        status = getattr(error, "sw_actual", None)
+        if isinstance(status, str):
+            result["sw"] = status
+    return result
+
+
 def card_action(target, action, body):
     if action not in ("identity", "msisdn"):
         raise OperationError("pySim only handles identity and MSISDN access", 400)
@@ -823,6 +1043,14 @@ def card_action(target, action, body):
             phone = body.get("phone_number", "")
             encoded = msisdn_record(record, size, phone)
             digits = phone.lstrip("+")
+            access = msisdn_access(commands, path)
+            rule = access["update"]
+            if rule == "never":
+                raise OperationError("This profile forbids EF.MSISDN updates; no card write attempted")
+            if rule in ("unknown", "conditional"):
+                raise OperationError("EF.MSISDN write permission could not be established; no card write attempted. Inspect the profile access rules")
+            if rule != "always":
+                raise OperationError("EF.MSISDN write requires " + rule + " authentication from the profile issuer; no card write attempted. Web rental permissions do not unlock this file")
             stage = "EF.MSISDN update and verification"
             commands.update_record(path, 1, encoded, verify=True)
             stage = "EF.MSISDN readback"
@@ -832,6 +1060,8 @@ def card_action(target, action, body):
                 raise OperationError("MSISDN readback did not match")
         decoded = codec.decode_record_hex(record, 1)
         result.update(msisdn=decoded.get("dialing_nr", "").rstrip("fF"), msisdn_on_card="verified" if action == "msisdn" else "read")
+        if action == "identity":
+            result["msisdn_access"] = msisdn_access(commands, path)
         return result
     except Exception as error:
         status = getattr(error, "sw_actual", None)
@@ -889,6 +1119,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(raw)))
+        self.send_header("Connection", "close")
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(raw)
@@ -900,8 +1131,14 @@ class Handler(BaseHTTPRequestHandler):
         if not hmac.compare_digest(self.headers.get("Authorization", ""), "Bearer " + token):
             self.close_connection = True
             return self.send_json(401, {"success": False, "error": "Authentication required"})
+        marker = ACTOR.set(None)
         try:
+            ACTOR.set(self.server.worker.identity(self.headers.get("X-Gateway-Credential")))
             path = unquote(urlsplit(self.path).path)
+            if self.command == "GET" and path == "/api/esim/access":
+                if ACTOR.get() is None:
+                    raise OperationError("Worker rental authentication is not configured", 503)
+                return self.send_json(200, {"success": True, "rental_enforced": True})
             if self.command == "GET" and path == "/api/esim/batch/events":
                 return self.events()
             length = int(self.headers.get("Content-Length", "0"))
@@ -931,6 +1168,8 @@ class Handler(BaseHTTPRequestHandler):
             pass
         except Exception:
             self.send_json(500, {"success": False, "error": "Remote eSIM operation failed"})
+        finally:
+            ACTOR.reset(marker)
 
     def events(self):
         self.send_response(200)
@@ -940,12 +1179,13 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         try:
             for _ in range(15):
+                snapshot = self.server.worker.snapshot()
                 with self.server.worker.job_changed:
-                    data = json.dumps(self.server.worker.job)
+                    data = json.dumps(snapshot)
                     self.wfile.write(("event: batch\ndata: " + data + "\n\n").encode())
                     self.wfile.flush()
                     self.server.worker.job_changed.wait(timeout=15)
-        except (BrokenPipeError, ConnectionResetError, TimeoutError):
+        except (BrokenPipeError, ConnectionResetError, TimeoutError, OperationError):
             pass
 
     do_GET = handle_request
@@ -960,7 +1200,16 @@ def dispatch(self, method, path, body):
     if path == "/api/esim/batch":
         return self.snapshot() if method == "GET" else self.start_batch(body)
     if method == "POST" and path == "/api/esim/batch/cancel":
-        self.cancel.set()
+        snapshot = self.snapshot()
+        if snapshot is None:
+            raise OperationError("Batch not found", 404)
+        permission = {"download": "esim:download", "activate": "esim:enable", "deactivate": "esim:disable", "delete": "esim:delete"}[snapshot["op"]]
+        for item in snapshot["items"]:
+            self.authorize(self.target(item["com_port"]), permission)
+        with self.job_lock:
+            if self.job is None or self.job["id"] != snapshot["id"]:
+                raise OperationError("Batch changed; refresh before cancelling", 409)
+            self.cancel.set()
         return {"cancel_requested": True, "message": "The current card operation will finish before cancellation"}
     if method == "GET" and path == "/api/esim/sources":
         return self.sources()

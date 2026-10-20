@@ -36,11 +36,11 @@ const request = (/** @type {string} */ partialUrl, /** @type {any} */ body, /** 
     return new Promise((resolve, reject) => {
         fetch(url, requestConfig)
             .then(async (response) => {
-                const data = await response.json().catch(() => null); 
+                const data = await response.json().catch(() => null);
                 if (response.ok) {
-                    resolve({ status: response.status, data }); 
+                    resolve({ status: response.status, data });
                 } else {
-                    reject({ status: response.status, data }); 
+                    reject({ status: response.status, data });
                 }
             })
             .catch((error) => reject(error));
@@ -56,11 +56,11 @@ class Fetch {
         /**
          * @type {() => any}
          */
-        this.before = before; 
+        this.before = before;
         /**
          * @type {() => any}
          */
-        this.after = after; 
+        this.after = after;
     }    /**
      * @param {string} partialUrl
      * @param {any} body
@@ -72,32 +72,27 @@ class Fetch {
      * @param {Object} [options]
      */
     _request(partialUrl, body, query, method, mode, contentType, headers, options = {}) {
-        this.before && this.before();	
+        this.before && this.before();
         const mergedHeaders = { ...this._getAuthHeader(), ...headers };
         const promise = request(partialUrl, body, query, method, mode, contentType, mergedHeaders, options);
-        promise
+        return promise
             .then(response => {
                 if (response.status === 401) {
                     localStorage.removeItem("auth");
                     sessionStorage.removeItem("auth");
-                    window.location.reload(); 
+                    window.location.reload();
                 }
                 return response;
             })
-            .finally(() => this.after?.()); 
-        return promise;
+            .catch(error => {
+                if (error.status === 401) window.dispatchEvent(new Event('gateway-auth-expired'));
+                throw error;
+            })
+            .finally(() => this.after?.());
     }
 
     _getAuthHeader() {
-        const auth = sessionStorage.getItem("auth");
-        if (!auth) return {};
-
-        try {
-            const { token } = JSON.parse(auth);
-            return token ? { 'Authorization': `Basic ${token}` } : {};
-        } catch (_) {
-            return {};
-        }
+        return {};
     }    /**
      * @param {string} partialUrl
      * @param {Record<string, string | number>} query

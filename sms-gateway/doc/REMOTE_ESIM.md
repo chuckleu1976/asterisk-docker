@@ -16,14 +16,134 @@ either identifier. The dashboard obtains actual slot/mapping labels from the liv
 remsim management API; unavailable mappings appear as Unknown, not a guessed slot.
 Protected targets are listed without opening their cards, even for EID probes.
 
-The existing unauthenticated dashboard uses `/api/sim-mappings`, which returns
-only COM, slot label, mapping label, and mapping state. The gateway authenticates
-to the worker itself and filters reader/EID fields out of this response.
-`/api/esim/*` management routes have no separate browser login in this deployment,
-as requested. Browser requests from foreign origins are rejected, but this is
-not user authentication: anyone who can directly reach the gateway can operate
-an enabled maintenance target. Restrict access to a trusted LAN or an
-authenticated reverse proxy. The worker still requires its private bearer token.
+All Gateway APIs now require a management-backed customer session or API token.
+Browser login uses an HttpOnly, SameSite=Strict cookie. LAN HTTP is supported
+without a Secure-only cookie or an HTTPS redirect; restrict this deployment to
+a trusted LAN because HTTP does not encrypt passwords or tokens in transit.
+Carrier SM-DP+ HTTPS, hostname checks, public-address checks, and certificate
+validation remain unchanged. The private worker still requires its service token.
+
+## Customer Rentals
+
+Deploy management migration `0011` before enabling Gateway authentication. Set
+the same values in the Gateway and HTTP worker service environments:
+
+```ini
+MANAGEMENT_API_URL=http://192.168.31.69:8000/api/v1
+GATEWAY_ID=asterisk-lan
+```
+
+The worker also accepts `worker.management_api_url` and `worker.gateway_id` in
+its private TOML. Do not put a user's bearer token in these settings. The Gateway
+passes each authenticated caller's credential over the existing private worker
+connection. A worker capability check runs before card requests; an older or
+unconfigured worker cannot silently bypass rental enforcement. Management or
+worker authorization outages deny access, not fall back to anonymous operation.
+
+In management, create an active customer under **Admin / Users**, then open that
+customer's detail page and allocate an exact Gateway/raw-port, SIM bank slot,
+client slot, expiry, and permissions. Configure the desired and live mapping
+before allocating: active rentals fence mapping assignment, release, retry,
+ownership transfer, automatic lease release, and controller hardware changes.
+COM display labels are not physical slot identifiers. Existing active rentals,
+including expired ones, must be explicitly revoked before reassignment. An
+in-flight operation delays revocation until its safe stopping point. Operations
+reserve the exact resources for a bounded seven-minute lease and renew before
+each hardware child command. A failed release after credential revocation leaves
+the bounded lease to expire; it does not force an unsafe reassignment.
+
+Customers log in at the normal Gateway URL using their management account.
+**My Rentals** shows only current assignments and physical mappings. API tokens
+are created/revoked there and shown in full only once; management stores SHA-256
+hashes. Tokens inherit neither administrator access nor the ability to mint or
+manage other tokens. Permissions are intersected with current rentals on every
+request. Suspension and password reset invalidate existing credentials. Queued
+batch items and subsequent hardware commands recheck current authority. Existing
+streams recheck credentials before sending more events.
+
+```bash
+curl -H 'Authorization: Bearer YOUR_SCOPED_TOKEN' \
+  http://192.168.31.25:8080/api/esim/ports
+curl -H 'Authorization: Bearer YOUR_SCOPED_TOKEN' \
+  http://192.168.31.25:8080/api/esim/asterisk3/profiles
+```
+
+Mutations keep the existing API shape and require a fresh UUID `request_id`.
+Request IDs, batches, cancellation, sessions, and results are owner-scoped.
+Customers cannot scan the administrator's activation-source directory; their
+own uploads and pasted codes remain supported. Inventory does not expose private
+reader names. Even an administrator needs an active rental for card access;
+administrator-wide mapping metadata remains read-only.
+
+### Management Identity Inventory
+
+Verified identity reads and EF.MSISDN write readbacks also update the exact
+management SIM slot. Management must have `REMOTE_ESIM_WORKER_TOKEN` configured
+with the same private service credential already used by the HTTP worker;
+never commit this value. Reports require both that credential and the caller's
+active exact rental, and capture card-presence/client snapshot generations
+before card access. A changed/removed card or changed client rejects the report.
+Operator-entered MSISDN is not overwritten. A reporting failure after a
+successful card write returns an `inventory_sync` warning; do not repeat the
+write merely to refresh the table.
+
+The bank table is cached inventory, not an automatic APDU scan. A mapped reader
+may be marked busy while its last verified identity remains displayed. A blank
+EF.MSISDN readback is stored as blank, never replaced by a submitted or printed
+phone number. Historical operations without successful identity readback cannot
+backfill these fields; use a guarded read-only identity refresh on the active
+maintenance mapping. No download, profile toggle, or MSISDN write is needed for
+that refresh.
+
+### Configured MSISDN
+
+The Gateway **My Rentals** page and the existing eSIM MSISDN field show
+**Configured MSISDN (database)** with a **Save** button and a clear icon. These actions
+never open a reader or call the eSIM worker; no maintenance session, activation
+code, or ADM credential is needed. The caller must still own a current exact
+rental with `esim:msisdn` permission. Preserve an explicit leading `+` and all
+digits; no country code is inferred. An empty save clears only the configured
+value. Enter in this editor saves configuration, not a profile download.
+
+The value is stored in management `SIMSlot.operator_msisdn`, while
+`SIMSlot.sim_msisdn` remains verified card readback. Both values are returned in
+the caller's rental context. The management bank table displays the configured
+number with a source label, and shows card readback separately when available.
+Saving configuration is not proof that the operator assigned the number or
+that it was written to the SIM. **Write to SIM** remains a distinct card action.
+
+The Gateway exposes GET/POST
+`/api/auth/rentals/{rental_id}/configured-msisdn`. POST forwards to management
+`/api/v1/rentals/{rental_id}/configured-msisdn` with `phone_number`,
+`presence_generation`, and `identity_generation` from the latest GET. Management
+rechecks ownership, current rental/credential scopes, mapping generation, and
+card generations under locks; stale-card requests return 409. Audits do not
+contain phone numbers. Card inventory updates preserve the configured value.
+
+### MSISDN Card Write Permissions
+
+The rental scope `esim:msisdn` authorizes an application request, not a protected
+SIM file update. Identity reads also report `msisdn_access`: the EF.MSISDN
+security reference and its decoded UPDATE RECORD rule, when readable. Before
+writing, the worker checks this rule and permits an unauthenticated update only
+when it explicitly says `always`. Required authentication, forbidden updates,
+and unknown rules stop before UPDATE RECORD; no PIN or ADM code is guessed.
+Successful writes still require exact readback and management inventory sync.
+
+`SW=6982` means the card's security status was not satisfied. A read-only check
+of the current Bank 1 / Slot 2 profile confirmed `ADM1` for updates, referenced
+by EF.ARR `6f06`, record 2. A web administrator or checked rental permission
+cannot satisfy ADM1. Obtain the profile-specific credential and supported
+procedure from the profile issuer; the current worker does not perform ADM
+authentication. Do not send credentials in chat, reuse example keys, repeatedly
+try codes, or redownload a working profile to resolve this restriction. A blank
+EF.MSISDN does not imply the subscription has no operator-assigned phone number.
+
+This rental release scopes eSIM workflows. Global SMS/calls/contacts, recordings,
+MMS, platform integrations, and administrative device settings remain
+administrator-only. Their historical rows have no tenant owner and must not be
+exposed merely by filtering the currently assigned SIM. Customer history and
+messaging require an ownership migration before those routes can be enabled.
 
 ## Runtime
 
@@ -247,7 +367,7 @@ number before submitting; recognition alone never writes to the SIM.
 
 ```bash
 python3 -m unittest discover -s tools -p test_remote_esim.py -v
-cargo test api::esim::tests
+cargo test
 cd frontend && npm run build
 ```
 
@@ -256,3 +376,41 @@ and APDU tests instead of skipping them. All tests mock card access; no live
 download is performed. Accept a live deployment only after a maintenance slot,
 valid carrier activation, approved mapping fence, and post-operation inventory
 refresh are available.
+
+### Rental Verification Cases (2026-10-20)
+
+The expanded suites passed: 219 management tests (including 26 rental cases),
+22 Gateway tests, and 94 worker tests with the pinned pySim dependencies and
+ResourceWarning treated as an error. Existing dependency deprecation and Rust
+unused-code warnings remain; there were no test failures.
+
+| Case | Expected Result | Verification |
+| --- | --- | --- |
+| Anonymous, wrong password, invalid bearer, legacy Basic | Authentication denied; no card request | Gateway suite and live HTTP checks |
+| Two customers list rentals and API-token metadata | Only their own records; another user's token cannot be revoked | Disposable PostgreSQL; live token isolation |
+| Non-admin allocation, revocation, resource inventory | Forbidden | Disposable PostgreSQL |
+| Same SIM, client slot, or Gateway/raw port allocated twice | Conflict; simultaneous requests have exactly one winner | Disposable PostgreSQL |
+| Display COM label or mismatched ReMSIM server | Allocation rejected | Disposable PostgreSQL |
+| Future, expired, revoked, or changed-mapping rental | Missing from authorized context; reservation denied | Disposable PostgreSQL |
+| Reservation renewal, competing request, incorrect release | Same request renews; competing request/revoke blocked; wrong release does not unlock | Disposable PostgreSQL |
+| Unsupported/expired token, scope escalation, token chaining | Denied; admin API token does not inherit browser admin access | Management suite and live HTTP checks |
+| Suspension, password/session-version change, logout | Previous credential rejected | Management suite and live HTTP checks |
+| Cross-origin or cross-site request | Forbidden | Gateway suite and live HTTP checks |
+| Existing admin SSE stream revoked or downgraded | Next event is withheld and the stream closes | Deterministic mocked authority |
+| Historical, another user's, or reassigned-rental operation | Result and replay hidden before hardware access | Mocked worker |
+| Download/enable/MSISDN combined operation | All required scopes checked before reservation/hardware | Mocked worker |
+| Batch results with no read scope; cancellation with read-only scope | Hidden results; cancellation forbidden | Mocked worker; fixes deployed |
+| Correctly scoped cancellation; replacement job race | Own job can cancel; replacement job is not cancelled | Mocked worker |
+| Authority outage | Service unavailable before mapping/card access | Mocked worker |
+| Original three live mappings and protected voice slots | Tuples remain ACTIVE; no-allocation card access denied even for admin | Read-only live metadata |
+| Browser invalid login and mobile rendering | Error shown; button recovers; password not stored; branding decoded; no page overflow | Actual HTTP Gateway page at 390px |
+
+Live HTTP tests used two temporary accounts with no physical allocations and
+removed their credentials/audit fixtures afterward. Production operations,
+activation-attempt records, and fingerprint metadata matched the private
+pre-rollout backup after testing. No live download, profile toggle, MSISDN
+write, SMS, or call was performed. Real customer card mutations still require
+an explicit supervised maintenance test; they are not certified by these mocks.
+
+Customer SMS/call/history workflows remain administrator-only; this verification
+does not claim tenant ownership for legacy messaging or call records.

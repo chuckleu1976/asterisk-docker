@@ -6,9 +6,11 @@
 server_host = "0.0.0.0"          # Host to bind the web server to
 server_port = 8080               # Port for the web server
 
-# Authentication (optional)
-username = "admin"               # Web interface username
-password = "your_secure_password" # Web interface password
+# Compatibility fields; browser/API authentication uses management accounts.
+# Set MANAGEMENT_API_URL and GATEWAY_ID in the service environment; see
+# doc/REMOTE_ESIM.md. These values are not customer login credentials.
+username = "unused"
+password = "unused"
 
 # SMS reading frequency in seconds (legacy; unused in AMI mode — inbound SMS
 # arrive as native AMI UserEvents from the dialplan).

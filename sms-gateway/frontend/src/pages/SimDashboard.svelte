@@ -3,6 +3,7 @@
   import Icon from '@iconify/svelte';
   import { apiClient } from '../js/api.js';
   import pkg from '../../package.json';
+  import appLogo from '../../../icon/cow.png';
   import { displayPort, getModuleLabel } from '../js/modem.js';
   import { t, lang } from '../js/i18n.js';
   import { getMccCountry } from '../js/country.js';
@@ -204,16 +205,16 @@
   // ── Logout ────────────────────────────────────────────────────────────────
   // uses logout() imported from auth store
 
-  let { onNavigate = () => {}, onNavigateCall = () => {}, onNavigateSim = () => {}, onNavigatePlatform = () => {}, onNavigatePhoneNumber = () => {}, onNavigatePlatformStats = () => {}, onNavigateMoney = () => {}, onNavigateMms = () => {}, onNavigateTelegram = () => {} } = $props();
+  let { onNavigate = () => {}, onNavigateCall = () => {}, onNavigateSim = () => {}, onNavigatePlatform = () => {}, onNavigatePhoneNumber = () => {}, onNavigatePlatformStats = () => {}, onNavigateMoney = () => {}, onNavigateMms = () => {}, onNavigateTelegram = () => {}, onNavigateAccount = () => {} } = $props();
 </script>
 
 <div class="flex flex-col h-dvh w-screen bg-gray-50 dark:bg-zinc-950 text-sm font-sans">
 
   <!-- ── Top bar ──────────────────────────────────────────────────────────── -->
-  <header class="flex items-center justify-between px-6 py-3 bg-white dark:bg-zinc-900 border-b border-gray-200 dark:border-zinc-800 shadow-sm">
-    <div class="flex items-center gap-3">
-      <img src="/cow.png" alt="" class="w-6 h-6 object-contain" />
-      <h1 class="text-base font-semibold text-gray-800 dark:text-gray-100">{$t('sim_dashboard_title')}</h1>
+  <header class="flex flex-wrap items-center justify-between gap-3 px-6 py-3 bg-white dark:bg-zinc-900 border-b border-gray-200 dark:border-zinc-800 shadow-sm">
+    <div class="flex shrink-0 items-center gap-3">
+      <img src={appLogo} alt="" width="24" height="24" class="w-6 h-6 shrink-0 object-contain" />
+      <h1 class="whitespace-nowrap text-base font-semibold text-gray-800 dark:text-gray-100">{$t('sim_dashboard_title')}</h1>
       {#if !loading}
         <span class="text-xs text-gray-400 dark:text-gray-500">
           v{APP_VERSION}
@@ -221,7 +222,8 @@
       {/if}
     </div>
 
-    <div class="flex items-center gap-2">
+    <div class="flex min-w-0 max-w-full items-center gap-2 overflow-x-auto whitespace-nowrap [&>button]:shrink-0">
+      <button onclick={onNavigateAccount} title="Account and API tokens" aria-label="Account and API tokens" class="p-2 rounded hover:bg-gray-100 dark:hover:bg-zinc-800"><Icon icon="carbon:user" class="w-5 h-5" /></button>
       <button
         onclick={() => onNavigatePhoneNumber()}
         class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium

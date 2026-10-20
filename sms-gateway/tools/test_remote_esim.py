@@ -14,7 +14,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 import uuid
 
-from remote_esim import Handler, Hardware, OperationError, PublicHTTPSConnection, Target, Worker, card_action, card_main, image_phone, lpac_main, msisdn_record, operation_deadline, parse_source, phone_from_text, pinned_card, public_smdp_addresses, smdp_host
+from remote_esim import ACTOR, Handler, Hardware, OperationError, PublicHTTPSConnection, Target, Worker, card_action, card_main, image_phone, lpac_main, msisdn_record, operation_deadline, parse_source, phone_from_text, pinned_card, public_smdp_addresses, smdp_host
 
 
 class PublicSmdpTests(unittest.TestCase):
@@ -145,6 +145,175 @@ class RemoteEsimTests(unittest.TestCase):
         row = self.worker.inventory()[0]
         self.assertEqual(row["slot_label"], "Bank 1 / Slot 2")
         self.assertEqual(row["mapping_label"], "B1:2 -> C2:0")
+        self.runner.card.assert_not_called()
+
+    def tenant(self, user="customer-a", permissions=None, rentals=True):
+        context = {"user_id": user, "is_admin": False, "rentals": [{"id": "rental-a", "com_port": "COM3",
+                   "bank_id": 1, "bank_slot": 2, "client_id": 2, "client_slot": 0,
+                   "permissions": permissions or ["esim:read", "esim:enable"]}] if rentals else []}
+        identity = {"credential": "synthetic-test-only", "context": context}
+        marker = ACTOR.set(identity)
+        self.addCleanup(ACTOR.reset, marker)
+        self.worker.identity = Mock(return_value=identity)
+        self.worker.management = Mock()
+        return context
+
+    def test_customer_inventory_hides_unallocated_targets_and_private_reader(self):
+        context = self.tenant()
+        self.assertNotIn("reader", self.worker.inventory()[0])
+        context["rentals"] = []
+        self.assertEqual(self.worker.inventory(), [])
+        self.runner.lpac.assert_not_called()
+
+    def test_customer_permission_and_mapping_tuple_are_verified_before_hardware(self):
+        context = self.tenant(permissions=["esim:read"])
+        with self.assertRaisesRegex(OperationError, "not permitted"):
+            self.worker.operation(self.target, "profiles/enable", {"request_id": str(uuid.uuid4())})
+        context["rentals"][0]["bank_slot"] = 9
+        with self.assertRaisesRegex(OperationError, "not found in active rentals"):
+            self.worker.operation(self.target, "profiles", {})
+        self.runner.lpac.assert_not_called()
+
+    def test_customer_reserves_reads_and_rechecks_permission_before_each_hardware_command(self):
+        context = self.tenant()
+        profile = {"iccid": "1234567890123456789", "profileState": "disabled"}
+        def revoke_after_read(*args):
+            context["rentals"] = []
+            return [profile]
+        self.runner.lpac.side_effect = revoke_after_read
+        with self.assertRaisesRegex(OperationError, "not found in active rentals"):
+            self.worker.operation(self.target, "profiles/enable", {"request_id": str(uuid.uuid4()), "iccid": profile["iccid"]})
+        self.assertEqual(self.runner.lpac.call_count, 1)
+        self.assertTrue(any(call.args[0] == "DELETE" for call in self.worker.management.call_args_list))
+
+    def test_customer_cannot_inspect_other_owner_request_or_global_sources(self):
+        self.tenant()
+        request_id = str(uuid.uuid4())
+        self.worker.database.execute("INSERT INTO operations VALUES (?, 'slot2', 'profiles/enable', 'completed', '{}')", (request_id,))
+        self.worker.database.execute("INSERT INTO operation_owners VALUES (?, 'customer-b', 'rental-b')", (request_id,))
+        self.worker.database.commit()
+        with self.assertRaisesRegex(OperationError, "Unknown operation"):
+            self.worker.operation_status(request_id)
+        self.assertEqual(self.worker.sources(), [])
+        self.worker.job = {"id": "other-customer", "status": "running"}
+        self.worker.job_owner = "customer-b"
+        self.assertIsNone(self.worker.snapshot())
+        with self.assertRaisesRegex(OperationError, "Batch not found"):
+            self.worker.dispatch("POST", "/api/esim/batch/cancel", {})
+        self.assertFalse(self.worker.cancel.is_set())
+
+    def test_customer_cannot_release_another_rental_session(self):
+        self.tenant()
+        self.worker.session = self.target.id
+        self.worker.session_owner = ("customer-b", "rental-b")
+        with self.assertRaisesRegex(OperationError, "Session not found"):
+            self.worker.exit(self.target)
+        self.assertEqual(self.worker.session, self.target.id)
+
+    def test_legacy_and_reassigned_operation_results_remain_hidden(self):
+        context = self.tenant()
+        request_id = str(uuid.uuid4())
+        self.worker.database.execute("INSERT INTO operations VALUES (?, 'slot2', 'profiles/enable', 'completed', '{}')", (request_id,))
+        self.worker.database.commit()
+        with self.assertRaisesRegex(OperationError, "Unknown operation"):
+            self.worker.operation_status(request_id)
+        self.worker.database.execute("INSERT INTO operation_owners VALUES (?, 'customer-a', 'rental-a')", (request_id,))
+        self.worker.database.commit()
+        self.assertEqual(self.worker.operation_status(request_id)["status"], "completed")
+        context["rentals"][0]["id"] = "replacement-rental"
+        with self.assertRaisesRegex(OperationError, "Unknown operation"):
+            self.worker.operation(self.target, "profiles/enable", {"request_id": request_id})
+        self.runner.lpac.assert_not_called()
+
+    def test_provision_requires_enable_and_msisdn_scopes_before_reserving(self):
+        context = self.tenant(permissions=["esim:download"])
+        body = {"request_id": str(uuid.uuid4()), "activation_code": "LPA:1$example.invalid$synthetic",
+                "phone_number": "+123456789"}
+        with self.assertRaisesRegex(OperationError, "not permitted"):
+            self.worker.operation(self.target, "provision", body)
+        context["rentals"][0]["permissions"].append("esim:enable")
+        with self.assertRaisesRegex(OperationError, "not permitted"):
+            self.worker.operation(self.target, "provision", body)
+        self.worker.management.assert_not_called()
+        self.runner.lpac.assert_not_called()
+        self.runner.card.assert_not_called()
+
+    def test_verified_card_identity_is_reported_with_exact_generation_fence(self):
+        self.tenant()
+        self.worker.settings["management_api_url"] = "http://authority.invalid/api/v1"
+        self.worker.management.side_effect = [{"presence_generation": 5, "modem_generation": 8}, None]
+        identity = {"iccid": "1234567890123456789", "imsi": "001010000000001", "msisdn": "00123456789", "msisdn_on_card": "verified"}
+        self.runner.card.return_value = dict(identity)
+        result = self.worker.runner.card(self.target, "msisdn", {"phone_number": "00123456789"})
+        self.assertEqual(result["inventory_sync"], "updated")
+        report = self.worker.management.call_args.args
+        self.assertEqual(report[:2], ("POST", "/inventory"))
+        self.assertEqual(report[2]["bank_slot"], 2)
+        self.assertEqual(report[2]["client_id"], 2)
+        self.assertEqual(report[2]["presence_generation"], 5)
+        self.assertEqual(report[2]["modem_generation"], 8)
+        self.assertEqual(report[2]["identity"]["msisdn"], "00123456789")
+
+    def test_inventory_failure_after_verified_write_does_not_repeat_or_fail_the_write(self):
+        self.tenant()
+        self.worker.settings["management_api_url"] = "http://authority.invalid/api/v1"
+        self.worker.management.side_effect = [{"presence_generation": 5, "modem_generation": 8}, OperationError("Unavailable", 503)]
+        self.runner.card.return_value = {"iccid": "1234567890123456789", "imsi": "001010000000001",
+                                       "msisdn": "00123456789", "msisdn_on_card": "verified"}
+        result = self.worker.runner.card(self.target, "msisdn", {})
+        self.assertEqual(result["msisdn_on_card"], "verified")
+        self.assertEqual(result["inventory_sync"], "failed")
+        self.assertIn("do not repeat", result["warning"])
+        self.runner.card.assert_called_once()
+
+    def test_batch_results_require_read_permission(self):
+        self.tenant(permissions=["esim:download"])
+        self.worker.job = {"id": "private-job", "op": "download", "status": "done", "items": []}
+        self.worker.job_owner = "customer-a"
+        self.worker.job_rentals = {"rental-a"}
+        self.assertIsNone(self.worker.snapshot())
+
+    def test_read_only_token_cannot_cancel_an_owned_batch(self):
+        context = self.tenant(permissions=["esim:read"])
+        self.worker.job = {"id": "private-job", "op": "download", "status": "running", "items": [{"com_port": "COM3"}]}
+        self.worker.job_owner = "customer-a"
+        self.worker.job_rentals = {"rental-a"}
+        self.assertIsNotNone(self.worker.snapshot())
+        with self.assertRaises(OperationError) as caught:
+            self.worker.dispatch("POST", "/api/esim/batch/cancel", {})
+        self.assertEqual(caught.exception.status, 403)
+        self.assertFalse(self.worker.cancel.is_set())
+        context["rentals"][0]["permissions"].append("esim:download")
+        self.assertTrue(self.worker.dispatch("POST", "/api/esim/batch/cancel", {})["cancel_requested"])
+        self.assertTrue(self.worker.cancel.is_set())
+
+    def test_cancellation_never_cancels_a_replacement_batch(self):
+        self.tenant(permissions=["esim:read", "esim:download"])
+        self.worker.job = {"id": "original-job", "op": "download", "status": "running", "items": [{"com_port": "COM3"}]}
+        self.worker.job_owner = "customer-a"
+        self.worker.job_rentals = {"rental-a"}
+        authorize = self.worker.authorize
+        def replace_during_authorization(target, permission):
+            rental = authorize(target, permission)
+            self.worker.job = {**self.worker.job, "id": "replacement-job"}
+            return rental
+        with patch.object(self.worker, "authorize", side_effect=replace_during_authorization):
+            with self.assertRaises(OperationError) as caught:
+                self.worker.dispatch("POST", "/api/esim/batch/cancel", {})
+        self.assertEqual(caught.exception.status, 409)
+        self.assertFalse(self.worker.cancel.is_set())
+
+    def test_http_authority_failure_is_closed_before_inventory_or_card_access(self):
+        self.worker.identity = Mock(side_effect=OperationError("Rental authority unavailable", 503))
+        server, base = self.start_server()
+        request = Request(base + "/api/esim/targets", headers={"Authorization": "Bearer " + server.token,
+                                                              "X-Gateway-Credential": "synthetic-credential"})
+        with self.assertRaises(HTTPError) as caught:
+            urlopen(request, timeout=3)
+        self.assertEqual(caught.exception.code, 503)
+        caught.exception.close()
+        self.worker.mappings.assert_not_called()
+        self.runner.lpac.assert_not_called()
         self.runner.card.assert_not_called()
 
     def test_profile_inventory_uses_lpac_not_pysim(self):
@@ -601,9 +770,11 @@ class RemoteEsimTests(unittest.TestCase):
         with self.assertRaises(HTTPError) as caught:
             urlopen(base + "/api/esim/targets", timeout=3)
         self.assertEqual(caught.exception.code, 401)
+        self.assertEqual(caught.exception.headers["Connection"], "close")
         caught.exception.close()
-        request = Request(base + "/api/esim/targets", headers={"Authorization": "Bearer " + server.token})
+        request = Request(base + "/api/esim/targets", headers={"Authorization": "Bearer " + server.token, "Connection": "keep-alive"})
         with urlopen(request, timeout=3) as response:
+            self.assertEqual(response.headers["Connection"], "close")
             data = json.load(response)
         self.assertTrue(data["success"])
         self.assertEqual(data["data"][0]["mapping_label"], "B1:2 -> C2:0")
@@ -729,6 +900,29 @@ class PySimAdapterTests(unittest.TestCase):
         self.assertEqual(decoded["dialing_nr"].rstrip("fF"), "123456789")
         self.assertEqual(decoded["ton_npi"]["type_of_number"], "network_specific")
 
+    def test_identity_reports_msisdn_update_rule_without_writing(self):
+        from remote_esim import msisdn_access
+
+        commands = Mock()
+        commands.select_file.return_value = ("6200", "9000")
+        commands.read_record.return_value = ("80010190008001029700", "9000")
+        reference = {"security_attrib_referenced": {"ef_arr_file_id": bytes.fromhex("6f06"), "ef_arr_record_nr": 3}}
+        with patch("pySim.ts_102_221.CardProfileUICC.decode_select_response", return_value=reference):
+            result = msisdn_access(commands, "6f40")
+        self.assertEqual(result, {"update": "never", "arr_file": "6f06", "arr_record": 3})
+        commands.read_record.assert_called_once_with("6f06", 3)
+        commands.update_record.assert_not_called()
+        commands.verify_chv.assert_not_called()
+
+    def test_unreadable_msisdn_access_rule_is_not_treated_as_writable(self):
+        from remote_esim import msisdn_access
+
+        commands = Mock()
+        with patch("pySim.ts_102_221.CardProfileUICC.decode_select_response", side_effect=ValueError):
+            result = msisdn_access(commands, "6f40")
+        self.assertEqual(result["update"], "unknown")
+        commands.update_record.assert_not_called()
+
     def test_msisdn_extensions_are_never_overwritten(self):
         with self.assertRaises(OperationError):
             msisdn_record("ff" * 33 + "01", 34, "123456789")
@@ -777,6 +971,47 @@ class PySimAdapterTests(unittest.TestCase):
                 with self.assertRaisesRegex(OperationError, "Card instruction not supported during " + stage + r" \(SW=6d00\)"):
                     card_action(self.target, "identity", {"iccid": "1234567890123456789"})
                 channel.update_record.assert_not_called()
+
+    def test_msisdn_security_rules_prevent_writes_and_credential_guesses(self):
+        iccid = "1234567890123456789"
+        for rule in ("ADM1", "PIN2", "never", "unknown", "conditional"):
+            with self.subTest(rule=rule), patch("pySim.transport.pcsc.PcscSimLink") as link, \
+                    patch("pySim.commands.SimCardCommands") as commands, \
+                    patch("pySim.euicc.CardApplicationISDR.get_eid", return_value=self.target.expected_eid), \
+                    patch("pySim.utils.dec_iccid", return_value=iccid), \
+                    patch("pySim.utils.dec_imsi", return_value="001010000000001"), \
+                    patch("remote_esim.msisdn_access", return_value={"update": rule}):
+                channel = commands.return_value.fork_lchan.return_value
+                channel.read_binary.return_value = ("00" * 10, "9000")
+                channel.record_size.return_value = 34
+                channel.read_record.return_value = ("ff" * 34, "9000")
+                with self.assertRaisesRegex(OperationError, "no card write attempted") as caught:
+                    card_action(self.target, "msisdn", {"iccid": iccid, "phone_number": "+123456789"})
+                if rule in ("ADM1", "PIN2"):
+                    self.assertIn(rule + " authentication", str(caught.exception))
+                channel.update_record.assert_not_called()
+                channel.verify_chv.assert_not_called()
+                commands.return_value.verify_chv.assert_not_called()
+                link.return_value.disconnect.assert_called_once()
+
+    def test_msisdn_unrestricted_update_is_verified_by_readback(self):
+        iccid = "1234567890123456789"
+        phone = "+123456789"
+        encoded = msisdn_record("ff" * 34, 34, phone)
+        with patch("pySim.transport.pcsc.PcscSimLink"), patch("pySim.commands.SimCardCommands") as commands, \
+                patch("pySim.euicc.CardApplicationISDR.get_eid", return_value=self.target.expected_eid), \
+                patch("pySim.utils.dec_iccid", return_value=iccid), \
+                patch("pySim.utils.dec_imsi", return_value="001010000000001"), \
+                patch("remote_esim.msisdn_access", return_value={"update": "always"}):
+            channel = commands.return_value.fork_lchan.return_value
+            channel.read_binary.return_value = ("00" * 10, "9000")
+            channel.record_size.return_value = 34
+            records = iter([("ff" * 34, "9000"), (encoded, "9000")])
+            channel.read_record.side_effect = lambda path, number: next(records) if path == "6f40" else ("", "9000")
+            result = card_action(self.target, "msisdn", {"iccid": iccid, "phone_number": phone})
+            self.assertEqual(result["msisdn_on_card"], "verified")
+            self.assertEqual(result["msisdn"], phone.lstrip("+"))
+            channel.update_record.assert_called_once_with("6f40", 1, encoded, verify=True)
 
     def test_identity_uses_a_fresh_file_channel_on_the_same_eid_verified_connection(self):
         iccid = "1234567890123456789"

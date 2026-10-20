@@ -7,6 +7,8 @@ lpac_exe = "/opt/lpac/bin/lpac"
 ocr_command = ["tesseract"]
 ca_file = "/opt/remote-esim/gsma-live-ci-bundle.pem"
 mutations_enabled = false
+management_api_url = "http://192.168.31.69:8000/api/v1"
+gateway_id = "asterisk-lan"
 
 [[targets]]
 id = "bank1-slot0"

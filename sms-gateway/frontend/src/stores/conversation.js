@@ -19,21 +19,18 @@ export const SmsStatus = {
 let eventSource = null;
 let reconnectTimeout = null;
 const RECONNECT_DELAY = 5000; // 5 seconds
-const DEFAULT_AUTH_TOKEN = 'YWRtaW46MTIzNDU2'; // admin:123456
-
 const getAuthHeader = () => {
-    const authRaw = sessionStorage.getItem("auth") || localStorage.getItem("auth");
-    if (authRaw) {
-        try {
-            const { token } = JSON.parse(authRaw);
-            if (token) {
-                return { 'Authorization': `Basic ${token}` };
-            }
-        } catch (e) {
-            console.warn('SSE auth parse failed, using default auth token.', e);
-        }
-    }
-    return { 'Authorization': `Basic ${DEFAULT_AUTH_TOKEN}` };
+    return {};
+};
+
+export const disconnectConversation = () => {
+    if (eventSource) eventSource.close();
+    eventSource = null;
+    if (reconnectTimeout) clearTimeout(reconnectTimeout);
+    reconnectTimeout = null;
+    conversations.set([]);
+    currentContact.set(null);
+    sseConnected.set(false);
 };
 
 const connectSSE = () => {
@@ -42,17 +39,6 @@ const connectSSE = () => {
     }
 
     const authHeader = getAuthHeader();
-    if (!authHeader.Authorization) {
-        console.error('SSE Error: Authorization token not found.');
-        sseConnected.set(false);
-        if (!reconnectTimeout) {
-            reconnectTimeout = setTimeout(() => {
-                connectSSE();
-            }, RECONNECT_DELAY);
-        }
-        return;
-    }
-
     const eventSourceInitDict = {
         headers: {
             ...authHeader

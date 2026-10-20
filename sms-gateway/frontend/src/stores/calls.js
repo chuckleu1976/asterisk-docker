@@ -2,8 +2,6 @@ import { get, writable } from 'svelte/store';
 import { apiClient } from '../js/api.js';
 import { EventSourcePolyfill } from 'event-source-polyfill';
 
-const DEFAULT_AUTH_TOKEN = 'YWRtaW46MTIzNDU2'; // admin:123456
-
 /** @typedef {{ id: string, sim_id: string, phone: string|null, direction: string, status: string, started_at: string, ended_at: string|null }} Call */
 /** @typedef {{ event_type: string, sim_id: string, call_id: string, phone: string|null, direction: string }} CallEvent */
 
@@ -56,22 +54,7 @@ function stopCallStatusPolling() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const getAuthHeader = () => {
-    // Fall back to localStorage: "remember me" logins only leave a fresh
-    // sessionStorage entry in the tab that logged in, not in new tabs/sessions.
-    const auth = sessionStorage.getItem('auth') || localStorage.getItem('auth');
-    if (!auth) {
-        // No stored login: match api.js/request.js and use the default credentials
-        // instead of leaving SSE permanently disconnected.
-        return { Authorization: `Basic ${DEFAULT_AUTH_TOKEN}` };
-    }
-    try {
-        const { token } = JSON.parse(auth);
-        return token
-            ? { Authorization: `Basic ${token}` }
-            : { Authorization: `Basic ${DEFAULT_AUTH_TOKEN}` };
-    } catch (_) {
-        return { Authorization: `Basic ${DEFAULT_AUTH_TOKEN}` };
-    }
+    return {};
 };
 
 const handleCallEvent = (/** @type {CallEvent} */ event) => {
@@ -102,8 +85,6 @@ export const connectCallSSE = () => {
     if (eventSource) eventSource.close();
 
     const authHeader = getAuthHeader();
-    if (!authHeader.Authorization) return;
-
     eventSource = new EventSourcePolyfill('/api/calls/sse', {
         headers: authHeader,
         heartbeatTimeout: 45000,
@@ -138,6 +119,10 @@ export const connectCallSSE = () => {
 };
 
 export const disconnectCallSSE = () => {
+    stopCallStatusPolling();
+    incomingCall.set(null);
+    activeCall.set(null);
+    callLog.set([]);
     if (eventSource) {
         eventSource.close();
         eventSource = null;

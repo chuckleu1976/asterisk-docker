@@ -3,7 +3,8 @@
     import { onMount } from "svelte";
     import { fade, fly } from 'svelte/transition'; 
     import { quintOut } from 'svelte/easing';
-    import { updateStorageValue } from '../js/storage';
+    import { login } from '../stores/auth.js';
+    import appLogo from '../../../icon/cow.png';
     import { t, toggleLang, lang } from '../js/i18n.js';
 
     let username = "";
@@ -36,35 +37,12 @@
             isLoading = true;
             error = "";
 
-            const authToken = btoa(`${username}:${password}`);
-
-            const response = await fetch("/api/check", {
-                method: "GET",
-                headers: {
-                    Authorization: `Basic ${authToken}`,
-                    "Content-Type": "application/json",
-                },
-            });
-
-            switch (response.status) {
-                case 204:
-                    await updateStorageValue("auth", {
-                        username,
-                        token: authToken,
-                    });
-                    rememberMe
-                        ? localStorage.setItem("auth_username", username)
-                        : localStorage.removeItem("auth_username");
-                    window.location.reload();
-                    break;
-
-                case 401:
-                    error = $t('login_err_invalid');
-                    break;
-
-                default:
-                    error = $t('login_err_unexpected', { status: response.status });
-                    break;
+            const result = await login(username, password);
+            if (result.success) {
+                rememberMe ? localStorage.setItem('auth_username', username) : localStorage.removeItem('auth_username');
+                password = '';
+            } else {
+                error = result.error || $t('login_err_invalid');
             }
         } catch (err) {
             error = err.message.includes("Failed to fetch")
@@ -82,12 +60,9 @@
 
 <!-- Logo and Brand -->
 <div class="fixed top-6 left-6 sm:top-8 sm:left-8 flex items-center gap-3 z-10">
-    <div class="w-10 h-10 bg-gray-900 dark:bg-gray-100 rounded-lg flex items-center justify-center">
-        <Icon icon="carbon:send-filled" class="w-5 h-5 text-gray-100 dark:text-gray-900" />
-    </div>
+    <img src={appLogo} alt="" class="w-10 h-10 object-contain shrink-0" />
     <div>
-        <h1 class="text-lg font-semibold text-gray-900 dark:text-gray-100">SMS Gateway</h1>
-        <p class="text-xs text-gray-500 dark:text-gray-400">{$t('app_tagline')}</p>
+        <h1 class="text-lg font-semibold text-gray-900 dark:text-gray-100">{$t('sim_dashboard_title')}</h1>
     </div>
 </div>
 
@@ -164,7 +139,7 @@
                             type="text"
                             bind:value={username}
                             placeholder={$t('login_username_ph')}
-                            autocomplete="off"
+                            autocomplete="username"
                             autocapitalize="none"
                             spellcheck="false"
                             inputmode="text"
@@ -197,7 +172,7 @@
                             type={showPassword ? "text" : "password"}
                             bind:value={password}
                             placeholder={$t('login_password_ph')}
-                            autocomplete="new-password"
+                            autocomplete="current-password"
                             autocapitalize="none"
                             spellcheck="false"
                             class="w-full pl-11 pr-12 py-3 bg-white dark:bg-zinc-900

@@ -1,7 +1,7 @@
 <script>
   import { fly } from "svelte/transition";
   import { quartOut } from "svelte/easing";
-  import { initConversation } from "./stores/conversation";
+  import { initConversation, disconnectConversation } from "./stores/conversation";
   import { connectCallSSE, disconnectCallSSE } from "./stores/calls.js";
   import Dashboard from "./pages/Dashboard.svelte";
   import SimDashboard from "./pages/SimDashboard.svelte";
@@ -14,8 +14,11 @@
   import MmsPage from "./pages/MmsPage.svelte";
   import EsimPage from "./pages/EsimPage.svelte";
   import TelegramPage from "./pages/TelegramPage.svelte";
+  import Login from "./pages/Login.svelte";
+  import Account from "./pages/Account.svelte";
+  import { user, isAuthenticated, isAuthLoading } from "./stores/auth.js";
 
-  /** @type {'sim' | 'messages' | 'calllog' | 'simcards' | 'platform' | 'phonenumber' | 'platform-stats' | 'money' | 'mms' | 'esim' | 'telegram'} */
+  /** @type {'sim' | 'messages' | 'calllog' | 'simcards' | 'platform' | 'phonenumber' | 'platform-stats' | 'money' | 'mms' | 'esim' | 'telegram' | 'account'} */
   let currentPage = $state('sim');
   let filterSimId = $state(null);
 
@@ -69,15 +72,21 @@
   }
 
   function backFromEsim() {
-    currentPage = 'phonenumber';
+    currentPage = $user?.is_admin ? 'phonenumber' : 'account';
   }
 
   $effect(() => {
+    if ($user) currentPage = $user.is_admin ? 'sim' : 'account';
+  });
+
+  $effect(() => {
+    if (!$isAuthenticated || !$user?.is_admin) return;
     initConversation();
     connectCallSSE();
 
     return () => {
       disconnectCallSSE();
+      disconnectConversation();
     };
   });
 </script>
@@ -85,7 +94,13 @@
 <div class="app-container">
   <div class="h-dvh w-screen overflow-hidden">
 
-    {#if currentPage === 'sim'}
+    {#if $isAuthLoading}
+      <div class="h-dvh flex items-center justify-center text-gray-500" role="status">Loading...</div>
+    {:else if !$isAuthenticated}
+      <Login />
+    {:else if currentPage === 'account' || (!$user?.is_admin && currentPage !== 'esim')}
+      <Account onManage={goToEsim} onDashboard={goToSim} />
+    {:else if currentPage === 'sim'}
       <div in:fly={{ x: -40, duration: 350, easing: quartOut }} out:fly={{ x: -40, duration: 250, easing: quartOut }}>
         <SimDashboard
           onNavigate={goToMessages}
@@ -97,6 +112,7 @@
           onNavigateMoney={goToMoney}
           onNavigateMms={goToMms}
           onNavigateTelegram={goToTelegram}
+          onNavigateAccount={() => currentPage = 'account'}
         />
       </div>
 

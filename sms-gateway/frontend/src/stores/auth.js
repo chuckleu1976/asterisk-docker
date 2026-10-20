@@ -1,61 +1,49 @@
 import { writable } from 'svelte/store';
-import { getStorageValue, updateStorageValue } from '../js/storage';
-import { apiClient } from '../js/api';
-
-// 认证状态管理
+export const user = writable(null);
 export const isAuthenticated = writable(false);
 export const isAuthLoading = writable(true);
 
-// 立即开始初始化认证状态
-initAuth();
+function signedOut() {
+    user.set(null);
+    isAuthenticated.set(false);
+    sessionStorage.removeItem('remote_esim_request_id');
+    sessionStorage.removeItem('auth');
+    localStorage.removeItem('auth');
+}
 
-// 初始化认证状态
+window.addEventListener('gateway-auth-expired', signedOut);
+
 export async function initAuth() {
     isAuthLoading.set(true);
-    
     try {
-        const authData = await getStorageValue('auth');
-        const isValid = authData
-            ? await Promise.race([
-                apiClient.checkAuth(),
-                new Promise((resolve) => setTimeout(() => resolve(false), 6000)),
-            ])
-            : false;
-        
-        isAuthenticated.set(!!isValid);
-    } catch (error) {
-        console.error('Auth initialization failed:', error);
-        isAuthenticated.set(false);
+        const response = await fetch('/api/auth/me', { credentials: 'same-origin', cache: 'no-store' });
+        if (!response.ok) throw new Error('Session unavailable');
+        user.set(await response.json());
+        isAuthenticated.set(true);
+    } catch {
+        signedOut();
     } finally {
         isAuthLoading.set(false);
     }
 }
 
-// 登录
 export async function login(username, password) {
-    try {
-        // 这里应该调用实际的登录 API
-        // 暂时使用简单的验证逻辑
-        if (username && password) {
-            await updateStorageValue('auth', { username, timestamp: Date.now() });
-            isAuthenticated.set(true);
-            return { success: true };
-        } else {
-            return { success: false, error: '用户名和密码不能为空' };
-        }
-    } catch (error) {
-        console.error('Login failed:', error);
-        return { success: false, error: '登录失败，请稍后重试' };
-    }
+    const response = await fetch('/api/auth/login', {
+        method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) return { success: false, error: result.error || 'Login failed' };
+    signedOut();
+    user.set(result);
+    isAuthenticated.set(true);
+    return { success: true };
 }
 
-// 登出
 export async function logout() {
-    try {
-        await updateStorageValue('auth', null);
-        isAuthenticated.set(false);
-        window.location.reload();
-    } catch (error) {
-        console.error('Logout failed:', error);
-    }
+    const response = await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });
+    if (!response.ok && response.status !== 401) throw new Error('Logout unavailable; try again');
+    signedOut();
 }
+
+initAuth();

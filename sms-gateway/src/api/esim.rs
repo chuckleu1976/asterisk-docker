@@ -16,6 +16,25 @@ struct RemoteEsim {
     token: String,
 }
 
+impl RemoteEsim {
+    async fn check_rental_worker(&self, credential: Option<&str>) -> Result<(), Response> {
+        let Some(credential) = credential else { return Ok(()); };
+        let Some(mut url) = self.url.clone() else {
+            return Err(failure(StatusCode::SERVICE_UNAVAILABLE, "Remote eSIM worker is not configured"));
+        };
+        url.set_path("/api/esim/access");
+        let reply = self.client.get(url).bearer_auth(&self.token).header("X-Gateway-Credential", credential).send().await;
+        match reply {
+            Ok(reply) if reply.status().is_success() => {
+                let data = reply.json::<serde_json::Value>().await.unwrap_or_default();
+                if data["rental_enforced"] == true { return Ok(()); }
+            }
+            _ => {}
+        }
+        Err(failure(StatusCode::SERVICE_UNAVAILABLE, "Worker rental authentication is unavailable; no card operation was sent"))
+    }
+}
+
 fn failure(status: StatusCode, message: &str) -> Response {
     (status, Json(json!({"success": false, "error": message}))).into_response()
 }
@@ -38,14 +57,20 @@ fn browser_request_allowed(request: &Request) -> bool {
             .is_ok_and(|expected| expected.origin() == origin.origin())
 }
 
-async fn mappings(State(remote): State<Arc<RemoteEsim>>) -> Response {
+async fn mappings(State(remote): State<Arc<RemoteEsim>>, request: Request) -> Response {
+    let credential = request.extensions().get::<super::access::Identity>().map(|identity| identity.token.clone());
+    if let Err(response) = remote.check_rental_worker(credential.as_deref()).await { return response; }
     let Some(base) = &remote.url else {
         return failure(StatusCode::SERVICE_UNAVAILABLE, "Remote SIM mapping feed is not configured");
     };
     let mut url = base.clone();
     url.set_path("/api/esim/targets");
     let result = async {
-        let reply = remote.client.get(url).bearer_auth(&remote.token).send().await?.error_for_status()?;
+        let mut upstream = remote.client.get(url).bearer_auth(&remote.token);
+        if let Some(credential) = credential {
+            upstream = upstream.header("X-Gateway-Credential", credential);
+        }
+        let reply = upstream.send().await?.error_for_status()?;
         reply.json::<serde_json::Value>().await
     }.await;
     match result {
@@ -84,12 +109,17 @@ async fn proxy(State(remote): State<Arc<RemoteEsim>>, OriginalUri(uri): Original
     url.set_path(uri.path());
     url.set_query(uri.query());
     let content_type = request.headers().get(header::CONTENT_TYPE).cloned();
+    let credential = request.extensions().get::<super::access::Identity>().map(|identity| identity.token.clone());
+    if let Err(response) = remote.check_rental_worker(credential.as_deref()).await { return response; }
     let method = request.method().clone();
     let body = match to_bytes(request.into_body(), 8 * 1024 * 1024).await {
         Ok(body) => body,
         Err(_) => return failure(StatusCode::PAYLOAD_TOO_LARGE, "eSIM request exceeds 8 MiB"),
     };
     let mut upstream = remote.client.request(method, url).bearer_auth(&remote.token).body(body);
+    if let Some(credential) = credential {
+        upstream = upstream.header("X-Gateway-Credential", credential);
+    }
     if let Some(value) = content_type {
         upstream = upstream.header(header::CONTENT_TYPE, value);
     }
@@ -105,7 +135,10 @@ async fn proxy(State(remote): State<Arc<RemoteEsim>>, OriginalUri(uri): Original
             response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
             response
         }
-        Err(_) => failure(StatusCode::BAD_GATEWAY, "Remote eSIM worker unavailable; inspect operation status before retrying"),
+        Err(error) => {
+            log::warn!("Remote eSIM transport failed: {:?}", error.without_url());
+            failure(StatusCode::BAD_GATEWAY, "Remote eSIM worker unavailable; inspect operation status before retrying")
+        }
     }
 }
 
@@ -141,6 +174,40 @@ mod tests {
         assert!(browser_request_allowed(&same));
         assert!(!browser_request_allowed(&foreign));
         assert!(!browser_request_allowed(&cross_site));
+    }
+
+    #[tokio::test]
+    async fn authenticated_proxy_supports_the_http10_worker() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let worker_url = format!("http://{}", listener.local_addr().unwrap());
+        let worker = tokio::spawn(async move {
+            for path in ["/api/esim/access", "/api/esim/ports"] {
+                let (mut connection, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                while !request.ends_with(b"\r\n\r\n") {
+                    let mut byte = [0; 1];
+                    connection.read_exact(&mut byte).await.unwrap();
+                    request.push(byte[0]);
+                }
+                assert!(String::from_utf8(request).unwrap().starts_with(&format!("GET {path} ")));
+                let body = if path.ends_with("access") { r#"{"rental_enforced":true}"# }
+                    else { r#"{"success":true,"data":[]}"# };
+                connection.write_all(format!("HTTP/1.0 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+                connection.shutdown().await.unwrap();
+            }
+        });
+        let remote = Arc::new(RemoteEsim { client: reqwest::Client::new(), url: Some(worker_url.parse().unwrap()), token: "worker-test-token".into() });
+        let app = Router::new().nest("/api", Router::new().route("/esim/{*path}", any(proxy)).with_state(remote))
+            .layer(axum::Extension(super::super::access::Identity { token: "synthetic-credential".into(), context: json!({}) }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/api/esim/ports", listener.local_addr().unwrap());
+        let gateway = tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        let response = reqwest::Client::new().get(url).send().await.unwrap();
+        worker.abort();
+        gateway.abort();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.json::<serde_json::Value>().await.unwrap()["data"], json!([]));
     }
 
     #[tokio::test]

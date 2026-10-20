@@ -1,8 +1,6 @@
 // api.js
 import FetchApi from './request';
 
-const DEFAULT_AUTH_TOKEN = 'YWRtaW46MTIzNDU2'; // admin:123456
-
 function operationBody(body = {}) {
     if (body.request_id) return body;
     const bytes = crypto.getRandomValues(new Uint8Array(16));
@@ -16,19 +14,7 @@ function operationBody(body = {}) {
 }
 
 function buildBasicAuthHeader() {
-    const auth = sessionStorage.getItem('auth') || localStorage.getItem('auth');
-    if (!auth) {
-        return { Authorization: `Basic ${DEFAULT_AUTH_TOKEN}` };
-    }
-
-    try {
-        const { token } = JSON.parse(auth);
-        return token
-            ? { Authorization: `Basic ${token}` }
-            : { Authorization: `Basic ${DEFAULT_AUTH_TOKEN}` };
-    } catch (_) {
-        return { Authorization: `Basic ${DEFAULT_AUTH_TOKEN}` };
-    }
+    return {};
 }
 
 /**
@@ -519,6 +505,14 @@ class ApiClient {
 
     async esimWriteMsisdn(com, iccid, phone_number) {
         return FetchApi.post(`/api/esim/${encodeURIComponent(com)}/msisdn`, operationBody({ iccid, phone_number }));
+    }
+
+    async configuredMsisdn(rentalId) {
+        return FetchApi.get(`/api/auth/rentals/${encodeURIComponent(rentalId)}/configured-msisdn`);
+    }
+
+    async saveConfiguredMsisdn(rentalId, body) {
+        return FetchApi.post(`/api/auth/rentals/${encodeURIComponent(rentalId)}/configured-msisdn`, body);
     }
 
     async esimOperationStatus(id) {
