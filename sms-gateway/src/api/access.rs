@@ -90,8 +90,62 @@ fn same_origin(request: &Request) -> bool {
     true
 }
 
-fn customer_route(path: &str) -> bool {
-    path == "/api/check" || path.starts_with("/api/auth/") || path == "/api/sim-mappings" || path.starts_with("/api/esim/")
+pub fn normalize_port(port: &str) -> String {
+    let port = port.trim().to_ascii_lowercase();
+    if port.is_empty() {
+        return port;
+    }
+    if port == "asterisk" || port == "com1" {
+        return "asterisk1".to_owned();
+    }
+    if let Some(rest) = port.strip_prefix("asterisk") {
+        return if rest.is_empty() { "asterisk1".to_owned() } else { format!("asterisk{rest}") };
+    }
+    if let Some(rest) = port.strip_prefix("com") {
+        return if rest.is_empty() || rest == "1" { "asterisk1".to_owned() } else { format!("asterisk{rest}") };
+    }
+    port
+}
+
+impl Identity {
+    pub fn is_admin(&self) -> bool {
+        self.context.get("is_admin") == Some(&Value::Bool(true))
+    }
+
+    fn rentals(&self) -> impl Iterator<Item = &Value> {
+        self.context.get("rentals").and_then(Value::as_array).into_iter().flatten()
+    }
+
+    pub fn has_permission(&self, permission: &str) -> bool {
+        self.rentals().any(|rental| {
+            rental.get("permissions").and_then(Value::as_array).into_iter().flatten().any(|value| value == permission)
+        })
+    }
+
+    pub fn allows_port(&self, port: &str) -> bool {
+        if self.is_admin() {
+            return true;
+        }
+        let wanted = normalize_port(port);
+        self.rentals().any(|rental| rental.get("com_port").and_then(Value::as_str).is_some_and(|value| normalize_port(value) == wanted))
+    }
+}
+
+fn customer_route(path: &str, identity: &Identity) -> bool {
+    if path == "/api/check" || path.starts_with("/api/auth/") || path == "/api/sim-mappings" || path.starts_with("/api/esim/") {
+        return true;
+    }
+    let messaging = identity.has_permission("sms:read") || identity.has_permission("sms:send");
+    messaging && (
+        path.starts_with("/api/sims")
+            || path == "/api/sms"
+            || path.starts_with("/api/sms/")
+            || path.starts_with("/api/calls")
+            || path == "/api/conversation"
+            || path.starts_with("/api/conversations")
+            || path == "/api/contacts"
+            || path.starts_with("/api/contacts/")
+    )
 }
 
 pub async fn guard(State(access): State<Arc<Access>>, mut request: Request, next: Next) -> Response {
@@ -102,7 +156,7 @@ pub async fn guard(State(access): State<Arc<Access>>, mut request: Request, next
     let identity = match access.identify(&token).await { Ok(identity) => identity, Err(response) => return response };
     let path = request.extensions().get::<OriginalUri>().map(|uri| uri.0.path()).unwrap_or_else(|| request.uri().path());
     let path = path.to_owned();
-    if identity.context["is_admin"] != true && !customer_route(&path) {
+    if !identity.is_admin() && !customer_route(&path, &identity) {
         return denied(StatusCode::FORBIDDEN, "This route requires administrator access");
     }
     request.extensions_mut().insert(identity);
@@ -112,7 +166,7 @@ pub async fn guard(State(access): State<Arc<Access>>, mut request: Request, next
         let stream = stream::unfold((body.into_data_stream(), access, token, path), |(mut data, access, token, path)| async move {
             let chunk = data.next().await?;
             let identity = access.identify(&token).await.ok()?;
-            if identity.context["is_admin"] != true && !customer_route(&path) { return None; }
+            if !identity.is_admin() && !customer_route(&path, &identity) { return None; }
             Some((chunk, (data, access, token, path)))
         });
         *response.body_mut() = Body::from_stream(stream);
@@ -321,6 +375,36 @@ mod tests {
         assert_eq!(client.get(format!("{base}/api/esim/ports")).header(header::COOKIE,"sg_session=sgs_test").send().await.unwrap().status(), StatusCode::OK);
         assert_eq!(client.get(format!("{base}/api/sms")).bearer_auth("sgs_test").send().await.unwrap().status(), StatusCode::FORBIDDEN);
         assert_eq!(client.get(format!("{base}/api/esim/ports")).bearer_auth("sgs_test").header("sec-fetch-site","cross-site").send().await.unwrap().status(), StatusCode::FORBIDDEN);
+        gateway_task.abort(); authority_task.abort();
+    }
+
+    #[tokio::test]
+    async fn rental_customer_with_sms_permission_can_use_messaging_routes() {
+        let authority = Router::new().fallback(any(|request: Request| async move {
+            if request.headers().get(header::AUTHORIZATION).is_none_or(|value| value != "Bearer sgs_test") {
+                return StatusCode::UNAUTHORIZED.into_response();
+            }
+            Json(json!({
+                "user_id":"customer-a",
+                "is_admin":false,
+                "rentals":[{"id":"r1","com_port":"asterisk","permissions":["sms:read","sms:send"]}]
+            })).into_response()
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let management = format!("http://{}", listener.local_addr().unwrap());
+        let authority_task = tokio::spawn(async move { axum::serve(listener, authority).await.unwrap(); });
+        let access = Arc::new(Access {client:reqwest::Client::new(),url:Some(management),gateway_id:"test".into()});
+        let api = Router::new().merge(routes(access.clone())).fallback(any(|| async {StatusCode::OK}))
+            .layer(middleware::from_fn_with_state(access, guard));
+        let app = Router::new().nest_service("/api", api);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let gateway_task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        let client = reqwest::Client::new();
+        assert_eq!(client.get(format!("{base}/api/sms")).bearer_auth("sgs_test").send().await.unwrap().status(), StatusCode::OK);
+        assert_eq!(client.get(format!("{base}/api/sims/info")).bearer_auth("sgs_test").send().await.unwrap().status(), StatusCode::OK);
+        assert_eq!(client.post(format!("{base}/api/calls/make")).bearer_auth("sgs_test").send().await.unwrap().status(), StatusCode::OK);
+        assert_eq!(client.get(format!("{base}/api/readers")).bearer_auth("sgs_test").send().await.unwrap().status(), StatusCode::FORBIDDEN);
         gateway_task.abort(); authority_task.abort();
     }
 }

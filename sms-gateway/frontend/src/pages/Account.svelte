@@ -59,7 +59,7 @@
   <header class="flex flex-wrap items-center justify-between gap-4 border-b border-gray-200 dark:border-zinc-700 px-5 py-4">
     <div class="flex min-w-0 items-center gap-3"><img src={appLogo} alt="" class="w-9 h-9 shrink-0 object-contain" /><h1 class="text-lg font-semibold">{$t('sim_dashboard_title')}</h1></div>
     <div class="flex flex-wrap items-center gap-3 text-sm"><span class="break-all">{$user?.username}</span>
-      {#if $user?.is_admin}<button onclick={onDashboard} class="rounded border px-3 py-2">Dashboard</button>{/if}
+      {#if $user?.is_admin || ($user?.rentals ?? []).some((rental) => (rental.permissions ?? []).includes('sms:read') || (rental.permissions ?? []).includes('sms:send'))}<button onclick={onDashboard} class="rounded border px-3 py-2">Dashboard</button>{/if}
       <button onclick={signOut} title="Sign out" aria-label="Sign out" class="p-2 rounded hover:bg-gray-200 dark:hover:bg-zinc-800"><Icon icon="carbon:logout" width="20" /></button>
     </div>
   </header>

@@ -2,7 +2,7 @@ use fancy_regex::Regex;
 use std::{convert::Infallible, sync::Arc, time::Duration};
 
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Extension, Path, Query, State},
     response::{sse::Event, IntoResponse, Response, Sse},
     routing::{delete, get, post, put},
     Json, Router,
@@ -96,6 +96,8 @@ mod mms;
 mod phone;
 mod tg2sip;
 pub(crate) mod sse_manager;
+
+use access::{denied, Identity};
 
 use rust_embed::RustEmbed;
 
@@ -281,8 +283,34 @@ async fn get_sms_paginated(Query(query): Query<SmsQuery>) -> Response {
     .into_response()
 }
 
+async fn identity_allows_sim(modem_manager: &ModemManagerRef, identity: &Identity, sim_id: &str) -> bool {
+    if identity.is_admin() {
+        return true;
+    }
+    match modem_manager.get_modem(sim_id).await {
+        Some(modem) => identity.allows_port(&modem.com_port),
+        None => false,
+    }
+}
+
+async fn require_rented_sim(
+    modem_manager: &ModemManagerRef,
+    identity: &Identity,
+    sim_id: &str,
+    permission: &str,
+) -> Option<Response> {
+    if identity.is_admin() {
+        return None;
+    }
+    if !identity.has_permission(permission) || !identity_allows_sim(modem_manager, identity, sim_id).await {
+        return Some(denied(StatusCode::FORBIDDEN, "This SIM is not in the current rental"));
+    }
+    None
+}
+
 async fn send_sms(
     State((modem_manager, sse_manager)): State<(ModemManagerRef, Arc<SseManager>)>,
+    Extension(identity): Extension<Identity>,
     Json(mut payload): Json<SmsPayload>,
 ) -> impl IntoResponse {
     // Resolve the sim_id: use sim_id directly, or look it up from phone_number.
@@ -302,6 +330,10 @@ async fn send_sms(
             ).into_response(),
         },
     };
+
+    if let Some(response) = require_rented_sim(&modem_manager, &identity, &sim_id, "sms:send").await {
+        return response;
+    }
 
     if payload.new {
         payload.contact.find_or_create().await.unwrap();
@@ -331,7 +363,10 @@ async fn send_sms(
     }
 }
 
-async fn get_all_sim_info(State(modem_manager): State<ModemManagerRef>) -> Response {
+async fn get_all_sim_info(
+    State(modem_manager): State<ModemManagerRef>,
+    Extension(identity): Extension<Identity>,
+) -> Response {
     use futures::future::join_all;
     use tokio::time::{timeout, Duration};
 
@@ -550,6 +585,12 @@ async fn get_all_sim_info(State(modem_manager): State<ModemManagerRef>) -> Respo
         }));
     }
 
+    if !identity.is_admin() {
+        details.retain(|entry| {
+            entry["com_port"].as_str().is_some_and(|port| identity.allows_port(port))
+        });
+    }
+
     // Sort by COM port number (COM1, COM2, ..., COM10, COM11, ...)
     details.sort_by_key(|entry| {
         entry["com_port"]
@@ -674,7 +715,14 @@ async fn get_call_transcript(Path(id): Path<String>) -> Response {
     }
 }
 
-async fn make_call(State(cs): State<CallState>, Json(body): Json<MakeCallRequest>) -> Response {
+async fn make_call(
+    State(cs): State<CallState>,
+    Extension(identity): Extension<Identity>,
+    Json(body): Json<MakeCallRequest>,
+) -> Response {
+    if let Some(response) = require_rented_sim(&cs.mm, &identity, &body.sim_id, "sms:send").await {
+        return response;
+    }
     match cs.mm.make_call(&body.sim_id, &body.phone, cs.sse.clone()).await {
         Ok(call_id) => {
             cs.sse.send_call_event(CallEvent {
@@ -690,14 +738,28 @@ async fn make_call(State(cs): State<CallState>, Json(body): Json<MakeCallRequest
     }
 }
 
-async fn answer_call(State(mm): State<ModemManagerRef>, Json(body): Json<SimIdRequest>) -> Response {
+async fn answer_call(
+    State(mm): State<ModemManagerRef>,
+    Extension(identity): Extension<Identity>,
+    Json(body): Json<SimIdRequest>,
+) -> Response {
+    if let Some(response) = require_rented_sim(&mm, &identity, &body.sim_id, "sms:send").await {
+        return response;
+    }
     match mm.answer_call(&body.sim_id).await {
         Ok(()) => StatusCode::OK.into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
 
-async fn hangup_call(State(cs): State<CallState>, Json(body): Json<SimIdRequest>) -> Response {
+async fn hangup_call(
+    State(cs): State<CallState>,
+    Extension(identity): Extension<Identity>,
+    Json(body): Json<SimIdRequest>,
+) -> Response {
+    if let Some(response) = require_rented_sim(&cs.mm, &identity, &body.sim_id, "sms:send").await {
+        return response;
+    }
     match cs.mm.hangup_call(&body.sim_id).await {
         Ok(Some((call_id, _status))) => {
             cs.sse.send_call_event(CallEvent {

@@ -104,9 +104,12 @@ class ApiClient {
         smsFormat = 'pdu',
         statusReportEnabled = false
     ) {
+        const normalized = typeof contact === 'string'
+            ? { id: contact, name: contact }
+            : contact;
         const payload = {
             sim_id: simId,
-            contact,
+            contact: normalized,
             message,
             new: new_message,
             sms_format: smsFormat,

@@ -2,6 +2,7 @@
 export function displayPort(name) {
     if (name == null || String(name).trim() === '') return '';
     const raw = String(name).trim();
+    if (/^asterisk$/i.test(raw)) return 'COM1';
     const match = raw.match(/^asterisk(\d+)\b/i);
     if (match) return `COM${match[1]}`;
     return raw;

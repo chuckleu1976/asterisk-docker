@@ -71,6 +71,14 @@
     currentPage = 'telegram';
   }
 
+  function canUseLines(account) {
+    if (!account) return false;
+    if (account.is_admin) return true;
+    return (account.rentals ?? []).some((rental) =>
+      (rental.permissions ?? []).includes('sms:read') || (rental.permissions ?? []).includes('sms:send')
+    );
+  }
+
   function backFromEsim() {
     currentPage = $user?.is_admin ? 'phonenumber' : 'account';
   }
@@ -80,7 +88,7 @@
   });
 
   $effect(() => {
-    if (!$isAuthenticated || !$user?.is_admin) return;
+    if (!$isAuthenticated || !canUseLines($user)) return;
     initConversation();
     connectCallSSE();
 
@@ -98,7 +106,7 @@
       <div class="h-dvh flex items-center justify-center text-gray-500" role="status">Loading...</div>
     {:else if !$isAuthenticated}
       <Login />
-    {:else if currentPage === 'account' || (!$user?.is_admin && currentPage !== 'esim')}
+    {:else if currentPage === 'account'}
       <Account onManage={goToEsim} onDashboard={goToSim} />
     {:else if currentPage === 'sim'}
       <div in:fly={{ x: -40, duration: 350, easing: quartOut }} out:fly={{ x: -40, duration: 250, easing: quartOut }}>
