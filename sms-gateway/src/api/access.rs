@@ -138,6 +138,7 @@ fn customer_route(path: &str, identity: &Identity) -> bool {
     let messaging = identity.has_permission("sms:read") || identity.has_permission("sms:send");
     messaging && (
         path.starts_with("/api/sims")
+            || path.starts_with("/api/sim-cards")
             || path == "/api/sms"
             || path.starts_with("/api/sms/")
             || path.starts_with("/api/calls")
@@ -403,6 +404,8 @@ mod tests {
         let client = reqwest::Client::new();
         assert_eq!(client.get(format!("{base}/api/sms")).bearer_auth("sgs_test").send().await.unwrap().status(), StatusCode::OK);
         assert_eq!(client.get(format!("{base}/api/sims/info")).bearer_auth("sgs_test").send().await.unwrap().status(), StatusCode::OK);
+        assert_eq!(client.get(format!("{base}/api/sim-cards")).bearer_auth("sgs_test").send().await.unwrap().status(), StatusCode::OK);
+        assert_eq!(client.get(format!("{base}/api/sims/stats")).bearer_auth("sgs_test").send().await.unwrap().status(), StatusCode::OK);
         assert_eq!(client.post(format!("{base}/api/calls/make")).bearer_auth("sgs_test").send().await.unwrap().status(), StatusCode::OK);
         assert_eq!(client.get(format!("{base}/api/readers")).bearer_auth("sgs_test").send().await.unwrap().status(), StatusCode::FORBIDDEN);
         gateway_task.abort(); authority_task.abort();

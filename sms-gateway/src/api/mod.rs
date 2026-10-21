@@ -133,8 +133,8 @@ pub async fn run_api(
         .route("/contacts/{id}", delete(delete_contact_by_id))
         .route("/conversation", get(get_conversation))
         .route("/conversations/{id}/unread", post(get_conversation_unread))
-        .route("/sim-cards", get(get_all_sim_cards)) // 保留用于管理
-        .route("/sims/stats", get(get_sim_sms_stats))
+        .route("/sim-cards", get(get_all_sim_cards).with_state(modem_manager.clone()))
+        .route("/sims/stats", get(get_sim_sms_stats).with_state(modem_manager.clone()))
         .route(
             "/sims/{sim_id}/info",
             get(get_enhanced_sim_info).with_state(modem_manager.clone()),
@@ -896,9 +896,33 @@ pub struct ModemInfo {
     pub baud_rate: u32,
 }
 
-async fn get_sim_sms_stats() -> Response {
+async fn rented_sim_id_set(
+    modem_manager: &ModemManagerRef,
+    identity: &Identity,
+) -> Option<std::collections::HashSet<String>> {
+    if identity.is_admin() {
+        return None;
+    }
+    let mut allowed = std::collections::HashSet::new();
+    for sim_id in modem_manager.get_sim_ids().await {
+        if identity_allows_sim(modem_manager, identity, &sim_id).await {
+            allowed.insert(sim_id);
+        }
+    }
+    Some(allowed)
+}
+
+async fn get_sim_sms_stats(
+    State(modem_manager): State<ModemManagerRef>,
+    Extension(identity): Extension<Identity>,
+) -> Response {
     match Sms::count_by_sim_id().await {
-        Ok(stats) => (StatusCode::OK, Json(stats)).into_response(),
+        Ok(mut stats) => {
+            if let Some(allowed) = rented_sim_id_set(&modem_manager, &identity).await {
+                stats.retain(|row| allowed.contains(&row.sim_id));
+            }
+            (StatusCode::OK, Json(stats)).into_response()
+        }
         Err(e) => {
             error!("Failed to get SIM SMS stats: {}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed: {}", e)).into_response()
@@ -906,9 +930,17 @@ async fn get_sim_sms_stats() -> Response {
     }
 }
 
-async fn get_all_sim_cards() -> Response {
+async fn get_all_sim_cards(
+    State(modem_manager): State<ModemManagerRef>,
+    Extension(identity): Extension<Identity>,
+) -> Response {
     match SimCard::query_all().await {
-        Ok(sim_cards) => (StatusCode::OK, Json(sim_cards)).into_response(),
+        Ok(mut sim_cards) => {
+            if let Some(allowed) = rented_sim_id_set(&modem_manager, &identity).await {
+                sim_cards.retain(|card| allowed.contains(&card.id));
+            }
+            (StatusCode::OK, Json(sim_cards)).into_response()
+        }
         Err(e) => {
             error!("Failed to get SIM cards: {}", e);
             (

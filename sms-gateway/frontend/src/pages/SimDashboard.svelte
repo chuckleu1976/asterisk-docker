@@ -121,8 +121,8 @@
     try {
       const [infoRes, cardsRes, statsRes, targetsRes] = await Promise.all([
         apiClient.getAllSimsInfo(),
-        apiClient.getAllSimCards(),
-        apiClient.getSimStats(),
+        apiClient.getAllSimCards().catch(() => []),
+        apiClient.getSimStats().catch(() => []),
         apiClient.remoteSimTargets().catch(() => null),
       ]);
       const targets = targetsRes?.data?.data ?? [];
