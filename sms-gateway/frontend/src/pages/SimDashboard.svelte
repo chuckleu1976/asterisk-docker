@@ -119,7 +119,7 @@
     isFetching = true;
     try {
       const [infoRes, cardsRes, statsRes, targetsRes] = await Promise.all([
-        apiClient.getAllSimsInfo(),
+        apiClient.getAllSimsInfo().catch(() => []),
         apiClient.getAllSimCards().catch(() => []),
         apiClient.getSimStats().catch(() => []),
         apiClient.remoteSimTargets().catch(() => null),

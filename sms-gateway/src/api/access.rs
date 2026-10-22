@@ -131,8 +131,19 @@ impl Identity {
     }
 }
 
+fn sim_dashboard_path(path: &str) -> bool {
+    path == "/api/sims/info"
+        || path == "/api/sims/stats"
+        || path == "/api/sim-cards"
+        || (path.starts_with("/api/sims/") && (path.ends_with("/info") || path.ends_with("/refresh")))
+}
+
 fn customer_route(path: &str, identity: &Identity) -> bool {
     if path == "/api/check" || path.starts_with("/api/auth/") || path == "/api/sim-mappings" || path.starts_with("/api/esim/") {
+        return true;
+    }
+    let can_view_lines = identity.has_permission("esim:read") || identity.has_permission("sms:read") || identity.has_permission("sms:send");
+    if can_view_lines && sim_dashboard_path(path) {
         return true;
     }
     let messaging = identity.has_permission("sms:read") || identity.has_permission("sms:send");
@@ -418,6 +429,36 @@ mod tests {
         assert_eq!(client.get(format!("{base}/api/mms")).bearer_auth("sgs_test").send().await.unwrap().status(), StatusCode::OK);
         assert_eq!(client.get(format!("{base}/api/tg2sip")).bearer_auth("sgs_test").send().await.unwrap().status(), StatusCode::OK);
         assert_eq!(client.get(format!("{base}/api/readers")).bearer_auth("sgs_test").send().await.unwrap().status(), StatusCode::FORBIDDEN);
+        gateway_task.abort(); authority_task.abort();
+    }
+
+    #[tokio::test]
+    async fn rental_customer_with_esim_read_can_open_sim_dashboard() {
+        let authority = Router::new().fallback(any(|request: Request| async move {
+            if request.headers().get(header::AUTHORIZATION).is_none_or(|value| value != "Bearer sgs_test") {
+                return StatusCode::UNAUTHORIZED.into_response();
+            }
+            Json(json!({
+                "user_id":"customer-a",
+                "is_admin":false,
+                "rentals":[{"id":"r1","com_port":"asterisk1","permissions":["esim:read","esim:msisdn"]}]
+            })).into_response()
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let management = format!("http://{}", listener.local_addr().unwrap());
+        let authority_task = tokio::spawn(async move { axum::serve(listener, authority).await.unwrap(); });
+        let access = Arc::new(Access {client:reqwest::Client::new(),url:Some(management),gateway_id:"test".into()});
+        let api = Router::new().merge(routes(access.clone())).fallback(any(|| async {StatusCode::OK}))
+            .layer(middleware::from_fn_with_state(access, guard));
+        let app = Router::new().nest_service("/api", api);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let gateway_task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        let client = reqwest::Client::new();
+        assert_eq!(client.get(format!("{base}/api/sims/info")).bearer_auth("sgs_test").send().await.unwrap().status(), StatusCode::OK);
+        assert_eq!(client.get(format!("{base}/api/sim-cards")).bearer_auth("sgs_test").send().await.unwrap().status(), StatusCode::OK);
+        assert_eq!(client.get(format!("{base}/api/sims/stats")).bearer_auth("sgs_test").send().await.unwrap().status(), StatusCode::OK);
+        assert_eq!(client.get(format!("{base}/api/sms")).bearer_auth("sgs_test").send().await.unwrap().status(), StatusCode::FORBIDDEN);
         gateway_task.abort(); authority_task.abort();
     }
 }
