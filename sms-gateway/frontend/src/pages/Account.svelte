@@ -2,14 +2,14 @@
   import { onMount } from 'svelte';
   import Icon from '@iconify/svelte';
   import { user, logout, initAuth } from '../stores/auth.js';
-  import appLogo from '../../../icon/cow.png';
   import { t } from '../js/i18n.js';
-  import { displayPort } from '../js/modem.js';
-  import MsisdnEditor from '../components/MsisdnEditor.svelte';
+  import { apiClient } from '../js/api.js';
+  import { displayPort, normalizePort } from '../js/modem.js';
 
   let { onManage = () => {}, onDashboard = () => {} } = $props();
   let tokens = $state([]);
   let error = $state('');
+  let operatorPhones = $state({});
   let busy = $state(false);
   let tokenName = $state('');
   let expiry = $state('');
@@ -34,6 +34,33 @@
     try { tokens = await api(); } catch (problem) { error = problem.message; }
   }
 
+  async function loadOperatorPhones() {
+    try {
+      const [infoRes, cardsRes] = await Promise.all([
+        apiClient.getAllSimsInfo(),
+        apiClient.getAllSimCards(),
+      ]);
+      const infos = Array.isArray(infoRes) ? infoRes : (infoRes?.data ?? []);
+      const cards = Array.isArray(cardsRes) ? cardsRes : (cardsRes?.data ?? []);
+      const cardMap = Object.fromEntries(cards.map((card) => [card.id, card]));
+      const next = {};
+      for (const info of infos) {
+        const card = cardMap[info.sim_id] ?? {};
+        const phone = String(card.phone_number ?? info.phone_number ?? info.msisdn ?? '').trim();
+        if (info.com_port && phone) next[normalizePort(info.com_port)] = phone;
+      }
+      operatorPhones = next;
+    } catch (problem) {
+      if (!error) error = problem.message;
+    }
+  }
+
+  function operatorMsisdn(rental) {
+    const fromCard = String(rental?.sim_msisdn ?? rental?.msisdn ?? '').trim();
+    const fromLive = operatorPhones[normalizePort(rental?.com_port)] ?? '';
+    return fromCard || fromLive || '—';
+  }
+
   async function createToken(event) {
     event.preventDefault(); busy = true; error = ''; createdToken = '';
     try {
@@ -52,24 +79,53 @@
     try { await logout(); } catch (problem) { error = problem.message; }
   }
 
-  onMount(load);
+  onMount(() => {
+    load();
+    loadOperatorPhones();
+  });
 </script>
 
-<div class="h-dvh overflow-auto bg-gray-50 dark:bg-zinc-900 text-gray-900 dark:text-gray-100">
-  <header class="flex flex-wrap items-center justify-between gap-4 border-b border-gray-200 dark:border-zinc-700 px-5 py-4">
-    <div class="flex min-w-0 items-center gap-3"><img src={appLogo} alt="" class="w-9 h-9 shrink-0 object-contain" /><h1 class="text-lg font-semibold">{$t('sim_dashboard_title')}</h1></div>
-    <div class="flex flex-wrap items-center gap-3 text-sm"><span class="break-all">{$user?.username}</span>
-      {#if $user?.is_admin || ($user?.rentals ?? []).some((rental) => (rental.permissions ?? []).includes('sms:read') || (rental.permissions ?? []).includes('sms:send'))}<button onclick={onDashboard} class="rounded border px-3 py-2">Dashboard</button>{/if}
-      <button onclick={signOut} title="Sign out" aria-label="Sign out" class="p-2 rounded hover:bg-gray-200 dark:hover:bg-zinc-800"><Icon icon="carbon:logout" width="20" /></button>
+<div class="flex flex-col h-dvh w-screen bg-gray-50 dark:bg-zinc-950 text-sm font-sans">
+  <header class="flex items-center justify-between gap-3 px-4 py-3 bg-white dark:bg-zinc-900 border-b border-gray-200 dark:border-zinc-800 shadow-sm shrink-0">
+    <div class="flex min-w-0 items-center gap-3">
+      <button
+        onclick={onDashboard}
+        class="inline-flex items-center gap-1.5 h-9 px-2.5 rounded-full bg-blue-600 text-white
+               shadow-sm shadow-blue-600/30 hover:bg-blue-700 transition"
+        aria-label={$t('btn_back')}
+      >
+        <Icon icon="carbon:arrow-left" class="w-4 h-4" />
+        <span class="text-xs font-semibold">{$t('btn_back')}</span>
+      </button>
+      <Icon icon="carbon:catalog" class="w-5 h-5 text-gray-500 dark:text-gray-400" />
+      <h1 class="text-base font-semibold text-gray-800 dark:text-gray-100">{$t('rentals_title')}</h1>
+    </div>
+    <div class="flex shrink-0 items-center gap-2 text-sm">
+      <span class="hidden sm:inline max-w-48 truncate text-gray-600 dark:text-gray-300">{$user?.username}</span>
+      <button
+        onclick={initAuth}
+        title="Refresh rentals"
+        aria-label="Refresh rentals"
+        class="p-2 rounded hover:bg-gray-100 dark:hover:bg-zinc-800"
+      >
+        <Icon icon="carbon:renew" class="w-5 h-5" />
+      </button>
+      <button
+        onclick={signOut}
+        title={$t('btn_logout')}
+        aria-label={$t('btn_logout')}
+        class="p-2 rounded hover:bg-gray-100 dark:hover:bg-zinc-800"
+      >
+        <Icon icon="carbon:logout" class="w-5 h-5" />
+      </button>
     </div>
   </header>
-  <main class="max-w-6xl mx-auto p-5 space-y-8">
+  <main class="flex-1 overflow-auto p-5 space-y-8">
     {#if error}<p role="alert" class="text-sm text-red-600 break-words">{error}</p>{/if}
     <section>
-      <div class="flex items-center justify-between gap-3 mb-4"><h2 class="text-xl font-semibold">My Rentals</h2><button onclick={initAuth} title="Refresh rentals" aria-label="Refresh rentals" class="p-2"><Icon icon="carbon:renew" width="20" /></button></div>
       <div class="overflow-x-auto"><table class="w-full text-left text-sm border-collapse">
         <thead class="border-b dark:border-zinc-700 text-gray-500"><tr><th class="p-3">Client</th><th class="p-3">Physical Mapping</th><th class="p-3">Expires</th><th class="p-3">MSISDN</th><th class="p-3">Permissions</th></tr></thead><tbody>
-          {#each $user?.rentals ?? [] as rental (rental.id)}<tr class="border-b dark:border-zinc-700"><td class="p-3 whitespace-nowrap">{displayPort(rental.com_port)}</td><td class="p-3 whitespace-nowrap">B{rental.bank_id}:{rental.bank_slot} &#8594; C{rental.client_id}:{rental.client_slot}</td><td class="p-3 whitespace-nowrap">{new Date(rental.expires_at).toLocaleString()}</td><td class="p-3 min-w-64"><MsisdnEditor {rental} /></td><td class="p-3 min-w-48">{rental.permissions.join(', ')}</td></tr>
+          {#each $user?.rentals ?? [] as rental (rental.id)}<tr class="border-b dark:border-zinc-700"><td class="p-3 whitespace-nowrap">{displayPort(rental.com_port)}</td><td class="p-3 whitespace-nowrap">B{rental.bank_id}:{rental.bank_slot} &#8594; C{rental.client_id}:{rental.client_slot}</td><td class="p-3 whitespace-nowrap">{new Date(rental.expires_at).toLocaleString()}</td><td class="p-3 font-mono whitespace-nowrap">{operatorMsisdn(rental)}</td><td class="p-3 min-w-48">{rental.permissions.join(', ')}</td></tr>
           {:else}<tr><td colspan="5" class="p-5 text-gray-500">No active rentals.</td></tr>{/each}
         </tbody></table></div>
       <button onclick={onManage} disabled={!$user?.rentals?.length} class="mt-4 inline-flex items-center gap-2 rounded bg-emerald-700 text-white px-4 py-2 disabled:opacity-40"><Icon icon="carbon:chip" width="18" />Manage eSIMs</button>

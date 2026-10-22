@@ -1,7 +1,7 @@
 import { writable } from 'svelte/store';
 export const user = writable(null);
 export const isAuthenticated = writable(false);
-export const isAuthLoading = writable(true);
+export const isAuthLoading = writable(false);
 
 function signedOut() {
     user.set(null);
@@ -14,16 +14,21 @@ function signedOut() {
 window.addEventListener('gateway-auth-expired', signedOut);
 
 export async function initAuth() {
-    isAuthLoading.set(true);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 2500);
     try {
-        const response = await fetch('/api/auth/me', { credentials: 'same-origin', cache: 'no-store' });
+        const response = await fetch('/api/auth/me', {
+            credentials: 'same-origin',
+            cache: 'no-store',
+            signal: controller.signal,
+        });
         if (!response.ok) throw new Error('Session unavailable');
         user.set(await response.json());
         isAuthenticated.set(true);
     } catch {
         signedOut();
     } finally {
-        isAuthLoading.set(false);
+        clearTimeout(timer);
     }
 }
 

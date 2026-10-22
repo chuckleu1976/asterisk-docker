@@ -37,6 +37,18 @@ ACTOR = ContextVar("gateway_actor", default=None)
 ACTIVE_OPERATION = ContextVar("rental_operation", default=None)
 
 
+def _normalize_port(port):
+    value = str(port or "").strip().lower()
+    if value in ("asterisk", "com1"):
+        return "asterisk1"
+    if value.startswith("asterisk"):
+        return value if value != "asterisk" else "asterisk1"
+    if value.startswith("com"):
+        rest = value[3:]
+        return "asterisk1" if rest in ("", "1") else f"asterisk{rest}"
+    return value
+
+
 class RentalHardware:
     def __init__(self, worker, runner):
         self.worker, self.runner = worker, runner
@@ -248,8 +260,8 @@ class Worker:
         if identity is None:
             raise OperationError("Rental authority unavailable", 503)
         for rental in identity["context"]["rentals"]:
-            if (rental["com_port"], rental["bank_id"], rental["bank_slot"], rental["client_id"], rental["client_slot"]) == (
-                    target.com_port, target.bank_id, target.slot_nr, target.client_id, target.client_slot_nr):
+            if (_normalize_port(rental.get("com_port")), rental["bank_id"], rental["bank_slot"], rental["client_id"], rental["client_slot"]) == (
+                    _normalize_port(target.com_port), target.bank_id, target.slot_nr, target.client_id, target.client_slot_nr):
                 if action not in rental["permissions"]:
                     raise OperationError("Operation is not permitted by this rental or API token", 403)
                 return rental

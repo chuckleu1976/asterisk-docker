@@ -809,10 +809,13 @@ async fn static_handler(uri: axum::http::Uri) -> impl IntoResponse {
     match Asset::get(path) {
         Some(content) => {
             let mime = from_path(path).first_or_octet_stream();
-            Response::builder()
-                .header(header::CONTENT_TYPE, mime.as_ref())
-                .body(content.data.into())
-                .unwrap()
+            let mut builder = Response::builder().header(header::CONTENT_TYPE, mime.as_ref());
+            if path.starts_with("assets/") {
+                builder = builder.header(header::CACHE_CONTROL, "public, max-age=31536000, immutable");
+            } else {
+                builder = builder.header(header::CACHE_CONTROL, "no-cache");
+            }
+            builder.body(content.data.into()).unwrap()
         }
         None => {
             if let Some(index) = Asset::get("index.html") {

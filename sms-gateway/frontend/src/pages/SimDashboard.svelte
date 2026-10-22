@@ -4,7 +4,7 @@
   import { apiClient } from '../js/api.js';
   import pkg from '../../package.json';
   import appLogo from '../../../icon/cow.png';
-  import { displayPort, getModuleLabel } from '../js/modem.js';
+  import { displayPort, getModuleLabel, normalizePort } from '../js/modem.js';
   import { t, lang } from '../js/i18n.js';
   import { getMccCountry } from '../js/country.js';
 
@@ -20,8 +20,7 @@
   let selected   = $state(new Set());
   let lastClickedRowIndex = $state(null);
   let hoveredRow = $state(null);
-  let showOperatorColumn = $state(true);
-  let visibleDataColumnCount = $derived(showOperatorColumn ? 12 : 11);
+  const visibleDataColumnCount = 12;
 
   // ── Network status map ────────────────────────────────────────────────────
   const netStatusKeys = {
@@ -126,9 +125,9 @@
         apiClient.remoteSimTargets().catch(() => null),
       ]);
       const targets = targetsRes?.data?.data ?? [];
-      const byPort = new Map(targets.map(target => [target.com_port, target]));
+      const byPort = new Map(targets.map(target => [normalizePort(target.com_port), target]));
       simsInfo = (Array.isArray(infoRes) ? infoRes : (infoRes?.data ?? []))
-        .map(info => ({ ...info, remote_sim: byPort.get(info.com_port) }));
+        .map(info => ({ ...info, remote_sim: byPort.get(normalizePort(info.com_port)) }));
       simCards  = Array.isArray(cardsRes) ? cardsRes : (cardsRes?.data ?? []);
       simStats  = Array.isArray(statsRes) ? statsRes : (statsRes?.data ?? []);
     } catch (e) {
@@ -223,7 +222,16 @@
     </div>
 
     <div class="flex min-w-0 max-w-full items-center gap-2 overflow-x-auto whitespace-nowrap [&>button]:shrink-0">
-      <button onclick={onNavigateAccount} title="Account and API tokens" aria-label="Account and API tokens" class="p-2 rounded hover:bg-gray-100 dark:hover:bg-zinc-800"><Icon icon="carbon:user" class="w-5 h-5" /></button>
+      <button
+        onclick={onNavigateAccount}
+        class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
+               border border-gray-200 dark:border-zinc-700
+               text-gray-600 dark:text-gray-300
+               hover:bg-gray-50 dark:hover:bg-zinc-800 transition"
+      >
+        <Icon icon="carbon:catalog" class="w-4 h-4" />
+        {$t('btn_rentals')}
+      </button>
       <button
         onclick={() => onNavigatePhoneNumber()}
         class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
@@ -314,17 +322,6 @@
         <Icon icon="carbon:refresh" class="w-4 h-4" />
         {$t('btn_refresh')}
       </button>
-      <button
-        onclick={() => { showOperatorColumn = !showOperatorColumn; }}
-        class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
-               border border-gray-200 dark:border-zinc-700
-               text-gray-600 dark:text-gray-300
-               hover:bg-gray-50 dark:hover:bg-zinc-800 transition"
-        title={showOperatorColumn ? $t('hide_operator_column') : $t('show_operator_column')}
-      >
-        <Icon icon={showOperatorColumn ? 'carbon:chevron-left' : 'carbon:chevron-right'} class="w-4 h-4" />
-        {showOperatorColumn ? $t('hide_operator_column') : $t('show_operator_column')}
-      </button>
     </div>
   </header>
 
@@ -340,7 +337,7 @@
     {:else}
       <table
         class="w-full border-collapse table-fixed text-xs [&_th]:overflow-hidden [&_td]:overflow-hidden"
-        style:min-width={showOperatorColumn ? '1450px' : '1330px'}
+        style:min-width="1450px"
       >
         <colgroup>
           <col style="width: 48px" />
@@ -349,9 +346,7 @@
           <col style="width: 160px" />
           <col style="width: 116px" />
           <col style="width: 158px" />
-          {#if showOperatorColumn}
-            <col style="width: 120px" />
-          {/if}
+          <col style="width: 120px" />
           <col style="width: 92px" />
           <col style="width: 92px" />
           <col style="width: 72px" />
@@ -381,12 +376,10 @@
                 {col}
               </th>
             {/each}
-            {#if showOperatorColumn}
-              <th class="px-3 py-2.5 text-left font-semibold text-gray-600 dark:text-gray-300
-                         border-b border-gray-200 dark:border-zinc-700 whitespace-nowrap">
-                {$t('col_operator')}
-              </th>
-            {/if}
+            <th class="px-3 py-2.5 text-left font-semibold text-gray-600 dark:text-gray-300
+                       border-b border-gray-200 dark:border-zinc-700 whitespace-nowrap">
+              {$t('col_operator')}
+            </th>
             {#each [$t('col_country'),$t('col_platform'),$t('col_sms'),'ICCID','IMSI','IMEI'] as col}
               <th class="px-3 py-2.5 text-left font-semibold text-gray-600 dark:text-gray-300
                          border-b border-gray-200 dark:border-zinc-700 whitespace-nowrap">
@@ -501,15 +494,13 @@
                 </td>
 
                 <!-- Operator -->
-                {#if showOperatorColumn}
-                  <td class="px-3 py-2.5 text-gray-700 dark:text-gray-200 whitespace-nowrap">
-                    {#if info.available === false}
-                      <span class="text-gray-400">—</span>
-                    {:else}
-                      {info.operator_info?.operator_name ?? '—'}
-                    {/if}
-                  </td>
-                {/if}
+                <td class="px-3 py-2.5 text-gray-700 dark:text-gray-200 whitespace-nowrap">
+                  {#if info.available === false}
+                    <span class="text-gray-400">—</span>
+                  {:else}
+                    {info.operator_info?.operator_name ?? '—'}
+                  {/if}
+                </td>
 
                 <!-- Country -->
                 <td class="px-3 py-2.5 text-gray-700 dark:text-gray-200 whitespace-nowrap">

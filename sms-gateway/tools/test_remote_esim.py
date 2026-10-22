@@ -158,6 +158,22 @@ class RemoteEsimTests(unittest.TestCase):
         self.worker.management = Mock()
         return context
 
+    def test_customer_inventory_matches_asterisk_and_asterisk1_ports(self):
+        context = self.tenant()
+        context["rentals"][0].update({"com_port": "asterisk", "bank_slot": 0, "client_id": 0, "client_slot": 0})
+        self.worker.targets = [Target("bank1-slot0", "asterisk1", 1, 0, 0, 0, "reader")]
+        self.worker.mappings = Mock(return_value=[{
+            "bank": {"bankId": 1, "slotNr": 0},
+            "client": {"clientId": 0, "slotNr": 0},
+            "state": "ACTIVE",
+        }])
+        rows = self.worker.inventory()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["com_port"], "asterisk1")
+        self.assertEqual(rows[0]["slot_label"], "Bank 1 / Slot 0")
+        self.assertEqual(rows[0]["mapping_label"], "B1:0 -> C0:0")
+        self.assertEqual(rows[0]["state"], "ACTIVE")
+
     def test_customer_inventory_hides_unallocated_targets_and_private_reader(self):
         context = self.tenant()
         self.assertNotIn("reader", self.worker.inventory()[0])

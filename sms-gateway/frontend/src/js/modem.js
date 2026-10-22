@@ -8,6 +8,18 @@ export function displayPort(name) {
     return raw;
 }
 
+/** Join rental/worker/modem labels such as asterisk and asterisk1. */
+export function normalizePort(name) {
+    const raw = String(name ?? '').trim().toLowerCase();
+    if (!raw) return '';
+    if (raw === 'asterisk' || raw === 'com1') return 'asterisk1';
+    const asterisk = raw.match(/^asterisk(\d+)$/);
+    if (asterisk) return `asterisk${asterisk[1]}`;
+    const com = raw.match(/^com(\d+)$/);
+    if (com) return com[1] === '1' ? 'asterisk1' : `asterisk${com[1]}`;
+    return raw;
+}
+
 export function getModuleLabel(model) {
     if (!model) return '—';
     const normalized = String(model).trim().toUpperCase();

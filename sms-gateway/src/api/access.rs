@@ -146,6 +146,11 @@ fn customer_route(path: &str, identity: &Identity) -> bool {
             || path.starts_with("/api/conversations")
             || path == "/api/contacts"
             || path.starts_with("/api/contacts/")
+            || path.starts_with("/api/firefox")
+            || path == "/api/settings/firefox-api-key"
+            || path.starts_with("/api/phone-numbers")
+            || path.starts_with("/api/mms")
+            || path.starts_with("/api/tg2sip")
     )
 }
 
@@ -407,6 +412,11 @@ mod tests {
         assert_eq!(client.get(format!("{base}/api/sim-cards")).bearer_auth("sgs_test").send().await.unwrap().status(), StatusCode::OK);
         assert_eq!(client.get(format!("{base}/api/sims/stats")).bearer_auth("sgs_test").send().await.unwrap().status(), StatusCode::OK);
         assert_eq!(client.post(format!("{base}/api/calls/make")).bearer_auth("sgs_test").send().await.unwrap().status(), StatusCode::OK);
+        assert_eq!(client.get(format!("{base}/api/firefox/countries")).bearer_auth("sgs_test").send().await.unwrap().status(), StatusCode::OK);
+        assert_eq!(client.get(format!("{base}/api/settings/firefox-api-key")).bearer_auth("sgs_test").send().await.unwrap().status(), StatusCode::OK);
+        assert_eq!(client.get(format!("{base}/api/phone-numbers/status")).bearer_auth("sgs_test").send().await.unwrap().status(), StatusCode::OK);
+        assert_eq!(client.get(format!("{base}/api/mms")).bearer_auth("sgs_test").send().await.unwrap().status(), StatusCode::OK);
+        assert_eq!(client.get(format!("{base}/api/tg2sip")).bearer_auth("sgs_test").send().await.unwrap().status(), StatusCode::OK);
         assert_eq!(client.get(format!("{base}/api/readers")).bearer_auth("sgs_test").send().await.unwrap().status(), StatusCode::FORBIDDEN);
         gateway_task.abort(); authority_task.abort();
     }

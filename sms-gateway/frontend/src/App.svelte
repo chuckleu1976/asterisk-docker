@@ -16,7 +16,7 @@
   import TelegramPage from "./pages/TelegramPage.svelte";
   import Login from "./pages/Login.svelte";
   import Account from "./pages/Account.svelte";
-  import { user, isAuthenticated, isAuthLoading } from "./stores/auth.js";
+  import { user, isAuthenticated } from "./stores/auth.js";
 
   /** @type {'sim' | 'messages' | 'calllog' | 'simcards' | 'platform' | 'phonenumber' | 'platform-stats' | 'money' | 'mms' | 'esim' | 'telegram' | 'account'} */
   let currentPage = $state('sim');
@@ -80,11 +80,14 @@
   }
 
   function backFromEsim() {
-    currentPage = $user?.is_admin ? 'phonenumber' : 'account';
+    currentPage = 'sim';
   }
 
+  let lastAuthKey = null;
   $effect(() => {
-    if ($user) currentPage = $user.is_admin ? 'sim' : 'account';
+    const key = $user ? ($user.id ?? $user.username ?? 'session') : null;
+    if (key && key !== lastAuthKey) currentPage = 'sim';
+    lastAuthKey = key;
   });
 
   $effect(() => {
@@ -102,9 +105,7 @@
 <div class="app-container">
   <div class="h-dvh w-screen overflow-hidden">
 
-    {#if $isAuthLoading}
-      <div class="h-dvh flex items-center justify-center text-gray-500" role="status">Loading...</div>
-    {:else if !$isAuthenticated}
+    {#if !$isAuthenticated}
       <Login />
     {:else if currentPage === 'account'}
       <Account onManage={goToEsim} onDashboard={goToSim} />
