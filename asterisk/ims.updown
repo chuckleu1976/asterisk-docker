@@ -11,7 +11,7 @@ up-client-v6:)
         RETRY=0
         while [ -z "$PCSCF_IP" ] && [ $RETRY -lt 10 ]; do
             PCSCF_IP=$(grep "received P-CSCF server IP" /var/log/strongswan-pcscf.log 2>/dev/null \
-                | tail -3 | head -1 \
+                | tail -1 \
                 | sed -E 's/.*received P-CSCF server IP ([0-9a-f:]+).*/\1/')
             [ -z "$PCSCF_IP" ] && sleep 2
             RETRY=$((RETRY + 2))

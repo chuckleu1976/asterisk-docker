@@ -84,16 +84,24 @@ ipsec start
 sleep 2
 swanctl --load-creds && swanctl --load-conns
 
-# Power-cycle every SIM via pcscd before IKE initiation.
-# strongSwan eap-sim-pcsc talks to the SIM directly via pcsc-lite during
-# IKE_AUTH (EAP-AKA exchange with the ePDG). A card left in the wrong
-# AID/EF state causes the AKA challenge to fail, delaying tunnel setup by
-# multiple retry cycles (exponential backoff: 4, 8, 16... s).
-echo "Resetting SIM card state before IKE initiation..."
+# Power-cycle only this container's SIM before IKE initiation.
+# Resetting every PC/SC reader also interrupts sibling asterisk instances
+# that share the pcscd PID namespace and can drop their IMS registration.
+echo "Resetting this instance's SIM before IKE initiation..."
 python3 - <<'PYRESET' || true
+import pathlib
 from smartcard.System import readers
 from smartcard.CardConnection import CardConnection
+host = pathlib.Path("/etc/hostname").read_text().strip()
+n = host[len("asterisk"):] if host.startswith("asterisk") else "1"
+try:
+    idx = max(int(n or "1") - 1, 0)
+except ValueError:
+    idx = 0
+target = f"osmo-remsim-{idx}"
 for i, r in enumerate(readers()):
+    if target not in str(r):
+        continue
     try:
         c = r.createConnection()
         c.connect()
@@ -140,12 +148,17 @@ fi
             fails=0
             continue
         fi
+        # An in-progress IKE_SA_INIT can take longer than three 10s
+        # checks. Re-initiating here aborts it and it never completes.
+        if echo "$status" | grep -q CONNECTING; then
+            continue
+        fi
         fails=$((fails + 1))
         if [ "$fails" -lt 3 ]; then
             continue
         fi
         echo "Restarting ims after ${fails} failed checks, backoff=$backoff"
-        if timeout -k 2 30 swanctl --initiate --child ims; then
+        if timeout -k 2 90 swanctl --initiate --child ims; then
             backoff=4
             fails=0
         else
