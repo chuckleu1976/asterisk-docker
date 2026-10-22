@@ -94,15 +94,12 @@ class ApiClient {
      * @param {object} contact - Target phone number
      * @param {string} message - SMS content
      * @param {boolean} new_message - Whether to send a new message
-     * @param {'pdu'|'text'} [smsFormat='pdu'] - SMS modem send format
      */
     async sendSms(
         simId,
         contact,
         message,
-        new_message,
-        smsFormat = 'pdu',
-        statusReportEnabled = false
+        new_message
     ) {
         const normalized = typeof contact === 'string'
             ? { id: contact, name: contact }
@@ -112,8 +109,6 @@ class ApiClient {
             contact: normalized,
             message,
             new: new_message,
-            sms_format: smsFormat,
-            status_report_enabled: statusReportEnabled,
         };
         return FetchApi.post('/api/sms', payload)
     }
@@ -412,87 +407,6 @@ class ApiClient {
      */
     async getFirefoxPlatformRejectionReasons() {
         return FetchApi.get('/api/firefox/platform-rejection-reasons');
-    }
-
-    // ── MMS (EC20/EC25 via AT+QMMSEDIT/AT+QMMSEND) ──────────────────────────
-
-    /**
-     * Enqueue a new MMS send job. Returns { id, status: "queued" } immediately;
-     * the actual send happens asynchronously in the background worker.
-     * @param {{sim_id: string, to: string, subject?: string, attachments?: {filename: string, content_type?: string, base64: string}[]}} payload
-     */
-    async sendMms(payload) {
-        return FetchApi.post('/api/mms', payload);
-    }
-
-    /**
-     * Get paginated MMS job history.
-     * @param {number} [page=1]
-     * @param {number} [perPage=20]
-     */
-    async getMmsPaginated(page = 1, perPage = 20) {
-        return FetchApi.get('/api/mms', { page, per_page: perPage });
-    }
-
-    /**
-     * Get a single MMS job with its attachment metadata.
-     * @param {string} id
-     */
-    async getMmsDetail(id) {
-        return FetchApi.get(`/api/mms/${id}`);
-    }
-
-    /**
-     * Get the stored MMS network profile (APN/MMSC/proxy) for a SIM card.
-     * @param {string} simId
-     */
-    async getMmsProfile(simId) {
-        return FetchApi.get(`/api/sim-cards/${simId}/mms-profile`);
-    }
-
-    /**
-     * Update the MMS network profile for a SIM card.
-     * @param {string} simId
-     * @param {{apn?: string, mmsc?: string, proxy_host?: string, proxy_port?: number}} payload
-     */
-    async setMmsProfile(simId, payload) {
-        return FetchApi.put(`/api/sim-cards/${simId}/mms-profile`, payload, {}, 'application/json');
-    }
-
-    /**
-     * Get paginated MMS inbox notifications (phase 1: detected WAP-push
-     * notifications; content fetch/decode is a later phase, so status will
-     * read "notified" for now).
-     * @param {number} [page=1]
-     * @param {number} [perPage=20]
-     */
-    async getMmsInboxPaginated(page = 1, perPage = 20) {
-        return FetchApi.get('/api/mms/inbox', { page, per_page: perPage });
-    }
-
-    /**
-     * Get a single MMS inbox notification.
-     * @param {string} id
-     */
-    async getMmsInboxDetail(id) {
-        return FetchApi.get(`/api/mms/inbox/${id}`);
-    }
-
-    /**
-     * Fetch a decoded MMS inbox part's raw bytes as a Blob (image, SMIL, text, ...).
-     * Uses a plain authenticated fetch rather than FetchApi since the response
-     * body is binary, not JSON.
-     * @param {string} inboxId
-     * @param {string} partId
-     * @returns {Promise<Blob>}
-     */
-    async getMmsInboxPartBlob(inboxId, partId) {
-        const headers = buildBasicAuthHeader();
-        const response = await fetch(`/api/mms/inbox/${inboxId}/parts/${partId}`, { headers });
-        if (!response.ok) {
-            throw new Error(`Failed to fetch MMS part (${response.status})`);
-        }
-        return response.blob();
     }
 
     // ── eSIM management ──────────────────────────────────────────────────────

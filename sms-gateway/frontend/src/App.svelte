@@ -11,14 +11,13 @@
   import PhoneNumberPage from "./pages/PhoneNumberPage.svelte";
   import PlatformStatisticsPage from "./pages/PlatformStatisticsPage.svelte";
   import MoneyPage from "./pages/MoneyPage.svelte";
-  import MmsPage from "./pages/MmsPage.svelte";
   import EsimPage from "./pages/EsimPage.svelte";
   import TelegramPage from "./pages/TelegramPage.svelte";
   import Login from "./pages/Login.svelte";
   import Account from "./pages/Account.svelte";
   import { user, isAuthenticated } from "./stores/auth.js";
 
-  /** @type {'sim' | 'messages' | 'calllog' | 'simcards' | 'platform' | 'phonenumber' | 'platform-stats' | 'money' | 'mms' | 'esim' | 'telegram' | 'account'} */
+  /** @type {'sim' | 'messages' | 'calllog' | 'simcards' | 'platform' | 'phonenumber' | 'platform-stats' | 'money' | 'esim' | 'telegram' | 'account'} */
   let currentPage = $state('sim');
   let filterSimId = $state(null);
 
@@ -52,11 +51,6 @@
 
   function goToMoney() {
     currentPage = 'money';
-  }
-
-  function goToMms(simId) {
-    filterSimId = simId;
-    currentPage = 'mms';
   }
 
   function goToPhoneNumber() {
@@ -119,7 +113,6 @@
           onNavigatePhoneNumber={goToPhoneNumber}
           onNavigatePlatformStats={goToPlatformStats}
           onNavigateMoney={goToMoney}
-          onNavigateMms={goToMms}
           onNavigateTelegram={goToTelegram}
           onNavigateAccount={() => currentPage = 'account'}
         />
@@ -153,11 +146,6 @@
     {:else if currentPage === 'money'}
       <div in:fly={{ x: 40, duration: 350, easing: quartOut }} out:fly={{ x: 40, duration: 250, easing: quartOut }}>
         <MoneyPage onBack={goToSim} />
-      </div>
-
-    {:else if currentPage === 'mms'}
-      <div in:fly={{ x: 40, duration: 350, easing: quartOut }} out:fly={{ x: 40, duration: 250, easing: quartOut }}>
-        <MmsPage onBack={goToSim} initialSimId={filterSimId} />
       </div>
 
     {:else if currentPage === 'phonenumber'}

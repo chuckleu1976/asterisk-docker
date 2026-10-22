@@ -75,27 +75,6 @@
   function getOutgoingStatusMeta(msg) {
     if (!msg?.send) return null;
 
-    if (msg.status_report_requested) {
-      if (msg.delivery_status === 1) {
-        return {
-          label: $t('sms_delivery_delivered'),
-          toneClass: 'text-emerald-600 dark:text-emerald-400',
-        };
-      }
-
-      if (msg.delivery_status === 2 || msg.status === SmsStatus.Failed) {
-        return {
-          label: $t('sms_delivery_failed'),
-          toneClass: 'text-red-600 dark:text-red-400',
-        };
-      }
-
-      return {
-        label: $t('sms_delivery_pending_report'),
-        toneClass: 'text-amber-600 dark:text-amber-400',
-      };
-    }
-
     if (msg.status === SmsStatus.Loading) {
       return {
         label: $t('sms_delivery_sending'),
