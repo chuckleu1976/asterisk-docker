@@ -131,43 +131,15 @@ else
     echo "P-CSCF ready after ${WAIT}s: $PCSCF, starting asterisk"
 fi
 
-# Watchdog starts only after bring-up. swanctl --list-sas can hang on vici;
-# ipsec status is short and may not include ESTABLISHED. Treat command
-# timeouts as unknown (do not re-initiate). Require a few clear misses
-# before restarting so we do not thrash a live SA.
-(
-    trap 'exit 0' TERM INT
-    backoff=4
-    fails=0
-    while true; do
-        sleep 10
-        if ! status=$(timeout -k 1 5 ipsec statusall 2>/dev/null); then
-            continue
-        fi
-        if echo "$status" | grep -q ESTABLISHED; then
-            fails=0
-            continue
-        fi
-        # An in-progress IKE_SA_INIT can take longer than three 10s
-        # checks. Re-initiating here aborts it and it never completes.
-        if echo "$status" | grep -q CONNECTING; then
-            continue
-        fi
-        fails=$((fails + 1))
-        if [ "$fails" -lt 3 ]; then
-            continue
-        fi
-        echo "Restarting ims after ${fails} failed checks, backoff=$backoff"
-        if timeout -k 2 90 swanctl --initiate --child ims; then
-            backoff=4
-            fails=0
-        else
-            sleep $backoff
-            backoff=$((backoff * 2 + (RANDOM & 1)))
-        fi
-    done
-) &
-LOOP_PID=$!
+# Watch IPsec and IMS registration for this COM line.
+KEEP_IMS=/usr/local/bin/keep_ims.sh
+if [ -f "$KEEP_IMS" ]; then
+    echo "Starting IMS registration watchdog"
+    sh "$KEEP_IMS" &
+    LOOP_PID=$!
+else
+    echo "Warning: $KEEP_IMS missing - IPsec/IMS will not be watched"
+fi
 
 python3 /usr/local/bin/ami_usim.py /usr/local/etc/ami_usim.ini &
 AMI_PID=$!

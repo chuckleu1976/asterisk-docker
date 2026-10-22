@@ -50,6 +50,7 @@ services:
       - ./sim_inventory.db:/data/sim_inventory.db:Z
       - pcsc-sock:/run/pcscd
       - ./asterisk/entrypoint.sh:/entrypoint.sh:ro
+      - ./asterisk/keep_ims.sh:/usr/local/bin/keep_ims.sh:ro
     pid: service:pcscd
     depends_on: [pcscd]
     healthcheck:
@@ -90,6 +91,7 @@ services:
       - ./sim_inventory.db:/data/sim_inventory.db:Z
       - pcsc-sock:/run/pcscd
       - ./asterisk/entrypoint.sh:/entrypoint.sh:ro
+      - ./asterisk/keep_ims.sh:/usr/local/bin/keep_ims.sh:ro
     pid: service:pcscd
     depends_on: [pcscd]
     healthcheck:
@@ -130,6 +132,7 @@ services:
       - ./sim_inventory.db:/data/sim_inventory.db:Z
       - pcsc-sock:/run/pcscd
       - ./asterisk/entrypoint.sh:/entrypoint.sh:ro
+      - ./asterisk/keep_ims.sh:/usr/local/bin/keep_ims.sh:ro
     pid: service:pcscd
     depends_on: [pcscd]
     healthcheck:
@@ -170,6 +173,7 @@ services:
       - ./sim_inventory.db:/data/sim_inventory.db:Z
       - pcsc-sock:/run/pcscd
       - ./asterisk/entrypoint.sh:/entrypoint.sh:ro
+      - ./asterisk/keep_ims.sh:/usr/local/bin/keep_ims.sh:ro
     pid: service:pcscd
     depends_on: [pcscd]
     healthcheck:
@@ -210,6 +214,7 @@ services:
       - ./sim_inventory.db:/data/sim_inventory.db:Z
       - pcsc-sock:/run/pcscd
       - ./asterisk/entrypoint.sh:/entrypoint.sh:ro
+      - ./asterisk/keep_ims.sh:/usr/local/bin/keep_ims.sh:ro
     pid: service:pcscd
     depends_on: [pcscd]
     healthcheck:
@@ -250,6 +255,7 @@ services:
       - ./sim_inventory.db:/data/sim_inventory.db:Z
       - pcsc-sock:/run/pcscd
       - ./asterisk/entrypoint.sh:/entrypoint.sh:ro
+      - ./asterisk/keep_ims.sh:/usr/local/bin/keep_ims.sh:ro
     pid: service:pcscd
     depends_on: [pcscd]
     healthcheck:
@@ -290,6 +296,7 @@ services:
       - ./sim_inventory.db:/data/sim_inventory.db:Z
       - pcsc-sock:/run/pcscd
       - ./asterisk/entrypoint.sh:/entrypoint.sh:ro
+      - ./asterisk/keep_ims.sh:/usr/local/bin/keep_ims.sh:ro
     pid: service:pcscd
     depends_on: [pcscd]
     healthcheck:
@@ -330,6 +337,7 @@ services:
       - ./sim_inventory.db:/data/sim_inventory.db:Z
       - pcsc-sock:/run/pcscd
       - ./asterisk/entrypoint.sh:/entrypoint.sh:ro
+      - ./asterisk/keep_ims.sh:/usr/local/bin/keep_ims.sh:ro
     pid: service:pcscd
     depends_on: [pcscd]
     healthcheck:

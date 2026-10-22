@@ -50,12 +50,12 @@ up-client-v6:)
         while [ $RETRY_REG -lt 5 ]; do
             rasterisk -x "pjsip send register volte_ims" >/dev/null 2>&1
             sleep 5
-            REG_STATUS=$(rasterisk -x "pjsip show registrations" 2>/dev/null | grep volte_ims | awk '{print $NF}')
-            if [ "$REG_STATUS" = "Registered" ]; then
+            REG_LINE=$(rasterisk -x "pjsip show registrations" 2>/dev/null | grep volte_ims | tr -d '\r')
+            if echo "$REG_LINE" | grep -q Registered; then
                 echo "Registration succeeded (attempt $((RETRY_REG + 1)))"
                 break
             fi
-            echo "Registration not yet Registered (attempt $((RETRY_REG + 1)), status=$REG_STATUS) - retrying"
+            echo "Registration not yet Registered (attempt $((RETRY_REG + 1)), status=$REG_LINE) - retrying"
             RETRY_REG=$((RETRY_REG + 1))
         done
         ;;

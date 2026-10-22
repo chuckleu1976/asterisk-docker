@@ -400,6 +400,7 @@ def _patch_instance(svc):
     for src, dst in [
         ("asterisk/ami_usim.py",    "/usr/local/bin/ami_usim.py"),
         ("asterisk/ims.updown",     "/usr/local/etc/ims.updown"),
+        ("asterisk/keep_ims.sh",    "/usr/local/bin/keep_ims.sh"),
         ("asterisk/entrypoint.sh",  "/entrypoint.sh"),
     ]:
         r = docker_compose("cp", src, f"{svc}:{dst}")

@@ -275,6 +275,7 @@ def generate_compose(devices):
             f"      - ./sim_inventory.db:/data/sim_inventory.db:Z",
             f"      - pcsc-sock:/run/pcscd",
             f"      - ./asterisk/entrypoint.sh:/entrypoint.sh:ro",
+            f"      - ./asterisk/keep_ims.sh:/usr/local/bin/keep_ims.sh:ro",
             f"    pid: service:pcscd",
             f"    depends_on: [pcscd]",
             f"    healthcheck:",
