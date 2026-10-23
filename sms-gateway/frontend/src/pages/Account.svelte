@@ -123,21 +123,21 @@
     {#if error}<p role="alert" class="text-sm text-red-600 break-words">{error}</p>{/if}
     <section>
       <div class="overflow-x-auto"><table class="w-full text-left text-sm border-collapse">
-        <thead class="border-b dark:border-zinc-700 text-gray-500"><tr><th class="p-3">Client</th><th class="p-3">Physical Mapping</th><th class="p-3">Expires</th><th class="p-3">MSISDN</th></tr></thead><tbody>
+        <thead class="border-b dark:border-zinc-700 text-gray-500"><tr><th class="p-3">Client</th><th class="p-3">{$t('rentals_col_mapping')}</th><th class="p-3">{$t('rentals_col_expires')}</th><th class="p-3">{$t('rentals_col_msisdn')}</th></tr></thead><tbody>
           {#each $user?.rentals ?? [] as rental (rental.id)}<tr class="border-b dark:border-zinc-700"><td class="p-3 whitespace-nowrap">{displayPort(rental.com_port)}</td><td class="p-3 whitespace-nowrap">B{rental.bank_id}:{rental.bank_slot} &#8594; C{rental.client_id}:{rental.client_slot}</td><td class="p-3 whitespace-nowrap">{new Date(rental.expires_at).toLocaleString()}</td><td class="p-3 font-mono whitespace-nowrap">{operatorMsisdn(rental)}</td></tr>
           {:else}<tr><td colspan="4" class="p-5 text-gray-500">No active rentals.</td></tr>{/each}
         </tbody></table></div>
-      <button onclick={onManage} disabled={!$user?.rentals?.length} class="mt-4 inline-flex items-center gap-2 rounded bg-emerald-700 text-white px-4 py-2 disabled:opacity-40"><Icon icon="carbon:chip" width="18" />Manage eSIMs</button>
+      <button onclick={onManage} disabled={!$user?.rentals?.length} class="mt-4 inline-flex items-center gap-2 rounded bg-emerald-700 text-white px-4 py-2 disabled:opacity-40"><Icon icon="carbon:chip" width="18" />{$t('rentals_manage_esim')}</button>
     </section>
     <section class="border-t dark:border-zinc-700 pt-6">
       <h2 class="text-xl font-semibold mb-4">API Tokens</h2>
       <form onsubmit={createToken} class="flex flex-wrap items-end gap-3">
-        <label class="flex flex-col gap-1 text-sm">Name<input bind:value={tokenName} maxlength="128" required class="rounded border bg-white dark:bg-zinc-800 px-3 py-2" /></label>
-        <label class="flex flex-col gap-1 text-sm">Expires<input type="datetime-local" bind:value={expiry} required class="rounded border bg-white dark:bg-zinc-800 px-3 py-2" /></label>
-        <button disabled={busy || !tokenPermissions.length} class="inline-flex items-center gap-2 rounded bg-gray-900 dark:bg-zinc-700 text-white px-3 py-2 disabled:opacity-40"><Icon icon="carbon:add" width="18" />Create Token</button>
+        <label class="flex flex-col gap-1 text-sm">{$t('tokens_col_name')}<input bind:value={tokenName} maxlength="128" required class="rounded border bg-white dark:bg-zinc-800 px-3 py-2" /></label>
+        <label class="flex flex-col gap-1 text-sm">{$t('rentals_col_expires')}<input type="datetime-local" bind:value={expiry} required class="rounded border bg-white dark:bg-zinc-800 px-3 py-2" /></label>
+        <button disabled={busy || !tokenPermissions.length} class="inline-flex items-center gap-2 rounded bg-gray-900 dark:bg-zinc-700 text-white px-3 py-2 disabled:opacity-40"><Icon icon="carbon:add" width="18" />{$t('tokens_create')}</button>
       </form>
       {#if createdToken}<label class="block mt-3 text-sm">New Token<input readonly type="text" value={createdToken} autocomplete="off" class="block w-full mt-1 rounded border px-3 py-2 bg-white dark:bg-zinc-800 font-mono" /></label><button onclick={() => createdToken = ''} class="mt-2 text-sm underline">Dismiss</button>{/if}
-      <div class="overflow-x-auto mt-4"><table class="w-full text-left text-sm"><thead class="border-b dark:border-zinc-700 text-gray-500"><tr><th class="p-3">Name</th><th class="p-3">Expires</th><th class="p-3">Status</th><th class="p-3">Actions</th></tr></thead><tbody>
+      <div class="overflow-x-auto mt-4"><table class="w-full text-left text-sm"><thead class="border-b dark:border-zinc-700 text-gray-500"><tr><th class="p-3">{$t('tokens_col_name')}</th><th class="p-3">{$t('rentals_col_expires')}</th><th class="p-3">{$t('col_status')}</th><th class="p-3">{$t('tokens_col_actions')}</th></tr></thead><tbody>
         {#each tokens as token (token.id)}<tr class="border-b dark:border-zinc-700"><td class="p-3 break-all">{token.name}</td><td class="p-3 whitespace-nowrap">{new Date(token.expires_at).toLocaleString()}</td><td class="p-3">{!token.active ? 'Revoked' : new Date(token.expires_at) <= new Date() ? 'Expired' : 'Active'}</td><td class="p-3"><button onclick={() => revoke(token.id)} disabled={busy || !token.active} title="Revoke token" aria-label="Revoke token" class="p-2 text-red-600 disabled:opacity-30"><Icon icon="carbon:trash-can" width="18" /></button></td></tr>{/each}
       </tbody></table></div>
     </section>

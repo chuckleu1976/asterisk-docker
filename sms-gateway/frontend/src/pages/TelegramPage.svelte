@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from 'svelte';
   import Icon from '@iconify/svelte';
   import { apiClient } from '../js/api.js';
+  import { displayPort } from '../js/modem.js';
   import { t } from '../js/i18n.js';
 
   let { onBack = () => {} } = $props();
@@ -195,7 +196,7 @@
       <section class="rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-zinc-700 dark:bg-zinc-800">
         <div class="flex flex-wrap items-baseline justify-between gap-2">
           <h2 class="text-sm font-semibold">
-            {line.hostname}
+            {displayPort(line.hostname)}
             {#if line.msisdn}<span class="font-normal text-gray-500"> · {line.msisdn}</span>{/if}
           </h2>
           <p class="text-xs text-gray-500">

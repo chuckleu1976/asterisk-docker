@@ -1,0 +1,485 @@
+Extend to 128 ports — notes from 192.168.31.25
+================================================
+
+This file records what was asked about scaling this host, and the
+explanations that followed. It is a design note, not a change to the
+running stack.
+
+No IMSI / MSISDN / ICCID / IMEI / passwords are written here.
+
+
+1. How many Asterisks can this server run today?
+------------------------------------------------
+
+Question:
+  This server (192.168.31.25) can run how many asterisks currently?
+  Right now only 2 asterisks, asterisk1 and asterisk2.
+
+Answer:
+  This host is wired for 8 Asterisk instances (COM1–COM8 /
+  asterisk … asterisk8).
+
+  That is already in compose.yaml, devices.toml (P0–P7), and
+  config/1 through config/8.
+
+  What was live when this was checked:
+
+  - 2 running: COM1 and COM2
+  - 3 remSIM readers visible to PC/SC
+  - Three ACTIVE mappings: B1:0 -> C0:0, B1:1 -> C1:0 and B1:2 -> C2:0
+  - COM3 is mapped and assigned, but its Asterisk container is not running
+
+  Do not infer physical card presence from the running-container count.
+  COM3 needs its own startup/readiness check before claiming a usable
+  third voice line. Eight is the configuration size, not a tested limit.
+
+
+2. What if there are 128 slots?
+-------------------------------
+
+Question:
+  How about I have 128 slots?
+
+Answer:
+  128 bank slots is fine. 128 live Asterisks on this one host is
+  not what the stack is built for.
+
+  A slot is a card in the remSIM bank. A COM / Asterisk is one live
+  WiFi-calling line. Those are not 1:1.
+
+  Today on 192.168.31.25:
+
+  - Software and IMEIs are laid out for 8 COMs
+  - remSIM clients are only C0–C2 (3 PC/SC readers)
+  - 2 Asterisks are running; three bank/client mappings are ACTIVE
+  - Existing Bank 1 on .68 currently reports seven slots. The .113
+    128-reader bank is a separate deployment, not this live Bank 1
+
+  Inventory-only operation can map cards onto a smaller number of COMs
+  on demand. The latest requirement is different: 128 concurrent lines
+  require 128 provisioned client paths and running line services.
+
+  If you instead want 128 simultaneous COM1–COM128 on this box,
+  that is a different product:
+
+  - Each live line is a privileged container with its own IPsec
+    and IMS
+  - Lines share one PID namespace with pcscd; increasing the count
+    requires testing process ownership, cleanup and reader isolation
+  - RAM is 30 GB; one Asterisk is roughly 100–300 MB, so 128
+    lines would crowd this host
+  - One VPN / public IP creates shared failure and carrier-policy
+    risks; no specific carrier concurrency limit has been measured
+  - Gateway, Telegram, IMEI list, and remSIM client configs all
+    stop at 2–8 today
+
+  Eight is the current configuration size, not a measured hardware
+  limit. The latest target is 128 concurrent usable lines on .25,
+  with the remote bank providing distinct SIMs. Reaching it requires
+  configuration changes and staged full-stack validation.
+
+
+3. Recalculate after upgrading RAM to 128 GB
+--------------------------------------------
+
+Question:
+  I can upgrade my RAM to 128GB, and calculate again.
+
+Answer:
+  Neither 64 GB nor 128 GB has been verified for 128 usable VoWiFi
+  lines on this host. The figures below are planning estimates, not
+  a successful 128-line IMS registration and call-capacity test.
+
+  Measured on this host at the time:
+
+    COM1 Asterisk          ~290 MB  (cgroup ~350 MB)
+    COM2 Asterisk          ~97 MB
+    One line’s processes   ~130 MB  (Asterisk ~90 + ami_usim ~22
+                                    + IPsec ~8)
+    pcscd (3 remSIM)       ~565 MB
+    Host RAM then          30 GB, 56 logical CPUs
+
+  For 128 lines on a 128 GB box:
+
+    Estimate                         Asterisks only   Plus OS / pcscd / headroom
+    Lean (like COM2, ~100 MB)        ~13 GB           ~20–25 GB
+    Typical (~150 MB)                ~19 GB           ~30–35 GB
+    Fat (like COM1, ~300 MB)         ~38 GB           ~50–60 GB
+
+  These estimates suggest more memory headroom with 128 GB. They do
+  not establish full-stack peak memory, PC/SC scaling, or concurrent
+  call capacity. Recording/transcription and Telegram bridges can be
+  excluded from the requested capacity test.
+
+  Isolated 128-process measurement (2026-10-23):
+
+  To measure the Asterisk daemon rather than extrapolate from two live
+  instances, 128 temporary containers ran the installed Asterisk binary
+  concurrently on 192.168.31.25. Each used the same read-only Asterisk
+  configuration, a private PID/network namespace, no network, no USB,
+  no PC/SC, no TUN, no IPsec, and no AMI/IMS helper. Each container had
+  a hard 128 MiB memory limit and a 0.25 CPU limit (16 GiB aggregate
+  memory ceiling).
+
+  - All 128 Asterisk CLIs responded after startup.
+  - Zero containers were OOM-killed.
+  - docker stats reported 6,031 MiB total (47.1 MiB average;
+    48.5 MiB maximum per daemon).
+  - Host MemAvailable was 18.43 GiB during the run.
+  - All temporary containers were removed. The two production
+    Asterisk container IDs and start times were unchanged.
+
+  This measures idle Asterisk daemons only, not 128 complete VoWiFi
+  lines. It excludes strongSwan, ami_usim, keep_ims, real PC/SC sharing,
+  SIP/RTP call load, recording/transcription, and Telegram bridges.
+  The test used a separate PID and network namespace per instance and
+  therefore does not validate the production shared PID namespace or
+  PC/SC access path. Its capped, short startup measurement is not a
+  long-running or uncapped peak-memory test.
+
+  Conclusion: the 5.9 GiB result is an idle-daemon startup baseline
+  only. It cannot determine whether 64 GB is sufficient for the user's
+  required 128 usable VoWiFi lines, nor prove that 128 GB is necessary.
+
+  Read-only production baseline (2026-10-23):
+
+  - Two live lines were IMS Registered; each had one established IKE
+    session and one installed IPsec child SA. Both had zero active calls.
+  - docker stats reported approximately 75 MiB and 98 MiB for the two
+    Asterisk containers, plus 595 MiB for shared pcscd. This is an idle
+    snapshot, not a loaded peak or a whole-host memory measurement.
+  - Compose and devices.toml define eight lines. Only three PC/SC
+    reader endpoints were visible. This is not an inventory of all
+    physical SIMs, but the current setup cannot test 128 mapped lines.
+
+  Additional SIM-pool discovery (2026-10-23, read-only SSH):
+
+  - Host 192.168.31.113 (HTB10010001) enumerates 128 PC/SC readers.
+    Passive card-state scanning reported 24 inserted and 104 removed.
+    Reader capacity is confirmed; 128 present, usable SIMs are not.
+  - osmo-remsim-bankd is running as Bank 1 with 128 slots and an
+    established signaling connection to controller 192.168.31.109:9998.
+    The controller's REST port 9997 was unreachable from both the bank
+    and the Asterisk host; existing slot mappings remain unverified.
+  - No bankd identity snapshots were available. No subscriber values
+    were displayed, and no APDUs, resets, registrations, calls or mapping
+    changes were initiated. Keep this bank's existing controller and
+    slots untouched until dedicated test slots are agreed.
+
+  Required full-stack validation (recording and Telegram excluded):
+
+  - Use 128 distinct provisioned SIM/profile identities, with 128
+    available reader/client endpoints and exact bank/client mappings.
+    Cloning a container does not create another independent SIM line.
+  - Run each line's Asterisk, strongSwan/IPsec, AMI helper and watchdog
+    through the actual PC/SC and ReMSIM path.
+  - Verify all 128 IPsec sessions and IMS registrations concurrently;
+    a running process or responsive Asterisk CLI is not sufficient.
+  - Measure whole-host memory, PC/SC/ReMSIM processes, Docker overhead,
+    CPU, swap and memory pressure at idle, startup and reconnect/rekey.
+  - Exercise the intended number of simultaneous answered calls with
+    bidirectional RTP, then verify registrations remain stable.
+    The soak must span IMS refresh and IPsec rekey events, not merely
+    successful startup.
+  - Use measured peaks plus an explicit operating reserve to choose
+    64 GB or 128 GB. Do not extrapolate a two-line idle snapshot as a
+    verified 128-line loaded result.
+
+  What 128 GB does not fix:
+
+  - All Asterisks still share one pcscd PID namespace
+  - 128 IPsec tunnels still go out one VPN / one public IP
+  - remSIM clients, IMEI list, compose, and the gateway are still
+    built for 2–8 lines
+
+  RAM lets the processes exist. That is not the same as this
+  software being ready to run 128 COMs.
+
+
+4. Why “all Asterisks still share one pcscd PID namespace”
+----------------------------------------------------------
+
+A Linux PID namespace is the process list a program can see. A
+normal container has its own: it is PID 1, and it cannot see
+processes in other containers.
+
+This stack does the opposite. Every Asterisk service has:
+
+    pid: service:pcscd
+    depends_on: [pcscd]
+
+So COM1, COM2, … and pcscd all share one process list. That is
+why, from inside COM1, you already see two asterisk processes and
+two charon (IPsec) processes: yours and COM2’s.
+
+They did this so every container can talk to the same sysmocom
+pcscd (shared pcsc-sock + protocol 4:4 libpcsclite). remSIM needs
+that. The side effect is: the lines are not isolated processes
+anymore.
+
+What that means in practice:
+
+  A restart does not clean up the way you think.
+    Docker can stop a container’s network namespace and still
+    leave asterisk / charon / ami_usim alive in the shared PID
+    namespace. Those leftovers keep using UDP 500/4500 and fight
+    the next IKE. The entrypoint already has extra logic for that:
+    find charon/starter that belong to this network namespace and
+    kill only those.
+
+  One sloppy command hits every line.
+    From any container, pkill asterisk or pkill charon can take
+    down all COMs. docker compose stop can leave defunct
+    processes; that is why this repo says use make clean, not a
+    casual stop.
+
+  SIM reset is shared.
+    All readers go through one pcscd. An older entrypoint reset
+    every reader on start, and sibling IMS registrations dropped.
+    It now resets only osmo-remsim-{this-instance}. At 128 lines,
+    one bug that iterates “all readers” knocks the whole farm
+    offline.
+
+  Operations get harder as N grows.
+    With 2 lines this is already messy. With 128 you would have
+    about 128 Asterisks + 128 strongSwans + 128 Python helpers +
+    128 keep_ims all visible to each other, all under one pcscd
+    PID 1. Signals, PID reuse, hung swanctl, and “which process
+    is mine?” become a constant failure mode.
+
+These are process-isolation risks, not evidence of a hard eight-line
+ceiling. Their actual impact must be tested with exact reader
+selection and per-line process ownership before scaling.
+
+
+5. Why “128 IPsec tunnels still go out one VPN / one public IP”
+---------------------------------------------------------------
+
+Each COM does its own WiFi-calling tunnel:
+
+  1. Container strongSwan starts IKE to T-Mobile ePDG
+     (epdg.epc.mnc240.mcc310…).
+  2. The SIM does EAP-AKA (that line’s own identity).
+  3. IPsec comes up, ims.updown learns the P-CSCF, Asterisk
+     REGISTERs over that tunnel.
+  4. SMS / calls then ride that IPsec path.
+
+Those packets do not leave this house as 128 different public IPs.
+On this server they do this:
+
+    COM1 IPsec ─┐
+    COM2 IPsec ─┼─► host routing ─► OpenVPN tun0 (10.8.0.3)
+    COM128     ─┘                   ─► one VPS
+                                    ─► one public IP
+                                    ─► ePDG
+
+The host OpenVPN client (usa_client3.ovpn) is the only path to the
+ePDG. The failure mode was already seen: when tun0 went down but
+routes still pointed at it, both COMs lost IKE (zero ePDG replies)
+and showed unregistered. One VPN death = every line dies.
+
+If you ran 128 COMs on this host, the carrier’s ePDG would see:
+
+  - 128 IKE_SA_INIT / EAP-AKA / ESP tunnels
+  - all from the same source IP (that VPN egress)
+  - all to the same ePDG
+  - all looking like 128 “phones” behind one address
+
+Linux can keep 128 SAs in memory. Carrier-policy limits have not
+been measured here. Possible symptoms to monitor include:
+
+  - slow or drop IKE
+  - accept IPsec but reject IMS REGISTER
+  - cap how many SAs one peer IP may hold
+  - loss of access through the shared VPN IP
+
+NAT on the VPN adds more friction. Everyone shares UDP 500/4500
+on the way out. Linux NAT-T can multiplex by SPI, but rekey
+storms and “0 replies” get more likely as N grows. keep_ims and
+careful IKE timeouts were already needed for two tunnels.
+
+Bandwidth is not the issue (AMR voice is small). Shared fate and
+carrier policy are the issue.
+
+
+6. Summary
+----------
+
+  Limit              What is shared                         What 128 GB RAM changes
+  -----------------  -------------------------------------  ------------------------------
+  PID namespace      One process list + one pcscd           Nothing. A restart or pkill
+                     for every COM                          can still hit every line.
+  VPN / public IP    One tun0 → one egress IP → one ePDG    Nothing. 128 tunnels still
+                                                            look like one subscriber site.
+
+RAM lets the processes exist. These two items decide whether they
+stay registered and whether one fault kills the whole farm.
+
+Deployment choices to evaluate, rather than established requirements:
+
+  - 128 cards in the bank (inventory)
+  - extend this host from 8 configured COMs to 128, with staged tests
+  - consider additional gateway hosts or egress redundancy if measured
+    load, availability requirements or carrier behavior warrant them
+
+
+7. Latest RAM decision and preliminary audit (2026-10-23)
+---------------------------------------------------------
+
+Target:
+  Upgrade .25 to 64 GB RAM and operate 128 simultaneous SIM-backed
+  Asterisk lines, with .113 eventually populated with 128 eSIM cards.
+  Keep real PC/SC, IPsec, IMS and voice calls in scope. Recording,
+  transcription and Telegram bridges may be excluded from sizing.
+
+Planning recommendation:
+  64 GB is a reasonable expected fit, not a tested capacity guarantee.
+  A hypothetical budget of 256-320 MiB per complete line is 32-40 GiB
+  for 128 lines; adding an 8-12 GiB shared-system allowance gives
+  40-52 GiB. These allowances are estimates, not measured loaded peaks.
+  CPU, transcoding, ReMSIM limits and carrier behavior remain separate
+  acceptance gates. The earlier daemon-only test cannot validate them.
+
+Confirmed code-level audit observations (not yet fixed):
+  - Startup reader reset uses a substring predicate. With reader names
+    osmo-remsim-0 through osmo-remsim-127, target osmo-remsim-1 matches
+    39 names, and target osmo-remsim-10 matches 11. Exact reader identity
+    and regression tests are needed before adding two/three-digit lines.
+  - Every normal container startup rebuilds res_pjsip_messaging.so with
+    make res -j$(nproc). Concurrent startup can multiply build workers.
+    Prefer a verified image-time build and bounded startup concurrency.
+  - The SIM dashboard catches individual fetch failures as empty lists
+    or null, which can conceal backend errors as empty inventory.
+    Distinguish empty, unavailable, stale and partially loaded data.
+
+Prioritized improvement sequence:
+  1. Verify actual host roles, bank/client mappings, rental ownership,
+     expiry and end-to-end behavior of the two existing live lines.
+  2. Fix reader isolation, startup load and truthful status/error handling
+     with focused tests; preserve unrelated uncommitted changes.
+  3. Audit authorization and destructive actions, including tenant-scoped
+     SMS/calls and configured MSISDN versus on-card readback.
+  4. Improve the 128-line UI: compact searchable/filterable fleet table,
+     clear PC/SC/IPsec/IMS/call states, line details and safe bulk actions.
+     Verify both customer and administrator flows, desktop and mobile.
+  5. Scale 8 -> 16 -> 32 -> 64 -> 128 using dedicated provisioned SIMs.
+     Measure host/cgroup peaks, reconnect/rekey stability and defined
+     answered-call/RTP load. Document rollback and measured capacity.
+
+Current requested live verification:
+  Check management at .69, confirm the actual bank and ReMSIM-server
+  locations from live evidence, and verify the existing musk assignments
+  without reallocating resources. Log in as that customer and test SMS
+  in both directions and plain calls between its two assigned lines.
+  Check the deployed .25:8080 Gateway UI, not the separate checkout.
+  Record outcomes below only after observing real results. Do not put
+  passwords, telephone numbers or subscriber identifiers in this note.
+
+
+8. Verified current workflow and live UI tests (2026-10-23)
+---------------------------------------------------------
+
+Actual host roles (verified from running services and arguments):
+  - .68 runs osmo-remsim-bankd: Bank 1, seven slots, connected to .69.
+    Its osmo-remsim-server service is inactive. The machine's hostname
+    contains "server", but that is not its current running role.
+  - .69 runs osmo-remsim-server (signaling 9998, REST 9997), management
+    API/frontend and the mapping controller. It is not running bankd.
+  - .25 runs shared pcscd, two Asterisk services and Gateway :8080.
+    The IFD reader configs point clients 0:0 and 1:0 at .69:9998.
+    Reader names are osmo-remsim-0 00 00 and osmo-remsim-1 00 00.
+  - .113 / controller .109 remain separate; they were not used by these
+    live COM1/COM2 tests and were not reconfigured.
+
+Control and data flow:
+  1. Administrator assigns exact bank/client slots, permissions and an
+     expiry in management on .69. The controller reconciles mappings
+     through the ReMSIM REST API on .69:9997.
+  2. Bank .68 and IFD clients on .25 connect to the ReMSIM server on .69.
+     The server assigns slot pairs; the bank/client path carries APDUs.
+     Management is not the carrier SIP/RTP media path.
+  3. The local IFD drivers expose virtual readers through shared pcscd.
+     Per-line strongSwan and SIM-auth helpers use that PC/SC path.
+  4. Each Asterisk line uses its own IPsec/IMS session to the carrier.
+     Gateway controls Asterisk through AMI and receives SMS/call events.
+  5. Gateway customer login is backed by management rental credentials;
+     management login alone is not a Gateway session cookie.
+
+Verified assignments:
+  - musk is active, non-admin and marked as a rental customer.
+  - COM1: B1:0 -> C0:0; COM2: B1:1 -> C1:0; COM3: B1:2 -> C2:0.
+  - All three rentals are valid and wired, with SMS read/send permissions.
+  - Common expiry: 2026-11-28 14:56:00 UTC+08:00.
+  - Administrator user-detail UI and the customer's management/Gateway
+    rental screens show these assignments. Management lists revoked
+    history separately by row status; three rows are Active.
+  - Management customer navigation is My Rentals only; a real customer
+    request for global ReMSIM inventory was denied with HTTP 403.
+
+Live SMS results (real customer UI, not mocked):
+  - COM1 -> COM2: sent record 18, received record 19; exact unique test
+    text matched and receipt belonged to COM2.
+  - COM2 -> COM1: UI POST returned 200, sent record 20, received record 21;
+    exact unique test text matched and receipt belonged to COM1.
+  - Two SMS submissions total. No duplicate retry after a response-capture
+    error; independent inbox reads established receipt in both directions.
+
+Plain-call result: FAILED TO ESTABLISH, not a successful voice test.
+  - One COM2 -> COM1 attempt was made through the customer call UI.
+    The API accepted it with HTTP 200 and displayed a dialing banner.
+  - The actual outbound record started and ended at 03:51:21 UTC on this
+    date: duration zero seconds. No matching inbound COM1 record appeared.
+  - Both Asterisks subsequently had zero active calls/channels. Answered
+    call state and bidirectional RTP/audio were not demonstrated.
+  - Incoming IMS dialplans still Dial(PJSIP/tg2sip,...). Gateway's AMI
+    answer_call implementation returns success without answering a channel.
+    Thus the current product does not establish a plain, manually answered
+    browser phone call merely because the Originate API returns 200.
+  - Originate returns a placeholder UUID, while the dialplan records an
+    Asterisk UNIQUEID. Audit correlation, async failures and terminal UI
+    states; do not equate request acceptance with connected media.
+  - The exact cause of the zero-second failure remains unverified. Do not
+    attribute it to carrier rejection, Telegram or codecs without evidence.
+    No dialplan, Telegram routing or local-answer flag was changed here.
+
+Additional audit findings and priorities:
+  P0 - Tenant history isolation:
+    The customer could read SMS/call history predating its current rental.
+    get_sms_paginated and get_calls perform global database reads without
+    an Identity/rental filter. Call SSE broadcasts are also unfiltered by
+    the rented SIM. This is not a tenant-safe multi-user history design.
+    Add ownership/time boundaries and read/SSE filtering before describing
+    historical SMS, calls or recordings as customer-isolated.
+  P0 - Per-line permission binding:
+    require_rented_sim checks any rental for a permission and separately
+    checks whether the requested port is rented. Those checks can refer
+    to different rentals. Bind the permission to the same exact line.
+    This is code-level evidence, not a live cross-tenant mutation test.
+  P1 - Voice workflow:
+    Fix/verify Originate correlation, real Answer/Hangup behavior and plain
+    inbound routing, then repeat a bounded answered-call/RTP test.
+    Use call-specific permissions rather than inheriting sms:send forever.
+  P1 - Startup safety and truthful status:
+    Retain the exact-reader, image-time build and partial-error fixes from
+    section 7. Browser API/SSE requests intermittently returned 503 during
+    testing, although independent customer API reads succeeded. Capture
+    request timing/correlation before assigning a root cause.
+  P2 - UI usability:
+    Gateway shows the expected live rows, mappings and expiry; the original
+    branding is retained. A narrow rental view measured 312 CSS pixels
+    with document width 320, so page-level horizontal overflow is present.
+    Keep wide tables locally scrollable and fix the outer layout. Distinct
+    subscriber identifiers should not dominate call-status presentation.
+    Separate active and revoked rental history and clarify status labels.
+
+Post-test state and scope:
+  - Both live lines remained IMS Registered with established IPsec.
+    All three original bank/client mappings remained ACTIVE.
+  - No active test calls remained; Asterisk container IDs/start times were
+    unchanged. No SIM reset, profile write, reallocation or service restart
+    was performed. No backend/frontend implementation was deployed.
+  - Existing unrelated uncommitted work was preserved. This note is the
+    only project file edited by this verification task.
+  - This validates two-line SMS, roles, mappings and rental display only.
+    It does not validate 128 concurrent registrations, 64 GB loaded peaks,
+    or usable plain-call media. Resolve the P0/P1 findings before scaling.
