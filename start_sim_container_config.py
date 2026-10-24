@@ -356,10 +356,12 @@ def main():
                         sim['msisdn'] = args.msisdn
                 print(f"  IMSI={sim['imsi']}  MSISDN={sim['msisdn'] or '(none)'}")
                 db_save_sim(i, sim)
-                if update_instance(instance, sim) and args.restart:
-                    restart_instance(instance)
+                should_restart = update_instance(instance, sim) and args.restart
             except Exception as e:
                 print(f"  Skipping: {e}", file=sys.stderr)
+                continue
+            if should_restart:
+                restart_instance(instance)
         return
 
     if args.instance is None:

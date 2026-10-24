@@ -330,6 +330,8 @@ print(json.dumps({'written': digits}))
 """
 
 READ_CONTAINER = "asterisk"
+STARTUP_TIMEOUT = 180
+STARTUP_POLL_INTERVAL = 3
 
 
 def docker_compose(*args, timeout=None):
@@ -360,6 +362,25 @@ def _is_service_running(svc):
     return False
 
 
+def wait_for_instance(svc):
+    deadline = time.monotonic() + STARTUP_TIMEOUT
+    last_error = "Asterisk has not responded"
+    while (remaining := deadline - time.monotonic()) > 0:
+        try:
+            result = docker_compose(
+                "exec", "-T", svc, "asterisk", "-rx", "core waitfullybooted",
+                timeout=min(10, remaining),
+            )
+        except subprocess.TimeoutExpired:
+            last_error = "Asterisk boot check timed out"
+        else:
+            if result.returncode == 0:
+                return
+            last_error = result.stderr.strip() or result.stdout.strip() or last_error
+        time.sleep(min(STARTUP_POLL_INTERVAL, max(0, deadline - time.monotonic())))
+    raise RuntimeError(f"{svc} did not boot within {STARTUP_TIMEOUT}s: {last_error}")
+
+
 def start_probe():
     from scripts.remsim_slotmap import apply_slotmaps
 
@@ -367,9 +388,9 @@ def start_probe():
     print("Starting pcscd + asterisk-1 (SIM probe)...")
     r = docker_compose("up", "-d", "pcscd", READ_CONTAINER)
     if r.returncode != 0:
-        print(f"  Error: {r.stderr.strip()}", file=sys.stderr)
-    else:
-        print("  OK")
+        raise RuntimeError(f"Cannot start SIM probe: {r.stderr.strip()}")
+    wait_for_instance(READ_CONTAINER)
+    print("  OK (Asterisk booted; IMS registration not verified)")
     print("  Waiting for pcscd + readers to settle...", end="", flush=True)
     time.sleep(12)
     print(" OK")
@@ -379,7 +400,10 @@ def restart_instance(instance):
     svc = "asterisk" if instance == 1 else f"asterisk{instance}"
     print(f"  Restarting {svc}...", end="", flush=True)
     r = docker_compose("restart", svc)
-    print(" OK" if r.returncode == 0 else f" Error: {r.stderr.strip()}")
+    if r.returncode != 0:
+        raise RuntimeError(f"Cannot restart {svc}: {r.stderr.strip()}")
+    wait_for_instance(svc)
+    print(" OK (Asterisk booted; IMS registration not verified)")
 
 
 def stop_instance(instance):
@@ -417,11 +441,11 @@ def start_instance(instance, force_recreate=False):
     print(f"  Starting {svc}{' (force-recreate)' if force_recreate else ''}...",
           end="", flush=True)
     r = docker_compose(*args)
-    if r.returncode == 0:
-        print(" OK")
-        _patch_instance(svc)
-    else:
-        print(f" Error: {r.stderr.strip()}")
+    if r.returncode != 0:
+        raise RuntimeError(f"Cannot start {svc}: {r.stderr.strip()}")
+    _patch_instance(svc)
+    wait_for_instance(svc)
+    print(" OK (Asterisk booted; IMS registration not verified)")
 
 
 def get_read_container():
@@ -437,9 +461,8 @@ def get_read_container():
           flush=True)
     up = docker_compose("up", "-d", READ_CONTAINER, timeout=60)
     if up.returncode != 0:
-        print(f"  [probe] Failed to start {READ_CONTAINER}: {up.stderr.strip()}")
-        return READ_CONTAINER
-    time.sleep(5)
+        raise RuntimeError(f"Cannot start SIM probe: {up.stderr.strip()}")
+    wait_for_instance(READ_CONTAINER)
     print(f"  [probe] {READ_CONTAINER} started", flush=True)
     return READ_CONTAINER
 

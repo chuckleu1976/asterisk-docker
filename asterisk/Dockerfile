@@ -29,7 +29,9 @@ RUN cd asterisk && \
     ./menuselect/menuselect --enable codec_opus --disable BUILD_NATIVE --disable res_geolocation && \
     python3 /tmp/rpack_fix.py && \
     make -j$(nproc) && \
-    make install
+    make install && \
+    mkdir -p /usr/share/asterisk && \
+    sha256sum /usr/lib/asterisk/modules/res_pjsip_messaging.so > /usr/share/asterisk/gateway-rpack.sha256
 # gitea.osmocom.org answers git clones with an Anubis challenge page.
 # The upstream image already contains this branch, with both local patches applied.
 COPY --from=source /home/asterisk-build/strongswan-epdg /home/asterisk-build/strongswan-epdg

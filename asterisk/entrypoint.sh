@@ -2,6 +2,11 @@
 
 set -e
 
+if ! test -f /usr/share/asterisk/gateway-rpack.sha256 || ! sha256sum --status -c /usr/share/asterisk/gateway-rpack.sha256; then
+    echo "A verified image-time messaging patch is required; build asterisk/Dockerfile.patch before starting this line." >&2
+    exit 1
+fi
+
 # Graceful shutdown: kill all background children (charon, starter, ami_usim,
 # IKE watchdog) so that a container restart/replace does not leave orphaned
 # processes in the shared pcscd PID namespace.
@@ -88,37 +93,48 @@ swanctl --load-creds && swanctl --load-conns
 # Resetting every PC/SC reader also interrupts sibling asterisk instances
 # that share the pcscd PID namespace and can drop their IMS registration.
 echo "Resetting this instance's SIM before IKE initiation..."
-python3 - <<'PYRESET' || true
+python3 - <<'PYRESET' || echo "Warning: SIM reset failed; continuing without a reset" >&2
 import pathlib
+import re
+import sys
 from smartcard.System import readers
 from smartcard.CardConnection import CardConnection
+from smartcard.Exceptions import CardConnectionException
+
 host = pathlib.Path("/etc/hostname").read_text().strip()
-n = host[len("asterisk"):] if host.startswith("asterisk") else "1"
-try:
-    idx = max(int(n or "1") - 1, 0)
-except ValueError:
-    idx = 0
+match = re.fullmatch(r"asterisk([1-9][0-9]*)?", host)
+if match is None:
+    raise ValueError("Invalid Asterisk hostname; refusing to select a reader")
+idx = int(match.group(1) or "1") - 1
 target = f"osmo-remsim-{idx}"
-for i, r in enumerate(readers()):
-    if target not in str(r):
-        continue
+
+def matches_reader(reader_name, target_name):
+    return reader_name.split(maxsplit=1)[:1] == [target_name]
+
+selected = [(i, r) for i, r in enumerate(readers()) if matches_reader(str(r), target)]
+if len(selected) > 1:
+    raise RuntimeError("Ambiguous reader identity; refusing to reset multiple readers")
+if not selected:
+    print(f"  Warning: {target} not found; no reader reset", file=sys.stderr)
+for i, r in selected:
+    c = r.createConnection()
     try:
-        c = r.createConnection()
         c.connect()
         c.reconnect(disposition=CardConnection.RESET)
-        c.disconnect()
         print(f"  P{i}: reset OK ({r.name})")
-    except Exception as e:
-        print(f"  P{i}: reset skipped ({e})")
+    except CardConnectionException as e:
+        print(f"  P{i}: reset skipped ({e})", file=sys.stderr)
+    finally:
+        c.disconnect()
 PYRESET
 
 # Initiate IKE in background — ims.updown writes /tmp/pcscf_ip when ready.
+rm -f /tmp/pcscf_ip
 swanctl --initiate --child ims &
 
 # Wait for ims.updown to signal P-CSCF is ready via /tmp/pcscf_ip file.
 # This is written by ims.updown after it receives the P-CSCF from strongSwan.
 echo "Waiting for P-CSCF IP to be set in pjsip.conf..."
-rm -f /tmp/pcscf_ip
 WAIT=0
 while [ ! -f /tmp/pcscf_ip ] && [ $WAIT -lt 120 ]; do
     sleep 3
@@ -144,24 +160,8 @@ fi
 python3 /usr/local/bin/ami_usim.py /usr/local/etc/ami_usim.ini &
 AMI_PID=$!
 
-# Rebuild res_pjsip_messaging.so from the already-patched source. The image
-# contains the rpack_fix.py patch in the source tree, but the pre-compiled
-# module in /usr/lib/asterisk/modules is unpatched. Rebuilding here ensures
-# every container start loads the patched module so RP-ACK/DELIVERY-REPORT
-# responses reuse the established VoLTE TCP connection instead of failing
-# with EADDRINUSE.
-if [ -f /home/asterisk-build/asterisk/res/res_pjsip_messaging.c ]; then
-    echo "Rebuilding patched res_pjsip_messaging.so..."
-    cd /home/asterisk-build/asterisk
-    touch res/res_pjsip_messaging.c
-    make res -j$(nproc) 2>&1 | tail -5
-    cp -f res/res_pjsip_messaging.so /usr/lib/asterisk/modules/
-    echo "Patched res_pjsip_messaging.so installed."
-fi
-
 asterisk -f &
 ASTERISK_PID=$!
 
 wait "$ASTERISK_PID" || true
 cleanup
-

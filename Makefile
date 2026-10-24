@@ -2,7 +2,7 @@ VENV_PYTHON = /home/ht/docker/pysim/venv/bin/python3
 
 .PHONY: setup setup-watch watch list \
         compose build-images \
-	verify-fix \
+	verify-fix test-startup \
         logs-% exec-% \
         stop clean
 
@@ -30,6 +30,9 @@ build-images:
 
 verify-fix:
 	cd sms-gateway && ./tools/verify-fix.sh
+
+test-startup:
+	python3 -m unittest discover -s tests -p 'test_startup_safety.py'
 
 stop:
 	docker compose stop

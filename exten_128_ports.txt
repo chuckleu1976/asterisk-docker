@@ -7,6 +7,15 @@ running stack.
 
 No IMSI / MSISDN / ICCID / IMEI / passwords are written here.
 
+Current host address (user-confirmed 2026-10-24):
+  The Asterisk/Gateway machine formerly at 192.168.31.25 is now at
+  192.168.31.153, after moving from wireless WLAN to wired LAN.
+  These are the same machine, not separate hosts. Use .153 for future
+  access and verification (including Gateway at .153:8080).
+  References to .25 below are historical observations, not the current
+  address. Reachability and service behavior after the move still need
+  verification; the address change alone does not establish readiness.
+
 
 1. How many Asterisks can this server run today?
 ------------------------------------------------
@@ -483,3 +492,46 @@ Post-test state and scope:
   - This validates two-line SMS, roles, mappings and rental display only.
     It does not validate 128 concurrent registrations, 64 GB loaded peaks,
     or usable plain-call media. Resolve the P0/P1 findings before scaling.
+
+
+9. Startup-safety implementation progress (2026-10-24, local only)
+----------------------------------------------------------------
+
+Current Asterisk/Gateway address is .153, as recorded at the top.
+No live deployment or post-move service verification was performed.
+
+Implemented in the checkout:
+  - Hardened the existing exact-reader reset: all 128 remSIM client
+    names are distinguished independently of PC/SC enumeration order.
+    Invalid instance hostnames no longer fall back to client 0.
+    Ambiguous reader identities reset nothing. Missing readers and
+    reset failures are diagnosed; opened connections are released.
+  - Managed starts/restarts and probe startup now wait up to 180 seconds
+    for Asterisk to finish booting. The existing sequential setup/watch
+    loops therefore do not launch the next line immediately after Docker
+    accepts a start request. Start failures and boot timeouts propagate;
+    automatic restart batches stop rather than proceeding to another line.
+  - This bound applies within one management process only. Concurrent
+    management processes or direct bulk Docker Compose starts bypass it.
+  - Added hardware-free tests of the actual entrypoint reset/checksum
+    code and mocked startup paths, available through make test-startup.
+    Existing image-time messaging build/checksum work was preserved.
+
+Validation observed:
+  - 18 regression tests passed, including every client 0 through 127,
+    invalid/ambiguous/missing readers, reset errors, absent or changed
+    module checksums, boot retries/timeouts and batch failure propagation.
+  - Shell syntax and Python import checks passed.
+  - Ruff could not run because it is not installed in this environment.
+  - Tests did not access real readers, Docker services or remSIM mappings.
+
+Remaining acceptance gates:
+  - Boot completion is not IPsec, IMS registration or call-media success.
+    The current changes do not establish 128 usable lines or a RAM limit.
+  - Validate the image build and staged startup on the actual host before
+    increasing concurrency. Preserve dedicated-slot approval and rollback.
+  - Tenant-history/per-line permission, voice workflow and dashboard
+    changes already present in the worktree still require their own
+    validation/deployment; they are not declared complete by these tests.
+  - Repeat the bounded answered-call/RTP test and staged resource/rekey
+    measurements from sections 7 and 8 before claiming full-stack capacity.

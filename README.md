@@ -45,6 +45,36 @@ You can run several instances. For this copy directory `config/example` to `conf
 * Change sip-tls port in `pjsip.conf` and `compose.yaml`
 * Change `volumes` subsection in `compose.yaml` to point to a new directory.
 
+## Startup safeguards before scaling
+
+Build the local image with `./build-images.sh` before using the updated
+entrypoint. The messaging module is patched at image-build time; startup
+verifies its checksum and refuses an unverified image instead of compiling
+inside every line container.
+
+Managed starts (`make setup`, `make watch`, and manual `--restart`) wait up to
+180 seconds for each Asterisk daemon to finish booting before proceeding.
+A failed start or boot timeout is reported as an error rather than counted as
+a successful launch. This bounds startup to one line at a time within a single
+management process. Do not run concurrent setup/watch processes or use a bulk
+`docker compose up` as a substitute for this staged startup.
+
+The startup reset selects only the exact remSIM client reader for the instance
+hostname (`asterisk`/`asterisk1` -> client 0, `asterisk128` -> client 127).
+Invalid hostnames and ambiguous identities never fall back to another reader.
+Missing cards/readers produce diagnostics; resetting is best-effort and does
+not establish SIM or line readiness.
+
+Run the hardware-free regressions with `make test-startup`. They exercise the
+actual embedded reset script against all 128 reader names and mock Docker
+startup failures/timeouts; no live readers, mappings or services are touched.
+
+A booted daemon is **not** proof of an established IPsec session, IMS
+registration, or working voice media. The 8 -> 16 -> 32 -> 64 -> 128 rollout
+still requires dedicated provisioned SIMs, explicit mapping approval, concurrent
+IPsec/IMS checks, answered calls with bidirectional RTP, and measured peak
+resources through refresh/rekey events. See [the capacity plan](exten_128_ports.txt).
+
 # Future work/TODO
 
 * Now `pcscd`, `dbus-daemon`, `polkitd`, `strongswan`, `ami_usim` and `asterisk` run as root-in-container. Check if

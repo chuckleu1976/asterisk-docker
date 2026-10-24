@@ -5,11 +5,15 @@ FROM phcodercat/pcscd AS pcsc
 
 FROM phcodercat/asterisk-vowifi
 
+ARG BUILD_JOBS=2
 COPY rpack_fix.py /tmp/rpack_fix.py
 RUN python3 /tmp/rpack_fix.py && \
     cd /home/asterisk-build/asterisk && \
-    make res -j$(nproc) && \
+    touch res/res_pjsip_messaging.c && \
+    make res -j${BUILD_JOBS} && \
     cp res/res_pjsip_messaging.so /usr/lib/asterisk/modules/ && \
+    mkdir -p /usr/share/asterisk && \
+    sha256sum /usr/lib/asterisk/modules/res_pjsip_messaging.so > /usr/share/asterisk/gateway-rpack.sha256 && \
     rm /tmp/rpack_fix.py
 
 # Override system libpcsclite with 1.9.9-sysmocom (protocol 4:4, matches pcscd)
