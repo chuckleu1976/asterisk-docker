@@ -76,6 +76,13 @@ sends only the name and allowed permissions; legacy API clients may still opt
 into a separate fixed expiry within 90 days. Migration rollback revokes
 rental-bound tokens rather than granting them an arbitrary extended lifetime.
 
+For a Gateway built outside the live checkout, set `ASTERISK_REPO_ROOT` to the
+existing absolute stack directory (for this host,
+`/home/ht/sourcecode/asterisk-docker`). Both the SIM inventory database and
+Telegram control helper resolve through this runtime root. An invalid root
+causes an explicit startup error. When unset, the original build-directory
+layout remains the default.
+
 Run the token UI tests with
 `cd sms-gateway/frontend && node --test src/js/tokens.test.js`, and the backend
 tests with `cd server && pytest tests/test_rentals.py tests/test_gateway_credential_migration.py`

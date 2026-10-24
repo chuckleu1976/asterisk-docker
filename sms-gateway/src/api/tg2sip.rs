@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::time::Duration;
 
 use axum::{
@@ -14,18 +13,20 @@ use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tokio::time::timeout;
 
-fn repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("sms-gateway lives inside the repo")
-        .to_path_buf()
-}
-
 async fn run_ctl(body: Value, limit: Duration) -> Response {
-    let script = repo_root().join("scripts").join("tg2sip_ctl.py");
+    let root = match crate::config::asterisk_repo_root() {
+        Ok(root) => root,
+        Err(err) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": err.to_string()})),
+            ).into_response();
+        }
+    };
+    let script = root.join("scripts").join("tg2sip_ctl.py");
     let mut child = match Command::new("python3")
         .arg(&script)
-        .current_dir(repo_root())
+        .current_dir(root)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())

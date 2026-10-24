@@ -3,7 +3,61 @@ use chrono::{NaiveTime, Weekday};
 use config::{Config, File};
 use fancy_regex::Regex;
 use serde::Deserialize;
-use std::{collections::HashMap, fmt, path::Path, str::FromStr};
+use std::{
+    collections::HashMap,
+    ffi::OsString,
+    fmt,
+    path::{Path, PathBuf},
+    str::FromStr,
+};
+
+pub fn asterisk_repo_root() -> Result<PathBuf> {
+    resolve_asterisk_repo_root(std::env::var_os("ASTERISK_REPO_ROOT"))
+}
+
+fn resolve_asterisk_repo_root(configured: Option<OsString>) -> Result<PathBuf> {
+    let root = configured.map(PathBuf::from).unwrap_or_else(|| {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("sms-gateway lives inside the repo")
+            .to_path_buf()
+    });
+    anyhow::ensure!(
+        root.is_absolute() && root.is_dir(),
+        "ASTERISK_REPO_ROOT must reference an existing absolute directory"
+    );
+    Ok(root)
+}
+
+#[cfg(test)]
+mod asterisk_root_tests {
+    use super::*;
+
+    #[test]
+    fn runtime_root_overrides_the_build_directory() {
+        let root = std::env::temp_dir();
+        assert_eq!(resolve_asterisk_repo_root(Some(root.clone().into())).unwrap(), root);
+    }
+
+    #[test]
+    fn unconfigured_root_preserves_the_existing_layout() {
+        assert_eq!(
+            resolve_asterisk_repo_root(None).unwrap(),
+            Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap()
+        );
+    }
+
+    #[test]
+    fn invalid_roots_are_rejected() {
+        for root in [
+            PathBuf::new(),
+            PathBuf::from("relative/path"),
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("missing-asterisk-root-dec0b1d3"),
+        ] {
+            assert!(resolve_asterisk_repo_root(Some(root.into())).is_err());
+        }
+    }
+}
 
 pub const MMS_SEND_MODE_DIRECT: &str = "modem_direct_attachment_upload";
 pub const MMS_SEND_MODE_HOST_STAGED: &str = "host_staged_attachment_upload";

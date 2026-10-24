@@ -8,20 +8,15 @@ pub fn set_path(p: PathBuf) {
     let _ = INV_PATH.set(p);
 }
 
-fn db_path() -> PathBuf {
-    INV_PATH
-        .get()
-        .cloned()
-        .unwrap_or_else(|| {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .parent()
-                .unwrap()
-                .join("sim_inventory.db")
-        })
+fn db_path() -> anyhow::Result<PathBuf> {
+    match INV_PATH.get() {
+        Some(path) => Ok(path.clone()),
+        None => Ok(crate::config::asterisk_repo_root()?.join("sim_inventory.db")),
+    }
 }
 
 fn open_ro() -> anyhow::Result<Connection> {
-    let conn = Connection::open_with_flags(db_path(), rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let conn = Connection::open_with_flags(db_path()?, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     Ok(conn)
 }
 

@@ -71,14 +71,14 @@ async fn main() {
         }
     };
 
-    // Point sim_inventory reader to the Python-side database (one dir above CARGO_MANIFEST_DIR)
-    {
-        let inv_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .join("sim_inventory.db");
-        sim_inventory::set_path(inv_path);
-    }
+    let repo_root = match config::asterisk_repo_root() {
+        Ok(root) => root,
+        Err(err) => {
+            eprintln!("Error: {}", err);
+            std::process::exit(1);
+        }
+    };
+    sim_inventory::set_path(repo_root.join("sim_inventory.db"));
 
     let modem_manager = match ModemManager::initialize(&config).await {
         Ok(manager) => Arc::new(manager),
