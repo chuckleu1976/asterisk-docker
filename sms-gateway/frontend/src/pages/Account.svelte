@@ -5,6 +5,7 @@
   import { t } from '../js/i18n.js';
   import { apiClient } from '../js/api.js';
   import { displayPort, normalizePort } from '../js/modem.js';
+  import { getTokenStatus, tokenRequest } from '../js/tokens.js';
 
   let { onManage = () => {}, onDashboard = () => {} } = $props();
   let tokens = $state([]);
@@ -12,8 +13,8 @@
   let operatorPhones = $state({});
   let busy = $state(false);
   let tokenName = $state('');
-  let expiry = $state('');
   let createdToken = $state('');
+  let clock = $state(Date.now());
   const tokenPermissions = $derived([...new Set(($user?.rentals ?? []).flatMap(rental => rental.permissions))].sort());
 
   async function api(path = '', method = 'GET', body = undefined) {
@@ -63,7 +64,7 @@
   async function createToken(event) {
     event.preventDefault(); busy = true; error = ''; createdToken = '';
     try {
-      const result = await api('', 'POST', { name: tokenName, expires_at: new Date(expiry).toISOString(), permissions: tokenPermissions });
+      const result = await api('', 'POST', tokenRequest(tokenName, tokenPermissions));
       createdToken = result.token; tokenName = ''; await load();
     } catch (problem) { error = problem.message; } finally { busy = false; }
   }
@@ -81,6 +82,8 @@
   onMount(() => {
     load();
     loadOperatorPhones();
+    const timer = setInterval(() => { clock = Date.now(); }, 1000);
+    return () => clearInterval(timer);
   });
 </script>
 
@@ -130,15 +133,15 @@
       <button onclick={onManage} disabled={!$user?.rentals?.length} class="mt-4 inline-flex items-center gap-2 rounded bg-emerald-700 text-white px-4 py-2 disabled:opacity-40"><Icon icon="carbon:chip" width="18" />{$t('rentals_manage_esim')}</button>
     </section>
     <section class="border-t dark:border-zinc-700 pt-6">
-      <h2 class="text-xl font-semibold mb-4">API Tokens</h2>
+      <h2 class="text-xl font-semibold mb-2">API Tokens</h2>
+      <p class="mb-4 text-sm text-gray-600 dark:text-gray-300">{$t('tokens_rental_help')}</p>
       <form onsubmit={createToken} class="flex flex-wrap items-end gap-3">
         <label class="flex flex-col gap-1 text-sm">{$t('tokens_col_name')}<input bind:value={tokenName} maxlength="128" required class="rounded border bg-white dark:bg-zinc-800 px-3 py-2" /></label>
-        <label class="flex flex-col gap-1 text-sm">{$t('rentals_col_expires')}<input type="datetime-local" bind:value={expiry} required class="rounded border bg-white dark:bg-zinc-800 px-3 py-2" /></label>
         <button disabled={busy || !tokenPermissions.length} class="inline-flex items-center gap-2 rounded bg-gray-900 dark:bg-zinc-700 text-white px-3 py-2 disabled:opacity-40"><Icon icon="carbon:add" width="18" />{$t('tokens_create')}</button>
       </form>
       {#if createdToken}<label class="block mt-3 text-sm">New Token<input readonly type="text" value={createdToken} autocomplete="off" class="block w-full mt-1 rounded border px-3 py-2 bg-white dark:bg-zinc-800 font-mono" /></label><button onclick={() => createdToken = ''} class="mt-2 text-sm underline">Dismiss</button>{/if}
-      <div class="overflow-x-auto mt-4"><table class="w-full text-left text-sm"><thead class="border-b dark:border-zinc-700 text-gray-500"><tr><th class="p-3">{$t('tokens_col_name')}</th><th class="p-3">{$t('rentals_col_expires')}</th><th class="p-3">{$t('col_status')}</th><th class="p-3">{$t('tokens_col_actions')}</th></tr></thead><tbody>
-        {#each tokens as token (token.id)}<tr class="border-b dark:border-zinc-700"><td class="p-3 break-all">{token.name}</td><td class="p-3 whitespace-nowrap">{new Date(token.expires_at).toLocaleString()}</td><td class="p-3">{!token.active ? 'Revoked' : new Date(token.expires_at) <= new Date() ? 'Expired' : 'Active'}</td><td class="p-3"><button onclick={() => revoke(token.id)} disabled={busy || !token.active} title="Revoke token" aria-label="Revoke token" class="p-2 text-red-600 disabled:opacity-30"><Icon icon="carbon:trash-can" width="18" /></button></td></tr>{/each}
+      <div class="overflow-x-auto mt-4"><table class="w-full text-left text-sm"><thead class="border-b dark:border-zinc-700 text-gray-500"><tr><th class="p-3">{$t('tokens_col_name')}</th><th class="p-3">{$t('tokens_col_access')}</th><th class="p-3">{$t('col_status')}</th><th class="p-3">{$t('tokens_col_actions')}</th></tr></thead><tbody>
+        {#each tokens as token (token.id)}<tr class="border-b dark:border-zinc-700"><td class="p-3 break-all">{token.name}</td><td class="p-3">{token.expires_at ? $t('tokens_legacy_expiry', { date: new Date(token.expires_at).toLocaleString() }) : $t('tokens_follow_rentals')}</td><td class="p-3">{$t(getTokenStatus(token, $user?.rentals ?? [], clock))}</td><td class="p-3"><button onclick={() => revoke(token.id)} disabled={busy || !token.active} title="Revoke token" aria-label="Revoke token" class="p-2 text-red-600 disabled:opacity-30"><Icon icon="carbon:trash-can" width="18" /></button></td></tr>{/each}
       </tbody></table></div>
     </section>
   </main>

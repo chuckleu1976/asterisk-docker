@@ -56,10 +56,31 @@ Customers log in at the normal Gateway URL using their management account.
 **My Rentals** shows only current assignments and physical mappings. API tokens
 are created/revoked there and shown in full only once; management stores SHA-256
 hashes. Tokens inherit neither administrator access nor the ability to mint or
-manage other tokens. Permissions are intersected with current rentals on every
-request. Suspension and password reset invalidate existing credentials. Queued
+manage other tokens. Creating a token requires a name, not another rental date.
+New tokens have `expires_at: null`: permissions are intersected with current
+rentals on every request. Expiring or revoking a rental removes access to that
+resource; other valid assignments remain usable. With no valid assignments a
+token grants no rented-resource access, but the same token automatically works
+again after renewal or a new assignment, within its permitted actions.
+Revoking the token itself is permanent; rental renewal cannot reactivate it.
+Existing fixed-expiry tokens retain their deadlines, shown separately as legacy
+token deadlines rather than rental dates. Browser sessions still expire after
+12 hours. Suspension and password reset invalidate existing credentials. Queued
 batch items and subsequent hardware commands recheck current authority. Existing
 streams recheck credentials before sending more events.
+
+Deploy management migration `0012` and the updated management backend before
+deploying the Gateway frontend. The migration allows an absent API-token
+deadline while still requiring a deadline for browser sessions. The token form
+sends only the name and allowed permissions; legacy API clients may still opt
+into a separate fixed expiry within 90 days. Migration rollback revokes
+rental-bound tokens rather than granting them an arbitrary extended lifetime.
+
+Run the token UI tests with
+`cd sms-gateway/frontend && node --test src/js/tokens.test.js`, and the backend
+tests with `cd server && pytest tests/test_rentals.py tests/test_gateway_credential_migration.py`
+in the management checkout. The backend suite uses a disposable PostgreSQL
+cluster, not the live management database.
 
 ```bash
 curl -H 'Authorization: Bearer YOUR_SCOPED_TOKEN' \
