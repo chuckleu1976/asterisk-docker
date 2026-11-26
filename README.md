@@ -52,6 +52,30 @@ entrypoint. The messaging module is patched at image-build time; startup
 verifies its checksum and refuses an unverified image instead of compiling
 inside every line container.
 
+The entrypoint is bind-mounted from this checkout. Before deploying it to
+existing containers, build an image containing the checksum manifest and
+recreate the approved lines one at a time using that image. Restarting an old
+image with the new entrypoint does not add the manifest and will cause a
+restart loop. For an offline thin-layer build using the local base images:
+
+```sh
+docker build --pull=false --network=none --build-arg BUILD_JOBS=2 \
+  -f asterisk/Dockerfile.patch -t phcodercat/asterisk-vowifi:latest asterisk
+docker compose up -d --no-deps --no-build --pull never --force-recreate asterisk
+```
+
+Wait for and verify that line's IPsec/IMS state before recreating the next
+approved line. Keep a rollback tag of the previous image. The thin-layer
+build copies the PC/SC library from the same path as the full image build;
+do not run `ldconfig` over the two replacement PC/SC library files.
+An image rollback also needs a compatible entrypoint: changing the image tag
+alone does not roll back the bind-mounted script.
+
+The dashboard displays explicit registered/unregistered labels when a status
+is available. Missing status is shown as Unknown rather than an empty cell;
+it is not evidence that the carrier has unregistered the line. Test these
+labels with `cd sms-gateway/frontend && node --test src/js/modem.test.js`.
+
 Managed starts (`make setup`, `make watch`, and manual `--restart`) wait up to
 180 seconds for each Asterisk daemon to finish booting before proceeding.
 A failed start or boot timeout is reported as an error rather than counted as

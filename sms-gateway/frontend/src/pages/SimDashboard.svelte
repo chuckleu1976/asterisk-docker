@@ -3,8 +3,7 @@
   import Icon from '@iconify/svelte';
   import { apiClient } from '../js/api.js';
   import pkg from '../../package.json';
-  import appLogo from '../../../icon/cow.png';
-  import { displayPort, getModuleLabel, normalizePort } from '../js/modem.js';
+  import { displayPort, getModuleLabel, getNetworkStatus } from '../js/modem.js';
   import { t, lang } from '../js/i18n.js';
   import { getMccCountry } from '../js/country.js';
 
@@ -20,24 +19,8 @@
   let selected   = $state(new Set());
   let lastClickedRowIndex = $state(null);
   let hoveredRow = $state(null);
-  const visibleDataColumnCount = 12;
-
-  // ── Network status map ────────────────────────────────────────────────────
-  const netStatusKeys = {
-    0: { key: 'net_not_registered', cls: 'text-gray-400' },
-    1: { key: 'net_home',           cls: 'text-green-500' },
-    2: { key: 'net_searching',      cls: 'text-yellow-400' },
-    3: { key: 'net_denied',         cls: 'text-red-500' },
-    4: { key: 'net_unknown',        cls: 'text-gray-400' },
-    5: { key: 'net_roaming',        cls: 'text-blue-400' },
-  };
-
-  function getNetStatus(reg) {
-    if (!reg) return { key: null, label: '—', cls: 'text-gray-400' };
-    const s = netStatusKeys[reg.status];
-    if (s) return s;
-    return { key: 'net_code', codeN: reg.status, cls: 'text-gray-400' };
-  }
+  let showOperatorColumn = $state(true);
+  let visibleDataColumnCount = $derived(showOperatorColumn ? 12 : 11);
 
   // RSSI → dBm helper
   function rssiToDbm(rssi) {
@@ -118,16 +101,12 @@
     if (isFetching) return;
     isFetching = true;
     try {
-      const [infoRes, cardsRes, statsRes, targetsRes] = await Promise.all([
-        apiClient.getAllSimsInfo().catch(() => []),
-        apiClient.getAllSimCards().catch(() => []),
-        apiClient.getSimStats().catch(() => []),
-        apiClient.remoteSimTargets().catch(() => null),
+      const [infoRes, cardsRes, statsRes] = await Promise.all([
+        apiClient.getAllSimsInfo(),
+        apiClient.getAllSimCards(),
+        apiClient.getSimStats(),
       ]);
-      const targets = targetsRes?.data?.data ?? [];
-      const byPort = new Map(targets.map(target => [normalizePort(target.com_port), target]));
-      simsInfo = (Array.isArray(infoRes) ? infoRes : (infoRes?.data ?? []))
-        .map(info => ({ ...info, remote_sim: byPort.get(normalizePort(info.com_port)) }));
+      simsInfo  = Array.isArray(infoRes)  ? infoRes  : (infoRes?.data  ?? []);
       simCards  = Array.isArray(cardsRes) ? cardsRes : (cardsRes?.data ?? []);
       simStats  = Array.isArray(statsRes) ? statsRes : (statsRes?.data ?? []);
     } catch (e) {
@@ -204,16 +183,16 @@
   // ── Logout ────────────────────────────────────────────────────────────────
   // uses logout() imported from auth store
 
-  let { onNavigate = () => {}, onNavigateCall = () => {}, onNavigateSim = () => {}, onNavigatePlatform = () => {}, onNavigatePhoneNumber = () => {}, onNavigatePlatformStats = () => {}, onNavigateMoney = () => {}, onNavigateTelegram = () => {}, onNavigateAccount = () => {} } = $props();
+  let { onNavigate = () => {}, onNavigateCall = () => {}, onNavigateSim = () => {}, onNavigatePlatform = () => {}, onNavigatePhoneNumber = () => {}, onNavigatePlatformStats = () => {}, onNavigateMoney = () => {}, onNavigateMms = () => {}, onNavigateTelegram = () => {}, onNavigateAccount = () => {} } = $props();
 </script>
 
 <div class="flex flex-col h-dvh w-screen bg-gray-50 dark:bg-zinc-950 text-sm font-sans">
 
   <!-- ── Top bar ──────────────────────────────────────────────────────────── -->
-  <header class="flex flex-wrap items-center justify-between gap-3 px-6 py-3 bg-white dark:bg-zinc-900 border-b border-gray-200 dark:border-zinc-800 shadow-sm">
-    <div class="flex shrink-0 items-center gap-3">
-      <img src={appLogo} alt="" width="24" height="24" class="w-6 h-6 shrink-0 object-contain" />
-      <h1 class="whitespace-nowrap text-base font-semibold text-gray-800 dark:text-gray-100">{$t('sim_dashboard_title')}</h1>
+  <header class="flex items-center justify-between px-6 py-3 bg-white dark:bg-zinc-900 border-b border-gray-200 dark:border-zinc-800 shadow-sm">
+    <div class="flex items-center gap-3">
+      <img src="/cow.png" alt="" class="w-6 h-6 object-contain" />
+      <h1 class="text-base font-semibold text-gray-800 dark:text-gray-100">{$t('sim_dashboard_title')}</h1>
       {#if !loading}
         <span class="text-xs text-gray-400 dark:text-gray-500">
           v{APP_VERSION}
@@ -221,7 +200,7 @@
       {/if}
     </div>
 
-    <div class="flex min-w-0 max-w-full items-center gap-2 overflow-x-auto whitespace-nowrap [&>button]:shrink-0">
+    <div class="flex items-center gap-2">
       <button
         onclick={onNavigateAccount}
         class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
@@ -283,6 +262,16 @@
         {$t('btn_money')}
       </button>
       <button
+        onclick={() => onNavigateMms()}
+        class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
+               border border-gray-200 dark:border-zinc-700
+               text-gray-600 dark:text-gray-300
+               hover:bg-gray-50 dark:hover:bg-zinc-800 transition"
+      >
+        <Icon icon="carbon:image" class="w-4 h-4" />
+        {$t('btn_mms')}
+      </button>
+      <button
         onclick={() => onNavigate(getSingleSelectedSimId())}
         class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
                border border-gray-200 dark:border-zinc-700
@@ -312,6 +301,17 @@
         <Icon icon="carbon:refresh" class="w-4 h-4" />
         {$t('btn_refresh')}
       </button>
+      <button
+        onclick={() => { showOperatorColumn = !showOperatorColumn; }}
+        class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
+               border border-gray-200 dark:border-zinc-700
+               text-gray-600 dark:text-gray-300
+               hover:bg-gray-50 dark:hover:bg-zinc-800 transition"
+        title={showOperatorColumn ? $t('hide_operator_column') : $t('show_operator_column')}
+      >
+        <Icon icon={showOperatorColumn ? 'carbon:chevron-left' : 'carbon:chevron-right'} class="w-4 h-4" />
+        {showOperatorColumn ? $t('hide_operator_column') : $t('show_operator_column')}
+      </button>
     </div>
   </header>
 
@@ -327,16 +327,18 @@
     {:else}
       <table
         class="w-full border-collapse table-fixed text-xs [&_th]:overflow-hidden [&_td]:overflow-hidden"
-        style:min-width="1450px"
+        style:min-width={showOperatorColumn ? '1450px' : '1330px'}
       >
         <colgroup>
           <col style="width: 48px" />
           <col style="width: 76px" />
-          <col style="width: 140px" />
-          <col style="width: 160px" />
+          <col style="width: 84px" />
+          <col style="width: 104px" />
           <col style="width: 116px" />
           <col style="width: 158px" />
-          <col style="width: 120px" />
+          {#if showOperatorColumn}
+            <col style="width: 120px" />
+          {/if}
           <col style="width: 92px" />
           <col style="width: 92px" />
           <col style="width: 72px" />
@@ -360,16 +362,18 @@
                 <span class="text-gray-400 font-semibold">#</span>
               {/if}
             </th>
-            {#each [$t('col_com_port'),'SIM Slot','Mapping',$t('col_network_status'),$t('col_phone_number')] as col}
+            {#each [$t('col_com_port'),$t('col_module'),$t('col_signal'),$t('col_network_status'),$t('col_phone_number')] as col}
               <th class="px-3 py-2.5 text-left font-semibold text-gray-600 dark:text-gray-300
                          border-b border-gray-200 dark:border-zinc-700 whitespace-nowrap">
                 {col}
               </th>
             {/each}
-            <th class="px-3 py-2.5 text-left font-semibold text-gray-600 dark:text-gray-300
-                       border-b border-gray-200 dark:border-zinc-700 whitespace-nowrap">
-              {$t('col_operator')}
-            </th>
+            {#if showOperatorColumn}
+              <th class="px-3 py-2.5 text-left font-semibold text-gray-600 dark:text-gray-300
+                         border-b border-gray-200 dark:border-zinc-700 whitespace-nowrap">
+                {$t('col_operator')}
+              </th>
+            {/if}
             {#each [$t('col_country'),$t('col_platform'),$t('col_sms'),'ICCID','IMSI','IMEI'] as col}
               <th class="px-3 py-2.5 text-left font-semibold text-gray-600 dark:text-gray-300
                          border-b border-gray-200 dark:border-zinc-700 whitespace-nowrap">
@@ -405,7 +409,8 @@
           {:else}
             {#each rows as { info, card, stats }, i}
               {@const isSelected = selected.has(info.com_port)}
-              {@const net = getNetStatus(info.network_registration)}
+              {@const net = getNetworkStatus(info.network_registration)}
+              {@const bars = signalBars(info.signal_quality?.rssi)}
               {@const hasSim = info.has_sim !== false}
               {@const imsi = card.imsi || info.imsi || ''}
               {@const mccSource = imsi || info.operator_info?.operator_id || ''}
@@ -440,24 +445,45 @@
                   {displayPort(info.com_port) || '—'}
                 </td>
 
+                <!-- Module name -->
                 <td class="px-3 py-2.5 text-gray-700 dark:text-gray-200 whitespace-nowrap">
-                  {info.remote_sim?.slot_label ?? 'Unknown'}
+                  {#if info.available === false}
+                    <span class="text-gray-400">—</span>
+                  {:else}
+                    {getModuleLabel(info.model_info?.model)}
+                  {/if}
                 </td>
 
+                <!-- Signal -->
                 <td class="px-3 py-2.5 whitespace-nowrap">
-                  <div class="font-mono text-xs text-gray-700 dark:text-gray-200">
-                    {info.remote_sim?.mapping_label ?? 'Unknown'}
+                  {#if hasSim}
+                  <div class="flex items-center gap-1.5">
+                    <!-- Signal bars -->
+                    <div class="flex items-end gap-px h-4">
+                      {#each [1,2,3,4] as b}
+                        <div
+                          class="w-1 rounded-sm transition-all {b <= bars
+                            ? bars >= 3 ? 'bg-green-500' : bars === 2 ? 'bg-yellow-400' : 'bg-red-400'
+                            : 'bg-gray-200 dark:bg-zinc-600'}"
+                          style="height: {b * 25}%"
+                        ></div>
+                      {/each}
+                    </div>
+                    <span class="text-gray-600 dark:text-gray-300 text-xs">
+                      {rssiToDbm(info.signal_quality?.rssi)}
+                    </span>
                   </div>
-                  <div class:text-green-600={info.remote_sim?.state === 'ACTIVE'}
-                    class="text-xs text-gray-500" title={info.remote_sim?.error ?? ''}>
-                    {info.remote_sim?.state ?? 'Unknown'}
-                  </div>
+                  {:else if info.available === false}
+                    <span class="text-gray-400">—</span>
+                  {:else}
+                    <span class="text-gray-400">—</span>
+                  {/if}
                 </td>
 
                 <!-- Network Status -->
                 <td class="px-3 py-2.5 whitespace-nowrap font-medium">
                   {#if hasSim}
-                    <span class="{net.cls}">{net.key ? $t(net.key, { n: net.codeN }) : '—'}</span>
+                    <span class="{net.cls}">{$t(net.key, { n: net.codeN })}</span>
                   {:else if info.sim_status}
                     {@const statusBadge = getSimStatusBadge(info.sim_status)}
                     <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium {statusBadge.cls}">
@@ -484,13 +510,15 @@
                 </td>
 
                 <!-- Operator -->
-                <td class="px-3 py-2.5 text-gray-700 dark:text-gray-200 whitespace-nowrap">
-                  {#if info.available === false}
-                    <span class="text-gray-400">—</span>
-                  {:else}
-                    {info.operator_info?.operator_name ?? '—'}
-                  {/if}
-                </td>
+                {#if showOperatorColumn}
+                  <td class="px-3 py-2.5 text-gray-700 dark:text-gray-200 whitespace-nowrap">
+                    {#if info.available === false}
+                      <span class="text-gray-400">—</span>
+                    {:else}
+                      {info.operator_info?.operator_name ?? '—'}
+                    {/if}
+                  </td>
+                {/if}
 
                 <!-- Country -->
                 <td class="px-3 py-2.5 text-gray-700 dark:text-gray-200 whitespace-nowrap">

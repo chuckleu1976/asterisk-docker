@@ -60,7 +60,7 @@ impl Access {
         response.json().await.map_err(|_| denied(StatusCode::BAD_GATEWAY, "Invalid management response"))
     }
 
-    async fn identify(&self, token: &str) -> Result<Identity, Response> {
+    pub(super) async fn identify(&self, token: &str) -> Result<Identity, Response> {
         let context = self.call(Method::GET, &format!("/context?gateway_id={}", urlencoding::encode(&self.gateway_id)), Some(token), None).await?;
         if context.get("user_id").and_then(Value::as_str).is_none() || !context["rentals"].is_array() {
             return Err(denied(StatusCode::BAD_GATEWAY, "Invalid management identity"));
@@ -129,6 +129,35 @@ impl Identity {
         let wanted = normalize_port(port);
         self.rentals().any(|rental| rental.get("com_port").and_then(Value::as_str).is_some_and(|value| normalize_port(value) == wanted))
     }
+
+    pub fn allows_port_permission(&self, port: &str, permission: &str) -> bool {
+        if self.is_admin() {
+            return true;
+        }
+        let wanted = normalize_port(port);
+        self.rentals().any(|rental| {
+            rental.get("com_port").and_then(Value::as_str)
+                .is_some_and(|value| normalize_port(value) == wanted)
+                && rental.get("mapping_wired") != Some(&Value::Bool(false))
+                && rental.get("permissions").and_then(Value::as_array)
+                    .is_some_and(|permissions| permissions.iter().any(|value| value == permission))
+        })
+    }
+
+    pub fn history_windows(&self, sim_id: &str, port: &str, permission: &str) -> Vec<crate::db::HistoryWindow> {
+        let wanted = normalize_port(port);
+        self.rentals().filter_map(|rental| {
+            if rental.get("com_port").and_then(Value::as_str).is_none_or(|value| normalize_port(value) != wanted)
+                || rental.get("mapping_wired") == Some(&Value::Bool(false))
+                || !rental.get("permissions").and_then(Value::as_array)
+                    .is_some_and(|permissions| permissions.iter().any(|value| value == permission)) {
+                return None;
+            }
+            let starts_at = chrono::DateTime::parse_from_rfc3339(rental.get("starts_at")?.as_str()?).ok()?.naive_utc();
+            let expires_at = chrono::DateTime::parse_from_rfc3339(rental.get("expires_at")?.as_str()?).ok()?.naive_utc();
+            (starts_at < expires_at).then(|| crate::db::HistoryWindow { sim_id: sim_id.to_owned(), starts_at, expires_at })
+        }).collect()
+    }
 }
 
 fn sim_dashboard_path(path: &str) -> bool {
@@ -138,30 +167,24 @@ fn sim_dashboard_path(path: &str) -> bool {
         || (path.starts_with("/api/sims/") && (path.ends_with("/info") || path.ends_with("/refresh")))
 }
 
-fn customer_route(path: &str, identity: &Identity) -> bool {
+fn customer_route(path: &str, method: &Method, identity: &Identity) -> bool {
     if path == "/api/check" || path.starts_with("/api/auth/") || path == "/api/sim-mappings" || path.starts_with("/api/esim/") {
         return true;
     }
     let can_view_lines = identity.has_permission("esim:read") || identity.has_permission("sms:read") || identity.has_permission("sms:send");
-    if can_view_lines && sim_dashboard_path(path) {
+    if *method == Method::GET && can_view_lines && sim_dashboard_path(path) {
         return true;
     }
-    let messaging = identity.has_permission("sms:read") || identity.has_permission("sms:send");
-    messaging && (
-        path.starts_with("/api/sims")
-            || path.starts_with("/api/sim-cards")
-            || path == "/api/sms"
-            || path.starts_with("/api/sms/")
-            || path.starts_with("/api/calls")
-            || path == "/api/conversation"
-            || path.starts_with("/api/conversations")
-            || path == "/api/contacts"
-            || path.starts_with("/api/contacts/")
-            || path.starts_with("/api/firefox")
-            || path == "/api/settings/firefox-api-key"
-            || path.starts_with("/api/phone-numbers")
-            || path.starts_with("/api/mms")
-            || path.starts_with("/api/tg2sip")
+    if *method == Method::GET && identity.has_permission("sms:read") {
+        return matches!(path, "/api/sms" | "/api/sms/sse" | "/api/calls" | "/api/calls/sse" | "/api/calls/mode" | "/api/conversation" | "/api/contacts")
+            || path.starts_with("/api/calls/") && (path.ends_with("/recording") || path.ends_with("/transcript"));
+    }
+    if *method == Method::PUT && path == "/api/calls/mode" {
+        return identity.has_permission("sms:send");
+    }
+    *method == Method::POST && (
+        identity.has_permission("sms:send") && matches!(path, "/api/sms" | "/api/calls/make" | "/api/calls/answer" | "/api/calls/hangup")
+        || identity.has_permission("sms:read") && path.starts_with("/api/conversations/") && path.ends_with("/unread")
     )
 }
 
@@ -173,18 +196,20 @@ pub async fn guard(State(access): State<Arc<Access>>, mut request: Request, next
     let identity = match access.identify(&token).await { Ok(identity) => identity, Err(response) => return response };
     let path = request.extensions().get::<OriginalUri>().map(|uri| uri.0.path()).unwrap_or_else(|| request.uri().path());
     let path = path.to_owned();
-    if !identity.is_admin() && !customer_route(&path, &identity) {
+    if !identity.is_admin() && !customer_route(&path, request.method(), &identity) {
         return denied(StatusCode::FORBIDDEN, "This route requires administrator access");
     }
+    let method = request.method().clone();
     request.extensions_mut().insert(identity);
+    request.extensions_mut().insert(access.clone());
     let mut response = next.run(request).await;
     if response.headers().get(header::CONTENT_TYPE).is_some_and(|value| value.as_bytes().starts_with(b"text/event-stream")) {
         let body = std::mem::replace(response.body_mut(), Body::empty());
-        let stream = stream::unfold((body.into_data_stream(), access, token, path), |(mut data, access, token, path)| async move {
+        let stream = stream::unfold((body.into_data_stream(), access, token, path, method), |(mut data, access, token, path, method)| async move {
             let chunk = data.next().await?;
             let identity = access.identify(&token).await.ok()?;
-            if !identity.is_admin() && !customer_route(&path, &identity) { return None; }
-            Some((chunk, (data, access, token, path)))
+            if !identity.is_admin() && !customer_route(&path, &method, &identity) { return None; }
+            Some((chunk, (data, access, token, path, method)))
         });
         *response.body_mut() = Body::from_stream(stream);
     }
@@ -313,6 +338,40 @@ mod tests {
         task.abort(); authority_task.abort();
     }
 
+    #[test]
+    fn rental_permission_is_bound_to_requested_line() {
+        let identity = Identity { token: "test".into(), context: json!({
+            "is_admin": false,
+            "rentals": [
+                {"com_port": "asterisk1", "permissions": ["sms:read"]},
+                {"com_port": "asterisk2", "permissions": ["sms:read", "sms:send"]}
+            ]
+        }) };
+        assert!(identity.allows_port_permission("asterisk", "sms:read"));
+        assert!(identity.allows_port_permission("COM2", "sms:send"));
+        assert!(!identity.allows_port_permission("COM1", "sms:send"));
+        assert!(!identity.allows_port_permission("asterisk10", "sms:read"));
+        assert!(!identity.allows_port_permission("asterisk3", "sms:send"));
+        let administrator = Identity { token: "test-admin".into(), context: json!({"is_admin": true}) };
+        assert!(administrator.allows_port_permission("asterisk3", "sms:send"));
+    }
+
+    #[test]
+    fn rental_history_windows_require_same_line_permission_and_valid_dates() {
+        let identity = Identity { token: "test".into(), context: json!({"rentals": [
+            {"com_port":"asterisk1", "permissions":["sms:read"], "starts_at":"2026-10-23T08:00:00+08:00", "expires_at":"2026-10-24T08:00:00+08:00"},
+            {"com_port":"asterisk2", "permissions":["sms:send"], "starts_at":"2026-10-23T00:00:00Z", "expires_at":"2026-10-24T00:00:00Z"},
+            {"com_port":"asterisk3", "permissions":["sms:read"], "starts_at":"invalid", "expires_at":"invalid"}
+        ]}) };
+        let windows = identity.history_windows("line-a", "COM1", "sms:read");
+        assert_eq!(windows.len(), 1);
+        assert_eq!(windows[0].starts_at.to_string(), "2026-10-23 00:00:00");
+        assert!(identity.history_windows("line-b", "COM2", "sms:read").is_empty());
+        assert!(identity.history_windows("line-c", "COM3", "sms:read").is_empty());
+        assert!(!customer_route("/api/settings/firefox-api-key", &Method::GET, &identity));
+        assert!(!customer_route("/api/contacts/other", &Method::DELETE, &identity));
+    }
+
     #[tokio::test]
     async fn administrator_stream_stops_after_revocation_or_role_downgrade() {
         use std::sync::atomic::{AtomicU8, Ordering};
@@ -423,11 +482,11 @@ mod tests {
         assert_eq!(client.get(format!("{base}/api/sim-cards")).bearer_auth("sgs_test").send().await.unwrap().status(), StatusCode::OK);
         assert_eq!(client.get(format!("{base}/api/sims/stats")).bearer_auth("sgs_test").send().await.unwrap().status(), StatusCode::OK);
         assert_eq!(client.post(format!("{base}/api/calls/make")).bearer_auth("sgs_test").send().await.unwrap().status(), StatusCode::OK);
-        assert_eq!(client.get(format!("{base}/api/firefox/countries")).bearer_auth("sgs_test").send().await.unwrap().status(), StatusCode::OK);
-        assert_eq!(client.get(format!("{base}/api/settings/firefox-api-key")).bearer_auth("sgs_test").send().await.unwrap().status(), StatusCode::OK);
-        assert_eq!(client.get(format!("{base}/api/phone-numbers/status")).bearer_auth("sgs_test").send().await.unwrap().status(), StatusCode::OK);
-        assert_eq!(client.get(format!("{base}/api/mms")).bearer_auth("sgs_test").send().await.unwrap().status(), StatusCode::OK);
-        assert_eq!(client.get(format!("{base}/api/tg2sip")).bearer_auth("sgs_test").send().await.unwrap().status(), StatusCode::OK);
+        assert_eq!(client.get(format!("{base}/api/firefox/countries")).bearer_auth("sgs_test").send().await.unwrap().status(), StatusCode::FORBIDDEN);
+        assert_eq!(client.get(format!("{base}/api/settings/firefox-api-key")).bearer_auth("sgs_test").send().await.unwrap().status(), StatusCode::FORBIDDEN);
+        assert_eq!(client.get(format!("{base}/api/phone-numbers/status")).bearer_auth("sgs_test").send().await.unwrap().status(), StatusCode::FORBIDDEN);
+        assert_eq!(client.get(format!("{base}/api/mms")).bearer_auth("sgs_test").send().await.unwrap().status(), StatusCode::FORBIDDEN);
+        assert_eq!(client.get(format!("{base}/api/tg2sip")).bearer_auth("sgs_test").send().await.unwrap().status(), StatusCode::FORBIDDEN);
         assert_eq!(client.get(format!("{base}/api/readers")).bearer_auth("sgs_test").send().await.unwrap().status(), StatusCode::FORBIDDEN);
         gateway_task.abort(); authority_task.abort();
     }

@@ -12,7 +12,6 @@ use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use log::{debug, info, warn};
 use tokio::sync::{mpsc, Mutex, RwLock};
-use uuid::Uuid;
 
 use super::ami::{AmiClient, AmiConfig, AmiPacket};
 use super::transport::{ModemEvent, SimInfo, Transport};
@@ -25,6 +24,26 @@ const VOLTE_ENDPOINT: &str = "volte_ims";
 
 /// Default IMS domain used when the device config does not provide one.
 const DEFAULT_IMS_DOMAIN: &str = "ims.mnc240.mcc310.3gppnetwork.org";
+
+fn valid_phone(phone: &str) -> bool {
+    let digits = phone.strip_prefix('+').unwrap_or(phone);
+    (3..=15).contains(&digits.len()) && digits.bytes().all(|value| value.is_ascii_digit())
+}
+
+#[derive(Debug)]
+struct ActiveChannel {
+    name: String,
+    context: String,
+    state: String,
+}
+
+fn parse_channels(output: &str) -> Vec<ActiveChannel> {
+    output.lines().filter_map(|line| {
+        let fields: Vec<_> = line.trim().split('!').collect();
+        if fields.len() < 6 || !fields[0].contains('/') { return None; }
+        Some(ActiveChannel { name: fields[0].to_owned(), context: fields[1].to_owned(), state: fields[4].to_owned() })
+    }).collect()
+}
 
 #[derive(Debug, Clone)]
 pub struct AmiTransportConfig {
@@ -50,11 +69,19 @@ pub struct AmiTransport {
     registration_state: Arc<RwLock<Option<NetworkRegistrationStatus>>>,
     /// Cached SIM identity, refreshed periodically from sim_inventory.db.
     sim_info_cache: Arc<RwLock<super::SimInfo>>,
-    /// Phone number last originated via this transport (for hangup lookup).
-    pending_phone: Arc<Mutex<Option<String>>>,
+    pending_call: Arc<Mutex<Option<String>>>,
 }
 
 impl AmiTransport {
+    async fn active_channels(&self) -> Result<Vec<ActiveChannel>> {
+        let response = self.client.action_with_timeout(
+            vec![("Action", "Command"), ("Command", "core show channels concise")],
+            Duration::from_secs(5),
+        ).await?;
+        anyhow::ensure!(response.is_success() || response.response() == Some("Follows"), "Unable to inspect call channels");
+        Ok(parse_channels(response.get("output").unwrap_or("")))
+    }
+
     /// Spawn the AMI client supervisor and an event-pump task that forwards
     /// translated events to `events_tx`.
     pub fn spawn(cfg: AmiTransportConfig, events_tx: mpsc::Sender<ModemEvent>) -> Self {
@@ -64,7 +91,7 @@ impl AmiTransport {
         let registration_state: Arc<RwLock<Option<NetworkRegistrationStatus>>> =
             Arc::new(RwLock::new(None));
         let sim_info_cache = Arc::new(RwLock::new(cfg.sim_info.clone()));
-        let pending_phone = Arc::new(Mutex::new(None));
+        let pending_call = Arc::new(Mutex::new(None));
 
         // Event pump: AMI events -> ModemEvent
         let mut rx = client.subscribe();
@@ -152,7 +179,7 @@ impl AmiTransport {
             _shutdown_tx: sd_tx,
             registration_state,
             sim_info_cache,
-            pending_phone,
+            pending_call,
         }
     }
 }
@@ -184,17 +211,16 @@ impl Transport for AmiTransport {
             .as_deref()
             .unwrap_or(DEFAULT_IMS_DOMAIN);
         let to_uri = format!("pjsip:{VOLTE_ENDPOINT}/sip:{to}@{ims_domain}");
-        log::info!(
-            "[ami {}] MessageSend To={} From={} Body={}",
-            self.cfg.sim_id, to_uri, VOLTE_ENDPOINT, body
-        );
+        use base64::Engine;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(body);
+        log::debug!("[ami {}] submitting SMS", self.cfg.ami.label);
         let resp = self
             .client
             .action(vec![
                 ("Action", "MessageSend"),
                 ("To", &to_uri),
                 ("From", VOLTE_ENDPOINT),
-                ("Body", body),
+                ("Base64Body", &encoded),
             ])
             .await
             .context("MessageSend action")?;
@@ -215,18 +241,25 @@ impl Transport for AmiTransport {
         Ok(())
     }
 
-    async fn originate_call(&self, to: &str) -> Result<String> {
-        // Route through the [from-sip] dialplan context via a Local channel,
-        // same path as when extension 6000 dials a number.  The dialplan emits
-        // CallStarted/CallEnded UserEvents and handles recording + Dial().
-        let channel = format!("Local/{to}@from-sip");
+    async fn originate_call(&self, to: &str, call_id: &str) -> Result<String> {
+        anyhow::ensure!(valid_phone(to), "Invalid telephone number");
+        anyhow::ensure!(self.active_channels().await?.is_empty(), "This line already has a call");
+        let peer_id = format!("{call_id}-peer");
+        let variable = format!("__GATEWAY_CALL_ID={call_id}");
+        let channel = format!("Local/{to}@from-sip/n");
         let resp = self
             .client
-            .action(vec![
+            .action_with_id(vec![
                 ("Action", "Originate"),
                 ("Channel", &channel),
+                ("ChannelId", &call_id),
+                ("OtherChannelId", &peer_id),
+                ("Variable", &variable),
+                ("Application", "Wait"),
+                ("Data", "3600"),
+                ("Timeout", "30000"),
                 ("Async", "true"),
-            ])
+            ], call_id)
             .await
             .context("Originate action")?;
         if !resp.is_success() {
@@ -235,93 +268,60 @@ impl Transport for AmiTransport {
                 resp.message().unwrap_or("(no message)")
             ));
         }
-        // Remember the phone number so hangup_call can find the active channel.
-        {
-            let mut p = self.pending_phone.lock().await;
-            *p = Some(to.to_string());
-        }
-        // Return a placeholder call_id; the real call_id (Asterisk UNIQUEID)
-        // arrives via the CallStarted UserEvent from the dialplan.
-        let placeholder = Uuid::new_v4().to_string();
-        Ok(placeholder)
+        *self.pending_call.lock().await = Some(call_id.to_owned());
+        Ok(call_id.to_owned())
     }
 
     async fn answer_call(&self) -> Result<()> {
-        // Auto-answer is handled by the dialplan (Answer() + MixMonitor()).
-        // Manual answer would require AMI Redirect to a dialplan extension;
-        // not used in the current product flow.
+        let channels = self.active_channels().await?;
+        let channel = channels.iter().find(|channel| {
+            channel.context == "gateway-ringing" && matches!(channel.state.as_str(), "Ring" | "Ringing")
+        }).ok_or_else(|| anyhow!("No ringing incoming call"))?;
+        let response = self.client.action(vec![
+            ("Action", "Redirect"), ("Channel", &channel.name),
+            ("Context", "gateway-answer"), ("Exten", "s"), ("Priority", "1"),
+        ]).await?;
+        anyhow::ensure!(response.is_success(), "Answer failed: {}", response.message().unwrap_or("AMI rejected redirect"));
         Ok(())
     }
 
-    async fn hangup_call(&self, _call_id: Option<&str>) -> Result<()> {
-        // Retrieve the phone number from the last originate_call.
-        let phone = {
-            let p = self.pending_phone.lock().await;
-            p.clone()
-        };
-        let Some(phone) = phone else {
-            info!("[ami {}] hangup_call: no pending outbound call, returning success",
-                  self.cfg.ami.label);
-            return Ok(());
-        };
-
-        // Find active Local channel in from-sip context for this phone.
-        let resp = match self
-            .client
-            .action_with_timeout(
-                vec![
-                    ("Action", "Command"),
-                    ("Command", &format!("core show channels concise")),
-                ],
-                Duration::from_secs(5),
-            )
-            .await
-        {
-            Ok(r) => r,
-            Err(e) => {
-                warn!("[ami {}] hangup_call: core show channels failed: {e}",
-                      self.cfg.ami.label);
+    async fn hangup_call(&self, call_id: Option<&str>) -> Result<()> {
+        let channels = self.active_channels().await?;
+        for channel in channels {
+            if let Some(wanted) = call_id {
+                let value = self.client.action(vec![
+                    ("Action", "Getvar"), ("Channel", &channel.name), ("Variable", "GATEWAY_CALL_ID"),
+                ]).await?;
+                if value.get("value") != Some(wanted) { continue; }
+            }
+            let response = self.client.action(vec![("Action", "Hangup"), ("Channel", &channel.name)]).await?;
+            if response.is_success() {
+                *self.pending_call.lock().await = None;
                 return Ok(());
             }
-        };
-        let output = resp.get("output").unwrap_or("");
-
-        // Parse concise format: Channel!Context!Extension!Priority!State!...
-        for line in output.lines() {
-            let trimmed = line.trim();
-            if trimmed.is_empty() || trimmed.starts_with("Asterisk ") {
-                continue;
-            }
-            let fields: Vec<&str> = trimmed.split('!').collect();
-            if fields.len() < 3 {
-                continue;
-            }
-            let chan_name = fields[0];
-            let context = fields[1];
-            let exten = fields[2];
-            // Match a Local channel in from-sip context for this phone.
-            // Hanging up the Local channel terminates bridged PJSIP channels too.
-            if exten == phone && context == "from-sip" && chan_name.starts_with("Local/") {
-                let _ = tokio::time::timeout(
-                    Duration::from_secs(5),
-                    self.client.action(vec![
-                        ("Action", "Hangup"),
-                        ("Channel", chan_name),
-                    ]),
-                )
-                .await
-                .map_err(|_| anyhow!("Hangup timed out"))??;
-                info!("[ami {}] hung up channel {}", self.cfg.ami.label, chan_name);
-                // Clear pending phone so we don't double-hangup
-                {
-                    let mut p = self.pending_phone.lock().await;
-                    *p = None;
-                }
-                return Ok(());
-            }
+            anyhow::ensure!(matches!(response.message(), Some("No such channel" | "Channel does not exist")),
+                "Hangup failed: {}", response.message().unwrap_or("AMI rejected hangup"));
         }
-        info!("[ami {}] hangup_call: no active channel for phone {phone}, call already ended",
-              self.cfg.ami.label);
+        *self.pending_call.lock().await = None;
+        Ok(())
+    }
+
+    async fn call_mode(&self) -> Result<String> {
+        let response = self.client.action(vec![("Action", "Command"), ("Command", "database get gateway mode")]).await?;
+        let output = response.get("output").unwrap_or("");
+        if output.lines().any(|line| line.trim() == "Value: plain") { return Ok("plain".into()); }
+        anyhow::ensure!(output.contains("Database entry not found") || output.contains("Value: telegram"), "Unable to read call routing");
+        Ok("telegram".into())
+    }
+
+    async fn set_call_mode(&self, mode: &str) -> Result<()> {
+        anyhow::ensure!(matches!(mode, "plain" | "telegram"), "Invalid call mode");
+        anyhow::ensure!(self.active_channels().await?.is_empty(), "Cannot change routing during a call");
+        let dialplan = self.client.action(vec![("Action", "Command"), ("Command", "dialplan show gateway-answer")]).await?;
+        anyhow::ensure!(dialplan.get("output").is_some_and(|output| output.contains("Context 'gateway-answer'")), "Plain-call dialplan is not installed");
+        let command = format!("database put gateway mode {mode}");
+        let response = self.client.action(vec![("Action", "Command"), ("Command", &command)]).await?;
+        anyhow::ensure!(response.get("output").is_some_and(|output| output.contains("Updated database successfully")), "Unable to save call routing");
         Ok(())
     }
 
@@ -539,18 +539,7 @@ async fn translate_event(
         }
         // Inbound call ringing
         "Newchannel" => {
-            let state = pkt.get("channelstatedesc").unwrap_or("");
-            if !state.eq_ignore_ascii_case("Ringing") {
-                return None;
-            }
-            let channel = pkt.get("channel")?.to_string();
-            let phone = pkt.get("calleridnum").unwrap_or("").to_string();
-            Some(ModemEvent::CallRinging {
-                sim_id: sim_id.to_string(),
-                call_id: channel,
-                phone,
-                direction: "inbound".to_string(),
-            })
+            None
         }
         // Call answered (state moved to Up)
         "Newstate" => {
@@ -558,18 +547,28 @@ async fn translate_event(
             if !state.eq_ignore_ascii_case("Up") {
                 return None;
             }
-            let channel = pkt.get("channel")?.to_string();
+            let channel = pkt.get("channel")?;
+            if !channel.starts_with("PJSIP/volte_ims-") { return None; }
+            let call_id = pkt.get("linkedid").or_else(|| pkt.get("uniqueid"))?.to_string();
             Some(ModemEvent::CallAnswered {
                 sim_id: sim_id.to_string(),
-                call_id: channel,
+                call_id,
             })
         }
         "Hangup" => {
-            let channel = pkt.get("channel")?.to_string();
+            let channel = pkt.get("channel")?;
+            if !channel.starts_with("PJSIP/volte_ims-") { return None; }
+            let call_id = pkt.get("linkedid").or_else(|| pkt.get("uniqueid"))?.to_string();
             Some(ModemEvent::CallEnded {
                 sim_id: sim_id.to_string(),
-                call_id: channel,
+                call_id,
                 recording_path: None,
+            })
+        }
+        "OriginateResponse" => {
+            if pkt.get("response").is_some_and(|value| value.eq_ignore_ascii_case("Success")) { return None; }
+            Some(ModemEvent::CallEnded {
+                sim_id: sim_id.to_owned(), call_id: pkt.action_id()?.to_owned(), recording_path: None,
             })
         }
         // MixMonitor finished writing a recording file.
@@ -781,6 +780,32 @@ fn contains_cjk(s: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn originate_failure_uses_the_queued_call_id() {
+        let packet = super::AmiPacket { fields: [
+            ("event".into(), "OriginateResponse".into()),
+            ("response".into(), "Failure".into()),
+            ("actionid".into(), "test-call-id".into()),
+        ].into_iter().collect() };
+        let pending = std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+        let event = super::translate_event(&packet, "line-a", &pending).await.unwrap();
+        assert!(matches!(event, super::ModemEvent::CallEnded { call_id, .. } if call_id == "test-call-id"));
+    }
+
+    #[test]
+    fn call_inputs_and_channel_selection_are_bounded() {
+        assert!(super::valid_phone("+12025550123"));
+        assert!(super::valid_phone("02025550123"));
+        for phone in ["", "12", "1\r\nAction: Hangup", "1@other", "1234567890123456"] {
+            assert!(!super::valid_phone(phone));
+        }
+        let channels = super::parse_channels("PJSIP/volte_ims-0001!volte_ims!s!1!Ring!Wait!30\nLocal/test;1!from-sip!s!1!Up!Wait!30\n--END COMMAND--");
+        assert_eq!(channels.len(), 2);
+        assert_eq!(channels[0].name, "PJSIP/volte_ims-0001");
+        assert_eq!(channels[0].state, "Ring");
+        assert_eq!(channels[1].context, "from-sip");
+    }
+
     use super::{is_likely_binary_or_mojibake, sanitize_incoming_sms_body};
 
     #[test]

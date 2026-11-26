@@ -16,6 +16,98 @@ const MAX_BATCH_SIZE: usize = 500;
 
 static POOL: OnceLock<SqlitePool> = OnceLock::new();
 
+#[derive(Debug, Clone)]
+pub struct HistoryWindow {
+    pub sim_id: String,
+    pub starts_at: NaiveDateTime,
+    pub expires_at: NaiveDateTime,
+}
+
+impl HistoryWindow {
+    pub fn contains(&self, sim_id: &str, timestamp: NaiveDateTime) -> bool {
+        self.sim_id == sim_id && self.starts_at <= timestamp && timestamp < self.expires_at
+    }
+}
+
+fn history_query(prefix: &'static str, windows: &[HistoryWindow], time_column: &'static str) -> QueryBuilder<'static, Sqlite> {
+    let mut query = QueryBuilder::new(prefix);
+    query.push("(0");
+    for window in windows {
+        query.push(" OR (history.sim_id = ").push_bind(window.sim_id.clone())
+            .push(" AND julianday(history.").push(time_column).push(") >= julianday(")
+            .push_bind(window.starts_at).push(") AND julianday(history.").push(time_column)
+            .push(") < julianday(").push_bind(window.expires_at).push("))");
+    }
+    query.push(")");
+    query
+}
+
+pub async fn history_sms(
+    pool: &SqlitePool, windows: &[HistoryWindow], page: u32, per_page: u32,
+    contact_id: Option<&str>, send: Option<bool>,
+) -> Result<(Vec<SmsRow>, i64)> {
+    anyhow::ensure!(page > 0 && per_page > 0, "Invalid pagination");
+    let per_page = per_page.min(1000);
+    let mut count = history_query("SELECT COUNT(*) FROM sms history WHERE ", windows, "timestamp");
+    let mut rows = history_query(
+        "SELECT history.id, history.contact_id, COALESCE(contacts.name, history.contact_id) AS contact_name, history.timestamp, history.message, history.sim_id, history.send, history.status FROM sms history LEFT JOIN contacts ON contacts.id = history.contact_id WHERE ",
+        windows, "timestamp",
+    );
+    for query in [&mut count, &mut rows] {
+        if let Some(contact_id) = contact_id {
+            query.push(" AND history.contact_id = ").push_bind(contact_id.to_owned());
+        }
+        if let Some(send) = send {
+            query.push(" AND history.send = ").push_bind(send);
+        }
+    }
+    let total = count.build_query_scalar::<i64>().fetch_one(pool).await?;
+    rows.push(" ORDER BY history.timestamp DESC, history.id DESC LIMIT ").push_bind(i64::from(per_page))
+        .push(" OFFSET ").push_bind(i64::from(page - 1) * i64::from(per_page));
+    Ok((rows.build_query_as::<SmsRow>().fetch_all(pool).await?, total))
+}
+
+pub async fn history_calls(
+    pool: &SqlitePool, windows: &[HistoryWindow], sim_id: Option<&str>, limit: i64, offset: i64,
+) -> Result<(Vec<Call>, i64)> {
+    let mut count = history_query("SELECT COUNT(*) FROM calls history WHERE ", windows, "started_at");
+    let mut rows = history_query("SELECT history.id, history.sim_id, history.phone, history.direction, history.status, history.started_at, history.ended_at FROM calls history WHERE ", windows, "started_at");
+    if let Some(sim_id) = sim_id {
+        for query in [&mut count, &mut rows] {
+            query.push(" AND history.sim_id = ").push_bind(sim_id.to_owned());
+        }
+    }
+    let total = count.build_query_scalar::<i64>().fetch_one(pool).await?;
+    rows.push(" ORDER BY history.started_at DESC, history.id DESC LIMIT ").push_bind(limit.clamp(1, 1000))
+        .push(" OFFSET ").push_bind(offset.max(0));
+    Ok((rows.build_query_as::<Call>().fetch_all(pool).await?, total))
+}
+
+pub async fn history_call(pool: &SqlitePool, windows: &[HistoryWindow], id: &str) -> Result<Option<Call>> {
+    let mut query = history_query("SELECT history.id, history.sim_id, history.phone, history.direction, history.status, history.started_at, history.ended_at FROM calls history WHERE ", windows, "started_at");
+    query.push(" AND history.id = ").push_bind(id.to_owned());
+    Ok(query.build_query_as::<Call>().fetch_optional(pool).await?)
+}
+
+pub async fn history_conversations(pool: &SqlitePool, windows: &[HistoryWindow]) -> Result<Vec<Conversation>> {
+    let mut query = history_query("WITH visible AS (SELECT history.*, ROW_NUMBER() OVER (PARTITION BY history.contact_id, history.sim_id ORDER BY history.timestamp DESC, history.id DESC) AS position FROM sms history WHERE ", windows, "timestamp");
+    query.push(") SELECT visible.contact_id AS id, COALESCE(contacts.name, visible.contact_id) AS name, visible.timestamp, visible.message, visible.status, visible.sim_id FROM visible LEFT JOIN contacts ON contacts.id = visible.contact_id WHERE visible.position = 1 ORDER BY visible.timestamp DESC");
+    Ok(query.build_query_as::<Conversation>().fetch_all(pool).await?)
+}
+
+pub async fn history_mark_read(pool: &SqlitePool, windows: &[HistoryWindow], contact_id: &str) -> Result<()> {
+    let mut query = history_query("UPDATE sms AS history SET status = 1 WHERE ", windows, "timestamp");
+    query.push(" AND history.contact_id = ").push_bind(contact_id.to_owned()).push(" AND history.status = 0");
+    query.build().execute(pool).await?;
+    Ok(())
+}
+
+pub async fn history_stats(pool: &SqlitePool, windows: &[HistoryWindow]) -> Result<Vec<SimSmsStat>> {
+    let mut query = history_query("SELECT history.sim_id, SUM(CASE WHEN history.send = 0 THEN 1 ELSE 0 END) AS recv, SUM(CASE WHEN history.send = 1 THEN 1 ELSE 0 END) AS sent, sim_cards.phone_number FROM sms history LEFT JOIN sim_cards ON sim_cards.id = history.sim_id WHERE ", windows, "timestamp");
+    query.push(" GROUP BY history.sim_id, sim_cards.phone_number");
+    Ok(query.build_query_as::<SimSmsStat>().fetch_all(pool).await?)
+}
+
 /// Represents a single SMS message
 #[derive(Debug, FromRow, Deserialize, Serialize, Default)]
 pub struct Sms {
@@ -3022,4 +3114,55 @@ pub async fn db_init() -> Result<()> {
 pub fn get_pool() -> Result<&'static SqlitePool> {
     POOL.get()
         .ok_or(anyhow::anyhow!("Database not initialized"))
+}
+
+#[cfg(test)]
+mod history_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn rental_history_excludes_other_sims_and_outside_rental() {
+        let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
+        sqlx::query("CREATE TABLE contacts (id TEXT PRIMARY KEY, name TEXT NOT NULL)").execute(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE sms (id INTEGER PRIMARY KEY, contact_id TEXT, timestamp TEXT, message TEXT, sim_id TEXT, send INTEGER, status INTEGER)").execute(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE calls (id TEXT PRIMARY KEY, sim_id TEXT, phone TEXT, direction TEXT, status TEXT, started_at TEXT, ended_at TEXT)").execute(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE sim_cards (id TEXT PRIMARY KEY, phone_number TEXT)").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO contacts VALUES ('contact', 'test recipient')").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO sim_cards VALUES ('line-a', NULL), ('line-b', NULL)").execute(&pool).await.unwrap();
+        for (id, sim_id, timestamp) in [
+            (1, "line-a", "2026-10-22T12:00:00"),
+            (2, "line-a", "2026-10-23T12:00:00"),
+            (3, "line-b", "2026-10-23T12:00:00"),
+            (4, "line-a", "2026-10-24T00:00:00"),
+        ] {
+            sqlx::query("INSERT INTO sms VALUES (?, 'contact', ?, 'test message', ?, 0, 0)")
+                .bind(id).bind(timestamp).bind(sim_id).execute(&pool).await.unwrap();
+            sqlx::query("INSERT INTO calls VALUES (?, ?, NULL, 'inbound', 'ended', ?, ?)")
+                .bind(id.to_string()).bind(sim_id).bind(timestamp).bind(timestamp).execute(&pool).await.unwrap();
+        }
+        let window = HistoryWindow {
+            sim_id: "line-a".into(),
+            starts_at: NaiveDateTime::parse_from_str("2026-10-23 00:00:00", "%Y-%m-%d %H:%M:%S").unwrap(),
+            expires_at: NaiveDateTime::parse_from_str("2026-10-24 00:00:00", "%Y-%m-%d %H:%M:%S").unwrap(),
+        };
+        assert!(window.contains("line-a", window.starts_at));
+        assert!(!window.contains("line-a", window.expires_at));
+        assert!(!window.contains("line-b", window.starts_at));
+        let windows = [window];
+        let (messages, total) = history_sms(&pool, &windows, 1, 20, None, Some(false)).await.unwrap();
+        assert_eq!(total, 1);
+        assert_eq!(messages[0].id, 2);
+        assert_eq!(history_sms(&pool, &[], 1, 20, None, None).await.unwrap().1, 0);
+        assert_eq!(history_sms(&pool, &windows, 1, 20, Some("other"), None).await.unwrap().1, 0);
+        assert_eq!(history_calls(&pool, &windows, None, 20, 0).await.unwrap().1, 1);
+        assert_eq!(history_calls(&pool, &windows, Some("line-b"), 20, 0).await.unwrap().1, 0);
+        assert!(history_call(&pool, &windows, "1").await.unwrap().is_none());
+        assert!(history_call(&pool, &windows, "2").await.unwrap().is_some());
+        assert_eq!(history_conversations(&pool, &windows).await.unwrap().len(), 1);
+        assert_eq!(history_stats(&pool, &windows).await.unwrap()[0].recv, 1);
+        history_mark_read(&pool, &windows, "contact").await.unwrap();
+        let changed: Vec<i64> = sqlx::query_scalar("SELECT id FROM sms WHERE status = 1").fetch_all(&pool).await.unwrap();
+        assert_eq!(changed, vec![2]);
+        pool.close().await;
+    }
 }

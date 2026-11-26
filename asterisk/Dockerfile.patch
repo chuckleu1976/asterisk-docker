@@ -17,11 +17,10 @@ RUN python3 /tmp/rpack_fix.py && \
     rm /tmp/rpack_fix.py
 
 # Override system libpcsclite with 1.9.9-sysmocom (protocol 4:4, matches pcscd)
-COPY --from=pcsc /usr/lib64/libpcsclite.so.1.0.0 /tmp/libpcsclite_1.9.9.so
+COPY --from=pcsc /usr/lib64/libpcsclite.so.1 /tmp/libpcsclite_1.9.9.so
 RUN ls -la /tmp/libpcsclite_1.9.9.so && \
     cp /tmp/libpcsclite_1.9.9.so /usr/lib64/libpcsclite.so.1 && \
     cp /tmp/libpcsclite_1.9.9.so /usr/lib64/libpcsclite_real.so.1 && \
-    ldconfig && \
     rm /tmp/libpcsclite_1.9.9.so && \
     ls -la /usr/lib64/libpcsclite*
 

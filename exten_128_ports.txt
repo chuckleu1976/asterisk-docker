@@ -535,3 +535,50 @@ Remaining acceptance gates:
     validation/deployment; they are not declared complete by these tests.
   - Repeat the bounded answered-call/RTP test and staged resource/rekey
     measurements from sections 7 and 8 before claiming full-stack capacity.
+
+
+10. IMS display incident and verified recovery (2026-10-24)
+---------------------------------------------------------
+
+Observed root cause on .153:
+  - Both live Asterisk containers were in restart loops because the new
+    bind-mounted entrypoint required a checksum manifest absent from
+    their existing image. The Gateway consequently had no IMS status
+    and displayed a dash. This was not evidence of carrier rejection.
+  - The thin-layer recovery build initially failed because its PC/SC
+    library COPY referenced a versioned filename absent from the local
+    source image. Fixed it to use the same .so.1 path as the full build
+    and removed ldconfig to preserve the intended replacement libraries.
+
+Recovery performed with user approval:
+  - Preserved the old image under the local tag
+    phcodercat/asterisk-vowifi:pre-startup-recovery-20261024.
+  - Built the corrected thin-layer image locally with no build network
+    and no image pulls; verified the messaging-module checksum.
+  - Recreated only COM1, waited for its boot, then recreated COM2.
+    Did not restart shared pcscd or the Gateway, or change rentals,
+    remSIM mappings, SIM profiles or assignments.
+  - Both Asterisks subsequently reported Registered. Each had one
+    established IKE session and one installed IPsec child SA.
+    Both containers remained running with zero restarts.
+  - Logged in as the existing customer and verified the deployed
+    .153:8080 dashboard: COM1 and COM2 both showed Registered.
+    The authenticated /api/sims/info request returned HTTP 200 and
+    network_registration.status "1" for both assigned lines.
+    No password or session token is recorded here.
+
+Source-only follow-up:
+  - Added explicit Unknown display for missing registration data rather
+    than a dash, preserving Registered/Not Registered for real statuses.
+    No synthetic carrier state is inferred from missing telemetry.
+  - Four frontend status tests, the frontend production build and all
+    18 startup regression tests passed. Scoped whitespace checks passed;
+    unrelated existing whitespace changes were left untouched.
+  - The frontend fallback change was not deployed: Gateway assets are
+    embedded in its running binary, which was not rebuilt/restarted.
+    The live Registered display was restored by fixing the line services.
+  - Documented that entrypoint/image deployment and rollback must be
+    compatible. Merely restarting an old image cannot add the manifest.
+
+This recovery confirms current two-line IMS and customer status display.
+It does not establish answered-call/RTP behavior or 128-line capacity.

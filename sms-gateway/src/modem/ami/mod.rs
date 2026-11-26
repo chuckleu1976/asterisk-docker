@@ -226,6 +226,11 @@ impl AmiClient {
         self.action_with_timeout(fields, Duration::from_secs(10)).await
     }
 
+    pub async fn action_with_id(&self, fields: Vec<(&str, &str)>, action_id: &str) -> Result<AmiPacket> {
+        anyhow::ensure!(!action_id.is_empty() && action_id.bytes().all(|value| value.is_ascii_alphanumeric() || value == b'-'), "Invalid AMI action ID");
+        self.send_action(fields, Duration::from_secs(10), action_id.to_owned()).await
+    }
+
     pub async fn action_with_timeout(
         &self,
         fields: Vec<(&str, &str)>,
@@ -234,11 +239,17 @@ impl AmiClient {
         let id = self
             .next_id
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let action_id = format!("a{}", id);
+        self.send_action(fields, timeout, format!("a{}", id)).await
+    }
+
+    async fn send_action(&self, fields: Vec<(&str, &str)>, timeout: Duration, action_id: String) -> Result<AmiPacket> {
 
         let mut buf = String::new();
         let mut have_action = false;
         for (k, v) in &fields {
+            if k.contains(['\r', '\n', ':']) || v.contains(['\r', '\n']) {
+                return Err(anyhow!("Invalid AMI header"));
+            }
             if k.eq_ignore_ascii_case("Action") {
                 have_action = true;
             }
@@ -300,7 +311,14 @@ async fn read_packet(reader: &mut BufReader<OwnedReadHalf>) -> Result<AmiPacket>
             let (k, v) = trimmed.split_at(idx);
             let key = k.trim().to_ascii_lowercase();
             let val = v[1..].trim().to_string();
-            fields.insert(key, val);
+            if key == "output" {
+                fields.entry(key).and_modify(|existing: &mut String| {
+                    existing.push('\n');
+                    existing.push_str(&val);
+                }).or_insert(val);
+            } else {
+                fields.insert(key, val);
+            }
         }
         // Lines without ':' are ignored (e.g. trailing diagnostic text).
     }
@@ -327,5 +345,43 @@ async fn read_loop(
         } else {
             debug!("[ami {label}] unhandled packet: {:?}", pkt.fields);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn command_output_preserves_every_channel_line() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            socket.write_all(b"Response: Follows\r\nOutput: first-channel\r\nOutput: second-channel\r\nOutput: --END COMMAND--\r\n\r\n").await.unwrap();
+        });
+        let stream = TcpStream::connect(address).await.unwrap();
+        let (read, _) = stream.into_split();
+        let packet = read_packet(&mut BufReader::new(read)).await.unwrap();
+        assert_eq!(packet.get("output"), Some("first-channel\nsecond-channel\n--END COMMAND--"));
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn actions_reject_header_injection_before_connecting() {
+        let (event_tx, _) = broadcast::channel(1);
+        let client = AmiClient {
+            cfg: AmiConfig { label: "test".into(), host: "unused".into(), port: 0, username: "test".into(), secret: "test".into() },
+            writer: Arc::new(Mutex::new(None)),
+            pending: Arc::new(Mutex::new(HashMap::new())), event_tx,
+            next_id: Arc::new(std::sync::atomic::AtomicU64::new(1)),
+        };
+        for fields in [
+            vec![("Action", "Originate"), ("Channel", "PJSIP/test\r\nAction: Hangup")],
+            vec![("Action\r\nSecret", "test")],
+        ] {
+            assert!(client.action(fields).await.unwrap_err().to_string().contains("Invalid AMI header"));
+        }
+        assert!(client.pending.lock().await.is_empty());
     }
 }

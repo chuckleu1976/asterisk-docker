@@ -28,3 +28,20 @@ export function getModuleLabel(model) {
     }
     return model;
 }
+
+const networkStatuses = {
+    0: { key: 'net_not_registered', cls: 'text-gray-400' },
+    1: { key: 'net_home', cls: 'text-green-500' },
+    2: { key: 'net_searching', cls: 'text-yellow-400' },
+    3: { key: 'net_denied', cls: 'text-red-500' },
+    4: { key: 'net_unknown', cls: 'text-gray-400' },
+    5: { key: 'net_roaming', cls: 'text-blue-400' },
+};
+
+export function getNetworkStatus(registration) {
+    const status = String(registration?.status ?? '').trim();
+    if (!status) return networkStatuses[4];
+    return networkStatuses[status] ?? {
+        key: 'net_code', codeN: status, cls: 'text-gray-400',
+    };
+}

@@ -257,6 +257,14 @@ class ApiClient {
         return FetchApi.post('/api/calls/hangup', { sim_id: simId });
     }
 
+    async getCallMode(simId) {
+        return FetchApi.get('/api/calls/mode', { sim_id: simId });
+    }
+
+    async setCallMode(simId, mode) {
+        return FetchApi.put('/api/calls/mode', { sim_id: simId, mode });
+    }
+
     async getCallLog(simId = null, limit = 50, offset = 0) {
         const params = { limit, offset };
         if (simId) params.sim_id = simId;

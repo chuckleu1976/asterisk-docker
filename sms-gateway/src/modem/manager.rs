@@ -532,16 +532,27 @@ impl ModemManager {
         _sse: Arc<SseManager>,
     ) -> anyhow::Result<String> {
         let t = self.transport_for(sim_id).await?;
-        let call_id = t.originate_call(phone).await?;
-        // DB insert and SSE event are handled by the dialplan's CallStarted
-        // UserEvent → ModemEvent::CallRinging consumer.
-        info!("[{}] outbound call {} to {} originated", sim_id, call_id, phone);
+        let call_id = uuid::Uuid::new_v4().to_string();
+        Call::insert_with_id(&call_id, sim_id, Some(phone), "outbound").await?;
+        if let Err(error) = t.originate_call(phone, &call_id).await {
+            Call::update_status(&call_id, "failed").await?;
+            return Err(error);
+        }
+        debug!("outbound call {} queued", call_id);
         Ok(call_id)
     }
 
     pub async fn answer_call(&self, sim_id: &str) -> anyhow::Result<()> {
         let t = self.transport_for(sim_id).await?;
         t.answer_call().await
+    }
+
+    pub async fn call_mode(&self, sim_id: &str) -> anyhow::Result<String> {
+        self.transport_for(sim_id).await?.call_mode().await
+    }
+
+    pub async fn set_call_mode(&self, sim_id: &str, mode: &str) -> anyhow::Result<()> {
+        self.transport_for(sim_id).await?.set_call_mode(mode).await
     }
 
     /// Hang up the active call on this SIM. Returns `Ok(None)` because the AMI

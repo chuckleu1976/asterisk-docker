@@ -149,6 +149,19 @@ export const callActions = {
                 // Always start polling — SSE may have already cleared activeCall but
                 // polling ensures the banner reflects true call state regardless.
                 startCallStatusPolling(callId);
+                const refresh = async () => {
+                    const response = await apiClient.getCallLog(simId, 1);
+                    const call = response.data?.data?.find(row => row.id === callId);
+                    if (!call) return;
+                    if (call.status === 'active') {
+                        activeCall.update(value => value ? { ...value, event_type: 'call_answered' } : null);
+                    } else if (['ended', 'failed', 'missed'].includes(call.status)) {
+                        activeCall.set(null);
+                        callLog.update(rows => [call, ...rows.filter(row => row.id !== call.id)]);
+                        stopCallStatusPolling();
+                    }
+                };
+                void refresh();
             }
         } catch (e) {
             activeCall.set(null);

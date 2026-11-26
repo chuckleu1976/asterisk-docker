@@ -181,6 +181,7 @@ pub async fn run_api(
             "/calls/make",
             post(make_call).with_state(CallState { mm: modem_manager.clone(), sse: sse_manager.clone() }),
         )
+        .route("/calls/mode", get(get_call_mode).put(set_call_mode).with_state(modem_manager.clone()))
         .route(
             "/calls/answer",
             post(answer_call).with_state(modem_manager.clone()),
@@ -204,6 +205,7 @@ pub async fn run_api(
         .merge(esim::routes(_username, _password)?)
         .merge(tg2sip::routes())
         .merge(access::routes(access.clone()))
+        .layer(axum::Extension(modem_manager.clone()))
         .layer(axum::middleware::from_fn_with_state(access, access::guard));
 
     let app = Router::new()
@@ -237,7 +239,43 @@ pub struct SmsQuery {
     direction: Option<String>,
 }
 
-async fn get_sms_paginated(Query(query): Query<SmsQuery>) -> Response {
+async fn customer_history(modem_manager: &ModemManagerRef, identity: &Identity) -> Vec<crate::db::HistoryWindow> {
+    let mut windows = Vec::new();
+    for sim_id in modem_manager.get_sim_ids().await {
+        if let Some(modem) = modem_manager.get_modem(&sim_id).await {
+            windows.extend(identity.history_windows(&sim_id, &modem.com_port, "sms:read"));
+        }
+    }
+    windows
+}
+
+async fn get_sms_paginated(
+    Query(mut query): Query<SmsQuery>,
+    Extension(identity): Extension<Identity>,
+    Extension(modem_manager): Extension<ModemManagerRef>,
+) -> Response {
+    if query.page == 0 || query.per_page == 0 {
+        return denied(StatusCode::BAD_REQUEST, "Invalid pagination");
+    }
+    query.per_page = query.per_page.min(1000);
+    if !identity.is_admin() {
+        let windows = customer_history(&modem_manager, &identity).await;
+        let result = async {
+            let pool = crate::db::get_pool()?;
+            let result = crate::db::history_sms(pool, &windows, query.page, query.per_page,
+                query.contact_id.as_deref(), query.direction.as_deref().map(|direction| direction == "sent")).await?;
+            if query.page == 1 {
+                if let Some(contact_id) = query.contact_id.as_deref() {
+                    crate::db::history_mark_read(pool, &windows, contact_id).await?;
+                }
+            }
+            Ok::<_, anyhow::Error>(result)
+        }.await;
+        return match result {
+            Ok((rows, total)) => Json(json!({"data": rows, "total": total, "page": query.page, "per_page": query.per_page})).into_response(),
+            Err(_) => denied(StatusCode::INTERNAL_SERVER_ERROR, "Unable to load messages"),
+        };
+    }
     // Direction-filtered view (inbox / sent) — returns SmsRow (includes contact_name)
     if let Some(ref dir) = query.direction {
         let send = dir.as_str() == "sent";
@@ -302,7 +340,10 @@ async fn require_rented_sim(
     if identity.is_admin() {
         return None;
     }
-    if !identity.has_permission(permission) || !identity_allows_sim(modem_manager, identity, sim_id).await {
+    let allowed = modem_manager.get_modem(sim_id).await.is_some_and(|modem| {
+        identity.allows_port_permission(&modem.com_port, permission)
+    });
+    if !allowed {
         return Some(denied(StatusCode::FORBIDDEN, "This SIM is not in the current rental"));
     }
     None
@@ -607,7 +648,11 @@ async fn get_all_sim_info(
 async fn refresh_sim_sms(
     Path(sim_id): Path<String>,
     State(modem_manager): State<ModemManagerRef>,
+    Extension(identity): Extension<Identity>,
 ) -> Response {
+    if !identity_allows_sim(&modem_manager, &identity, &sim_id).await {
+        return denied(StatusCode::FORBIDDEN, "This SIM is not in the current rental");
+    }
     match modem_manager
         .read_sms_sync_insert(&sim_id, SmsType::RecUnread)
         .await
@@ -621,14 +666,30 @@ async fn check() -> impl IntoResponse {
     StatusCode::NO_CONTENT
 }
 
-async fn get_contacts() -> Json<Vec<Contact>> {
-    let contacts = Contact::query_all().await.unwrap();
-    Json(contacts)
+async fn get_contacts(Extension(identity): Extension<Identity>, Extension(modem_manager): Extension<ModemManagerRef>) -> Response {
+    if !identity.is_admin() {
+        let windows = customer_history(&modem_manager, &identity).await;
+        let result = async { crate::db::history_conversations(crate::db::get_pool()?, &windows).await }.await;
+        return match result {
+            Ok(rows) => Json(rows.into_iter().map(|row| row.contact).collect::<Vec<_>>()).into_response(),
+            Err(_) => denied(StatusCode::INTERNAL_SERVER_ERROR, "Unable to load contacts"),
+        };
+    }
+    match Contact::query_all().await {
+        Ok(rows) => Json(rows).into_response(),
+        Err(_) => denied(StatusCode::INTERNAL_SERVER_ERROR, "Unable to load contacts"),
+    }
 }
 
-async fn get_conversation() -> Json<Vec<Conversation>> {
-    let conversation = Conversation::query_all().await.unwrap();
-    Json(conversation)
+async fn get_conversation(Extension(identity): Extension<Identity>, Extension(modem_manager): Extension<ModemManagerRef>) -> Response {
+    let result = if identity.is_admin() { Conversation::query_all().await } else {
+        let windows = customer_history(&modem_manager, &identity).await;
+        async { crate::db::history_conversations(crate::db::get_pool()?, &windows).await }.await
+    };
+    match result {
+        Ok(rows) => Json(rows).into_response(),
+        Err(_) => denied(StatusCode::INTERNAL_SERVER_ERROR, "Unable to load conversations"),
+    }
 }
 
 async fn create_contact(Json(payload): Json<Contact>) -> Response {
@@ -660,6 +721,29 @@ struct SimIdRequest {
 }
 
 #[derive(Deserialize)]
+struct CallModeRequest {
+    sim_id: String,
+    mode: String,
+}
+
+async fn get_call_mode(State(modem_manager): State<ModemManagerRef>, Extension(identity): Extension<Identity>, Query(body): Query<SimIdRequest>) -> Response {
+    if let Some(response) = require_rented_sim(&modem_manager, &identity, &body.sim_id, "sms:read").await { return response; }
+    match modem_manager.call_mode(&body.sim_id).await {
+        Ok(mode) => Json(json!({"mode": mode})).into_response(),
+        Err(_) => denied(StatusCode::BAD_GATEWAY, "Unable to read call routing"),
+    }
+}
+
+async fn set_call_mode(State(modem_manager): State<ModemManagerRef>, Extension(identity): Extension<Identity>, Json(body): Json<CallModeRequest>) -> Response {
+    if let Some(response) = require_rented_sim(&modem_manager, &identity, &body.sim_id, "sms:send").await { return response; }
+    if !matches!(body.mode.as_str(), "plain" | "telegram") { return denied(StatusCode::BAD_REQUEST, "Invalid call mode"); }
+    match modem_manager.set_call_mode(&body.sim_id, &body.mode).await {
+        Ok(()) => Json(json!({"mode": body.mode})).into_response(),
+        Err(_) => denied(StatusCode::CONFLICT, "Routing cannot change while busy or before the plain-call dialplan is installed"),
+    }
+}
+
+#[derive(Deserialize)]
 struct CallsQuery {
     sim_id: Option<String>,
     #[serde(default = "default_limit")]
@@ -670,7 +754,15 @@ struct CallsQuery {
 
 fn default_limit() -> i64 { 50 }
 
-async fn get_calls(Query(q): Query<CallsQuery>) -> Response {
+async fn get_calls(Query(q): Query<CallsQuery>, Extension(identity): Extension<Identity>, Extension(modem_manager): Extension<ModemManagerRef>) -> Response {
+    if !identity.is_admin() {
+        let windows = customer_history(&modem_manager, &identity).await;
+        let result = async { crate::db::history_calls(crate::db::get_pool()?, &windows, q.sim_id.as_deref(), q.limit, q.offset).await }.await;
+        return match result {
+            Ok((rows, total)) => Json(json!({"data": rows, "total": total})).into_response(),
+            Err(_) => denied(StatusCode::INTERNAL_SERVER_ERROR, "Unable to load calls"),
+        };
+    }
     let result = match q.sim_id {
         Some(sim_id) => Call::query_by_sim(&sim_id, q.limit).await.map(|v| {
             let total = v.len() as i64;
@@ -686,7 +778,19 @@ async fn get_calls(Query(q): Query<CallsQuery>) -> Response {
     }
 }
 
-async fn get_call_recording(Path(id): Path<String>) -> Response {
+async fn customer_can_read_call(modem_manager: &ModemManagerRef, identity: &Identity, id: &str) -> bool {
+    if identity.is_admin() { return true; }
+    let windows = customer_history(modem_manager, identity).await;
+    match crate::db::get_pool() {
+        Ok(pool) => crate::db::history_call(pool, &windows, id).await.is_ok_and(|call| call.is_some()),
+        Err(_) => false,
+    }
+}
+
+async fn get_call_recording(Path(id): Path<String>, Extension(identity): Extension<Identity>, Extension(modem_manager): Extension<ModemManagerRef>) -> Response {
+    if !customer_can_read_call(&modem_manager, &identity, &id).await {
+        return StatusCode::NOT_FOUND.into_response();
+    }
     match Call::get_recording(&id).await {
         Ok(Some(data)) => (
             StatusCode::OK,
@@ -702,7 +806,10 @@ async fn get_call_recording(Path(id): Path<String>) -> Response {
     }
 }
 
-async fn get_call_transcript(Path(id): Path<String>) -> Response {
+async fn get_call_transcript(Path(id): Path<String>, Extension(identity): Extension<Identity>, Extension(modem_manager): Extension<ModemManagerRef>) -> Response {
+    if !customer_can_read_call(&modem_manager, &identity, &id).await {
+        return StatusCode::NOT_FOUND.into_response();
+    }
     match Call::get_transcript(&id).await {
         Ok(Some(text)) => (
             StatusCode::OK,
@@ -776,16 +883,24 @@ async fn hangup_call(
     }
 }
 
-async fn calls_sse_events(State(sse_manager): State<Arc<SseManager>>) -> Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
+async fn calls_sse_events(
+    State(sse_manager): State<Arc<SseManager>>,
+    Extension(identity): Extension<Identity>, Extension(access): Extension<Arc<access::Access>>,
+    Extension(modem_manager): Extension<ModemManagerRef>,
+) -> Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
     let rx = sse_manager.subscribe_calls();
 
-    let stream = futures_util::stream::unfold(rx, |mut rx| async move {
+    let stream = futures_util::stream::unfold((rx, identity, access, modem_manager), |(mut rx, identity, access, modem_manager)| async move {
         loop {
             match rx.recv().await {
                 Ok(event) => {
+                    let current = access.identify(&identity.token).await.ok()?;
+                    if !customer_can_read_call(&modem_manager, &current, &event.call_id).await {
+                        continue;
+                    }
                     if let Ok(data) = serde_json::to_string(&event) {
                         let sse_event = Event::default().event("call_event").data(data);
-                        return Some((Ok::<_, Infallible>(sse_event), rx));
+                        return Some((Ok::<_, Infallible>(sse_event), (rx, identity, access, modem_manager)));
                     }
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
@@ -832,22 +947,25 @@ async fn static_handler(uri: axum::http::Uri) -> impl IntoResponse {
 
 async fn sse_events(
     State(sse_manager): State<Arc<SseManager>>,
+    Extension(identity): Extension<Identity>, Extension(access): Extension<Arc<access::Access>>,
+    Extension(modem_manager): Extension<ModemManagerRef>,
 ) -> Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
-    let rx_stream = tokio_stream::wrappers::BroadcastStream::new(sse_manager.subscribe()).map(
-        |msg| match msg {
-            Ok(cnversations) => {
-                let timestamp = chrono::Utc::now().timestamp_millis();
-                Ok(Event::default()
-                    .id(timestamp.to_string())
-                    .event("conversations")
-                    .json_data(&cnversations)
-                    .unwrap())
+    let rx_stream = tokio_stream::wrappers::BroadcastStream::new(sse_manager.subscribe()).filter_map(move |message| {
+        let identity = identity.clone();
+        let access = access.clone();
+        let modem_manager = modem_manager.clone();
+        async move {
+            let mut conversations = message.ok()?;
+            let current = access.identify(&identity.token).await.ok()?;
+            if !current.is_admin() {
+                let windows = customer_history(&modem_manager, &current).await;
+                conversations.retain(|row| windows.iter().any(|window| window.contains(&row.sms_preview.sim_id, row.sms_preview.timestamp)));
             }
-            Err(_) => Ok(Event::default()
-                .event("error")
-                .comment("Failed to receive broadcast message")),
-        },
-    );
+            if conversations.is_empty() { return None; }
+            Some(Ok(Event::default().id(chrono::Utc::now().timestamp_millis().to_string())
+                .event("conversations").json_data(&conversations).ok()?))
+        }
+    });
 
     Sse::new(rx_stream).keep_alive(
         axum::response::sse::KeepAlive::new()
@@ -860,7 +978,20 @@ async fn sse_events(
     )
 }
 
-async fn get_conversation_unread(Path(id): Path<String>) -> Response {
+async fn get_conversation_unread(Path(id): Path<String>, Extension(identity): Extension<Identity>, Extension(modem_manager): Extension<ModemManagerRef>) -> Response {
+    if !identity.is_admin() {
+        let windows = customer_history(&modem_manager, &identity).await;
+        let result = async {
+            let pool = crate::db::get_pool()?;
+            let (rows, _) = crate::db::history_sms(pool, &windows, 1, 1000, Some(&id), None).await?;
+            crate::db::history_mark_read(pool, &windows, &id).await?;
+            Ok::<_, anyhow::Error>(rows.into_iter().filter(|row| row.status == crate::db::SmsStatus::Unread).collect::<Vec<_>>())
+        }.await;
+        return match result {
+            Ok(rows) => Json(rows).into_response(),
+            Err(_) => denied(StatusCode::INTERNAL_SERVER_ERROR, "Unable to load messages"),
+        };
+    }
     match Sms::query_unread_by_contact_id(&id).await {
         Ok(messages) => (StatusCode::OK, Json(messages)).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
@@ -919,6 +1050,14 @@ async fn get_sim_sms_stats(
     State(modem_manager): State<ModemManagerRef>,
     Extension(identity): Extension<Identity>,
 ) -> Response {
+    if !identity.is_admin() {
+        let windows = customer_history(&modem_manager, &identity).await;
+        let result = async { crate::db::history_stats(crate::db::get_pool()?, &windows).await }.await;
+        return match result {
+            Ok(rows) => Json(rows).into_response(),
+            Err(_) => denied(StatusCode::INTERNAL_SERVER_ERROR, "Unable to load statistics"),
+        };
+    }
     match Sms::count_by_sim_id().await {
         Ok(mut stats) => {
             if let Some(allowed) = rented_sim_id_set(&modem_manager, &identity).await {
@@ -958,7 +1097,11 @@ async fn get_all_sim_cards(
 async fn get_enhanced_sim_info(
     Path(sim_id): Path<String>,
     State(modem_manager): State<ModemManagerRef>,
+    Extension(identity): Extension<Identity>,
 ) -> Response {
+    if !identity_allows_sim(&modem_manager, &identity, &sim_id).await {
+        return denied(StatusCode::FORBIDDEN, "This SIM is not in the current rental");
+    }
     match modem_manager.get_modem(&sim_id).await {
         Some(modem) => {
             let sms_center_raw = modem_manager.get_sms_center(&sim_id).await.ok().flatten();

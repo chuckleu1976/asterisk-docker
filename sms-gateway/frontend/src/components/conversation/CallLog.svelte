@@ -13,6 +13,8 @@
   let makeCallSimId = $state('');
   let making = $state(false);
   let makeError = $state('');
+  let callMode = $state('');
+  let modeError = $state('');
 
   let sims = $derived($simCards);
   let log = $derived($callLog);
@@ -42,6 +44,27 @@
       makeCallSimId = sims[0].id;
     }
   });
+
+  $effect(() => {
+    if (!makeCallSimId) return;
+    let cancelled = false;
+    apiClient.getCallMode(makeCallSimId).then(result => {
+      if (!cancelled) { callMode = result.data?.mode ?? 'telegram'; modeError = ''; }
+    }).catch(error => {
+      if (!cancelled) modeError = error?.message ?? 'Unable to load call routing';
+    });
+    return () => { cancelled = true; };
+  });
+
+  async function changeCallMode(mode) {
+    modeError = '';
+    try {
+      const result = await apiClient.setCallMode(makeCallSimId, mode);
+      callMode = result.data?.mode ?? mode;
+    } catch (error) {
+      modeError = error?.message ?? 'Unable to update call routing';
+    }
+  }
 
   async function handleMakeCall() {
     if (!makeCallPhone.trim() || !makeCallSimId) return;
@@ -108,6 +131,15 @@
   <!-- Make a call -->
   <div class="px-4 py-3 border-b border-gray-200/70 dark:border-zinc-800 shrink-0">
     <p class="text-xs font-medium text-gray-500 dark:text-zinc-400 mb-2 uppercase tracking-wide">{$t('make_a_call')}</p>
+    <fieldset class="mb-3">
+      <legend class="mb-1 text-xs text-gray-500 dark:text-zinc-400">Call routing</legend>
+      <div class="inline-flex max-w-full overflow-hidden rounded border border-gray-200 dark:border-zinc-700">
+        <button type="button" aria-pressed={callMode === 'telegram'} onclick={() => changeCallMode('telegram')}
+          class="px-3 py-2 text-xs font-medium aria-pressed:bg-gray-900 aria-pressed:text-white dark:aria-pressed:bg-gray-100 dark:aria-pressed:text-gray-900">Telegram</button>
+        <button type="button" aria-pressed={callMode === 'plain'} onclick={() => changeCallMode('plain')}
+          class="px-3 py-2 text-xs font-medium aria-pressed:bg-gray-900 aria-pressed:text-white dark:aria-pressed:bg-gray-100 dark:aria-pressed:text-gray-900">Plain on line</button>
+      </div>
+    </fieldset>
     <div class="flex gap-2 items-center flex-wrap">
       <select
         bind:value={makeCallSimId}
@@ -134,8 +166,8 @@
         <Icon icon="carbon:phone" class="w-4 h-4 text-white" />
       </button>
     </div>
-    {#if makeError}
-      <p class="text-xs text-red-400 mt-1">{makeError}</p>
+    {#if makeError || modeError}
+      <p role="alert" class="text-xs text-red-500 mt-1">{makeError || modeError}</p>
     {/if}
   </div>
 
@@ -163,7 +195,7 @@
               {call.phone ?? $t('unknown')}
             </p>
             <p class="text-xs text-gray-500 dark:text-zinc-500 truncate">
-              {call.sim_id.slice(0, 12)}… · {call.status}
+              {call.sim_id.slice(0, 12)}… · {call.status === 'ringing' ? 'Ringing' : call.status === 'active' ? 'Answered' : call.status === 'ended' ? 'Ended' : call.status === 'missed' ? 'Missed' : call.status}
               {#if call.ended_at && call.status === 'ended'}
                 · {durationLabel(call.started_at, call.ended_at)}
               {/if}

@@ -97,13 +97,16 @@ pub trait Transport: Send + Sync {
 
     /// Originate an outbound call. Returns a transport-specific call id
     /// (AMI channel name, or an ATD lock token for serial).
-    async fn originate_call(&self, to: &str) -> anyhow::Result<String>;
+    async fn originate_call(&self, to: &str, call_id: &str) -> anyhow::Result<String>;
 
     /// Answer the currently ringing inbound call, if any.
     async fn answer_call(&self) -> anyhow::Result<()>;
 
     /// Hang up. `call_id` selects a specific channel for AMI; ignored by serial.
     async fn hangup_call(&self, call_id: Option<&str>) -> anyhow::Result<()>;
+
+    async fn call_mode(&self) -> anyhow::Result<String>;
+    async fn set_call_mode(&self, mode: &str) -> anyhow::Result<()>;
 
     // ─── Diagnostics (Ok(None) when not applicable) ───────────────────────
 
